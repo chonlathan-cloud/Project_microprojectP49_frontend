@@ -1,0 +1,23 @@
+# Web Framework
+fastapi
+uvicorn[standard]
+
+# Data Validation
+pydantic
+
+# File Upload
+python-multipart
+
+# Data Processing (POS Excel/CSV)
+pandas
+openpyxl
+
+# Google Cloud Services
+google-cloud-documentai
+google-cloud-aiplatform
+google-cloud-firestore
+google-cloud-bigquery
+google-cloud-storage
+
+# Firebase Authentication
+firebase-admin
