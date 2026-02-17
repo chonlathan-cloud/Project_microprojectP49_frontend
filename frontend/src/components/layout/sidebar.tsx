@@ -31,7 +31,7 @@ export function Sidebar() {
   return (
     <aside className="flex h-screen w-64 flex-col border-r border-slate-200 bg-white">
       <div className="border-b border-slate-200 px-5 py-4">
-        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">The 491</p>
+        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">The 49</p>
         <h2 className="mt-1 text-lg font-semibold text-slate-900">Smart P&L</h2>
       </div>
 

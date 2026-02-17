@@ -11,8 +11,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "The 491 - Smart P&L",
-  description: "Frontend for The 491 Smart P&L Analysis"
+  title: "The 49 - Smart P&L",
+  description: "Frontend for The 49 Smart P&L Analysis"
 };
 
 export default function RootLayout({
