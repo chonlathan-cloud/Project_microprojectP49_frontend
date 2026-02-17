@@ -5,12 +5,14 @@ from app.core.config import settings
 # --- Document AI Client ---
 # Reference: LDD Section 3.2, HLD Section 2.4
 
-client = documentai.DocumentProcessorServiceClient()
+client = documentai.DocumentProcessorServiceClient(
+    client_options={"api_endpoint": f"{settings.DOCAI_LOCATION}-documentai.googleapis.com"}
+)
 
 # Full resource name for the Invoice Processor
 PROCESSOR_NAME = client.processor_path(
     settings.GCP_PROJECT_ID,
-    settings.GCP_LOCATION,
+    settings.DOCAI_LOCATION,
     settings.DOCAI_PROCESSOR_ID,
 )
 

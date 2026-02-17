@@ -11,7 +11,7 @@ from app.models.receipt import BusinessType
 
 vertexai.init(
     project=settings.GCP_PROJECT_ID,
-    location=settings.GCP_LOCATION,
+    location=settings.VERTEX_AI_LOCATION,
 )
 
 model = GenerativeModel(settings.VERTEX_AI_MODEL)

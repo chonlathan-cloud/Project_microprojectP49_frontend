@@ -1,3 +1,4 @@
+import os
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import firebase_admin
@@ -6,12 +7,22 @@ from firebase_admin import auth, credentials
 from app.core.config import settings
 
 # --- Firebase Admin SDK Initialization ---
-# Initialize once on module load.
-# Uses the service account JSON path from config.
+# This logic supports two authentication methods:
+# 1. JSON Key File: If FIREBASE_CREDENTIALS_PATH is set and the file exists.
+# 2. Application Default Credentials (ADC): If the path is not set, it uses ADC,
+#    perfect for `gcloud auth` or Cloud Run environments.
 
 if not firebase_admin._apps:
-    cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS_PATH)
-    firebase_admin.initialize_app(cred)
+    cred_path = settings.FIREBASE_CREDENTIALS_PATH
+    # Check if the path is not the default empty one and if the file actually exists
+    if cred_path and os.path.exists(cred_path):
+        print(f"✅ Initializing Firebase with key file: {cred_path}")
+        cred = credentials.Certificate(cred_path)
+        firebase_admin.initialize_app(cred)
+    else:
+        print("✅ Initializing Firebase with Application Default Credentials (ADC).")
+        # If no cred path, initialize_app() automatically finds ADC
+        firebase_admin.initialize_app()
 
 # Security scheme for Swagger UI
 security_scheme = HTTPBearer()
