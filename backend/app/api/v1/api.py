@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import receipts, analytics
+from app.api.v1.endpoints import receipts, analytics, pos
 
 # --- API v1 Router Aggregator ---
 # Reference: LDD Section 1 (api.py - Router Aggregator)
@@ -15,6 +15,5 @@ api_router.include_router(receipts.router)
 # Analytics endpoints
 api_router.include_router(analytics.router)
 
-# TODO (Prompt 7): POS endpoints
-# from app.api.v1.endpoints import pos
-# api_router.include_router(pos.router)
+# POS endpoints
+api_router.include_router(pos.router)
