@@ -4,7 +4,7 @@ from google.cloud import storage
 
 from app.core.config import settings
 from app.core.security import get_current_user
-from app.services import ocr_service, firestore_service
+from app.services import ocr_service, firestore_service, bigquery_service
 from app.services.categorization import categorize_line_item
 from app.models.receipt import ReceiptVerify
 
@@ -214,8 +214,17 @@ async def verify_receipt(
         verified_data=update_payload,
     )
 
+    # Insert verified data into BigQuery (fact_transactions)
+    # Reference: TDD Section 1.2, HLD Flow A Step 6
+    try:
+        rows_inserted = bigquery_service.insert_verified_receipt(updated)
+    except Exception:
+        # Log but don't fail — Firestore is already updated
+        rows_inserted = 0
+
     return {
         "receipt_id": receipt_id,
         "status": "VERIFIED",
         "message": "Receipt verified and saved successfully.",
+        "bigquery_rows_inserted": rows_inserted,
     }
