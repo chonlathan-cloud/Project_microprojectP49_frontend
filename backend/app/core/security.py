@@ -14,15 +14,22 @@ from app.core.config import settings
 
 if not firebase_admin._apps:
     cred_path = settings.FIREBASE_CREDENTIALS_PATH
+    firebase_options = {"projectId": settings.GCP_PROJECT_ID}
     # Check if the path is not the default empty one and if the file actually exists
     if cred_path and os.path.exists(cred_path):
-        print(f"✅ Initializing Firebase with key file: {cred_path}")
+        print(
+            "✅ Initializing Firebase with key file: "
+            f"{cred_path} (projectId={settings.GCP_PROJECT_ID})"
+        )
         cred = credentials.Certificate(cred_path)
-        firebase_admin.initialize_app(cred)
+        firebase_admin.initialize_app(cred, options=firebase_options)
     else:
-        print("✅ Initializing Firebase with Application Default Credentials (ADC).")
+        print(
+            "✅ Initializing Firebase with Application Default Credentials (ADC). "
+            f"(projectId={settings.GCP_PROJECT_ID})"
+        )
         # If no cred path, initialize_app() automatically finds ADC
-        firebase_admin.initialize_app()
+        firebase_admin.initialize_app(options=firebase_options)
 
 # Security scheme for Swagger UI
 security_scheme = HTTPBearer()

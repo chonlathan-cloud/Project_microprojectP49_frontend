@@ -120,3 +120,26 @@ def get_branch_config(branch_id: str) -> Optional[dict]:
     if doc.exists:
         return doc.to_dict()
     return None
+
+
+def list_branches() -> list[dict]:
+    """
+    List all branch documents from Firestore.
+
+    Returns:
+        list[dict]: Each branch contains at least id, name, type.
+    """
+    docs = db.collection("branches").stream()
+    branches: list[dict] = []
+
+    for doc in docs:
+        data = doc.to_dict() or {}
+        branch = {
+            "id": data.get("id", doc.id),
+            "name": data.get("name", ""),
+            "type": data.get("type", "RESTAURANT"),
+        }
+        branches.append(branch)
+
+    branches.sort(key=lambda item: item.get("name", ""))
+    return branches
