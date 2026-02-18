@@ -12,6 +12,7 @@ python-multipart
 # Data Processing (POS Excel/CSV)
 pandas
 openpyxl
+Pillow
 
 # Google Cloud Services
 google-cloud-documentai

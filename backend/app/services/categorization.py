@@ -1,7 +1,5 @@
 from app.models.receipt import BusinessType
 from app.models.branch import (
-    COFFEE_CATEGORIES,
-    RESTAURANT_CATEGORIES,
     get_categories_for_type,
 )
 from app.services.ai_service import ask_vertex_ai
@@ -15,6 +13,32 @@ from app.services.ai_service import ask_vertex_ai
 
 # Minimum confidence threshold for AI results
 AI_CONFIDENCE_THRESHOLD = 0.5
+
+
+def categorize_line_item_rule_only(text: str, business_type: str) -> dict:
+    """
+    Fast deterministic category mapping using keyword rules only.
+    """
+    normalized = text.strip().lower()
+    btype = BusinessType(business_type)
+    categories = get_categories_for_type(btype)
+
+    for category in categories:
+        for keyword in category.keywords:
+            if keyword.lower() in normalized:
+                return {
+                    "category_id": category.id,
+                    "category_name": category.name,
+                    "confidence": 1.0,
+                    "source": "RULE",
+                }
+
+    return {
+        "category_id": None,
+        "category_name": "Uncategorized",
+        "confidence": 0.0,
+        "source": "NONE",
+    }
 
 
 async def categorize_line_item(text: str, business_type: str) -> dict:
@@ -35,23 +59,12 @@ async def categorize_line_item(text: str, business_type: str) -> dict:
             "source": "RULE" | "AI" | "NONE"
         }
     """
-    # Normalize text for matching
-    normalized = text.strip().lower()
+    rule_result = categorize_line_item_rule_only(text=text, business_type=business_type)
+    if rule_result.get("category_id"):
+        return rule_result
 
-    # --- Layer 1: Rule-based Keyword Matching ---
-    # Uses category lists from app/models/branch.py (no duplication)
     btype = BusinessType(business_type)
     categories = get_categories_for_type(btype)
-
-    for category in categories:
-        for keyword in category.keywords:
-            if keyword.lower() in normalized:
-                return {
-                    "category_id": category.id,
-                    "category_name": category.name,
-                    "confidence": 1.0,
-                    "source": "RULE",
-                }
 
     # --- Layer 2: AI Fallback (Vertex AI / Gemini) ---
     try:
@@ -75,9 +88,4 @@ async def categorize_line_item(text: str, business_type: str) -> dict:
         pass  # Fall through to uncategorized
 
     # --- Fallback: Uncategorized ---
-    return {
-        "category_id": None,
-        "category_name": "Uncategorized",
-        "confidence": 0.0,
-        "source": "NONE",
-    }
+    return rule_result

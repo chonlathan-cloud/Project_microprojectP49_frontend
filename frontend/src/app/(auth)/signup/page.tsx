@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { createUserWithEmailAndPassword, deleteUser, updateProfile } from "firebase/auth";
+import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
 import { UserPlus } from "lucide-react";
 
@@ -40,7 +40,7 @@ function getSignupErrorMessage(code: string): string {
     return "Email/password sign-up is not enabled in Firebase Authentication.";
   }
   if (code === "profile-setup-failed") {
-    return "Account created but profile setup failed. Please contact admin.";
+    return "Account created, but profile setup failed. You can still log in and continue.";
   }
   return "Sign up failed. Please try again.";
 }
@@ -76,13 +76,14 @@ export default function SignupPage() {
 
     try {
       const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const normalizedDisplayName = displayName.trim();
 
       try {
-        await updateProfile(credential.user, { displayName: displayName.trim() });
+        await updateProfile(credential.user, { displayName: normalizedDisplayName });
         await setDoc(
           doc(db, "users", credential.user.uid),
           {
-            display_name: displayName.trim(),
+            display_name: normalizedDisplayName,
             email: credential.user.email ?? email.trim(),
             role: "staff",
             default_branch_id: defaultBranchId,
@@ -90,9 +91,10 @@ export default function SignupPage() {
           },
           { merge: true }
         );
-      } catch {
-        await deleteUser(credential.user).catch(() => undefined);
-        throw new Error("profile-setup-failed");
+      } catch (profileError) {
+        // Do not rollback auth user. Keep the account and allow login.
+        // Admin can backfill Firestore profile later if needed.
+        console.warn("Profile setup failed after signup:", profileError);
       }
 
       router.replace("/dashboard/upload-receipt");

@@ -36,6 +36,8 @@ def create_receipt(data: dict) -> dict:
     data["status"] = data.get("status", "DRAFT")
     data["verified_at"] = None
     data["verified_by"] = None
+    data["bigquery_synced"] = False
+    data["bigquery_rows_inserted"] = 0
 
     doc_ref.set(data)
     return data
@@ -55,6 +57,36 @@ def get_receipt(receipt_id: str) -> Optional[dict]:
     if doc.exists:
         return doc.to_dict()
     return None
+
+
+def list_receipts(
+    status: str | None = None,
+    branch_id: str | None = None,
+    user_id: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """
+    List receipt documents with optional filters.
+    """
+    query = db.collection("receipts")
+
+    if status:
+        query = query.where("status", "==", status)
+    if branch_id:
+        query = query.where("branch_id", "==", branch_id)
+    if user_id:
+        query = query.where("user_id", "==", user_id)
+
+    docs = query.limit(max(1, min(limit, 200))).stream()
+    receipts: list[dict] = []
+    for doc in docs:
+        data = doc.to_dict() or {}
+        if "id" not in data:
+            data["id"] = doc.id
+        receipts.append(data)
+
+    receipts.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+    return receipts
 
 
 def update_receipt_status(
@@ -94,6 +126,15 @@ def update_receipt_status(
     doc_ref.update(update_payload)
 
     # Return the full updated document
+    return doc_ref.get().to_dict()
+
+
+def update_receipt_fields(receipt_id: str, fields: dict) -> dict:
+    """
+    Update arbitrary receipt fields and return the updated document.
+    """
+    doc_ref = db.collection("receipts").document(receipt_id)
+    doc_ref.update(fields)
     return doc_ref.get().to_dict()
 
 

@@ -31,23 +31,23 @@ type EditableItem = {
   category_id: string;
 };
 
-const CATEGORY_OPTIONS = [
-  "C1",
-  "C2",
-  "C3",
-  "C4",
-  "C5",
-  "C6",
-  "C7",
-  "C8",
-  "C9",
-  "F1",
-  "F2",
-  "F3",
-  "F4",
-  "F5",
-  "F6",
-  "F7"
+const CATEGORY_OPTIONS: Array<{ id: string; name: string }> = [
+  { id: "C1", name: "COGS (วัตถุดิบ)" },
+  { id: "C2", name: "Labor (ค่าแรง)" },
+  { id: "C3", name: "Rent & Place (สถานที่)" },
+  { id: "C4", name: "Utilities (สาธารณูปโภค)" },
+  { id: "C5", name: "Equip & Maint (อุปกรณ์)" },
+  { id: "C6", name: "System & Sales (ระบบ)" },
+  { id: "C7", name: "Marketing (การตลาด)" },
+  { id: "C8", name: "Admin (ทั่วไป)" },
+  { id: "C9", name: "Reserve (สำรองจ่าย)" },
+  { id: "F1", name: "Main Ingredients (วัตถุดิบหลัก)" },
+  { id: "F2", name: "Labor (ค่าแรง)" },
+  { id: "F3", name: "Fuel (เชื้อเพลิง)" },
+  { id: "F4", name: "Containers (ภาชนะ)" },
+  { id: "F5", name: "Water & Ice (น้ำ)" },
+  { id: "F6", name: "Daily Waste (ของเสีย)" },
+  { id: "F7", name: "Daily Misc (เบ็ดเตล็ด)" }
 ];
 
 function getErrorMessage(error: unknown): string {
@@ -178,7 +178,7 @@ export default function ReceiptValidationPage() {
       });
       setToastMessage("Receipt verified and saved successfully.");
       setTimeout(() => {
-        router.push("/dashboard");
+        router.push("/dashboard/upload-receipt");
       }, 900);
     } catch (verifyError) {
       setError(getErrorMessage(verifyError));
@@ -308,8 +308,8 @@ export default function ReceiptValidationPage() {
                         >
                           <option value="">Select category</option>
                           {CATEGORY_OPTIONS.map((category) => (
-                            <option key={category} value={category}>
-                              {category}
+                            <option key={category.id} value={category.id}>
+                              {category.id} - {category.name}
                             </option>
                           ))}
                         </select>

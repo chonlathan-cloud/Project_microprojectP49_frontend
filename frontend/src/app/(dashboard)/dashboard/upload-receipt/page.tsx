@@ -12,6 +12,7 @@ import api from "@/lib/api";
 type UploadResponse = {
   receipt_id: string;
   status: string;
+  processing_path?: "vision_direct" | "ocr_refined" | "ocr_parser";
 };
 
 type Branch = {
@@ -53,6 +54,7 @@ export default function UploadReceiptPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadStageMessage, setUploadStageMessage] = useState("Uploading file...");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -120,6 +122,20 @@ export default function UploadReceiptPage() {
 
     setIsUploading(true);
     setError(null);
+    setUploadStageMessage("Uploading file...");
+
+    let stageTimer1: number | undefined;
+    let stageTimer2: number | undefined;
+    if (typeof window !== "undefined") {
+      stageTimer1 = window.setTimeout(
+        () => setUploadStageMessage("Analyzing receipt with AI Vision..."),
+        1200
+      );
+      stageTimer2 = window.setTimeout(
+        () => setUploadStageMessage("Running OCR fallback if needed..."),
+        9000
+      );
+    }
 
     try {
       const formData = new FormData();
@@ -135,10 +151,23 @@ export default function UploadReceiptPage() {
         window.localStorage.setItem("last_selected_branch_id", selectedBranchId);
       }
 
+      if (response.data.processing_path === "vision_direct") {
+        setUploadStageMessage("AI extraction complete. Redirecting...");
+      } else {
+        setUploadStageMessage("OCR extraction complete. Redirecting...");
+      }
       router.push(`/dashboard/receipts/${response.data.receipt_id}`);
     } catch (uploadError) {
       setError(getErrorMessage(uploadError));
     } finally {
+      if (typeof window !== "undefined") {
+        if (stageTimer1) {
+          window.clearTimeout(stageTimer1);
+        }
+        if (stageTimer2) {
+          window.clearTimeout(stageTimer2);
+        }
+      }
       setIsUploading(false);
     }
   }
@@ -253,12 +282,17 @@ export default function UploadReceiptPage() {
             {isUploading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Processing OCR...
+                {uploadStageMessage}
               </>
             ) : (
               "Upload and Process"
             )}
           </Button>
+          {isUploading ? (
+            <p className="text-xs text-slate-500">
+              Typical processing time is around 5-12 seconds per receipt.
+            </p>
+          ) : null}
         </CardContent>
       </Card>
     </div>
