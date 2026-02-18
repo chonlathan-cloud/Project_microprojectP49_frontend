@@ -1,4 +1,6 @@
 import uuid
+import logging
+from datetime import timedelta
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status
 from google.cloud import storage
 
@@ -11,6 +13,7 @@ from app.models.receipt import ReceiptVerify
 # Reference: LDD Section 4, TDD Section 2.1
 
 router = APIRouter(prefix="/receipts", tags=["Receipts"])
+logger = logging.getLogger(__name__)
 
 # --- GCS Upload Helper ---
 
@@ -36,6 +39,40 @@ async def upload_to_gcs(file: UploadFile) -> str:
     blob.upload_from_string(content, content_type=file.content_type)
 
     return f"gs://{settings.GCP_STORAGE_BUCKET}/{blob_name}"
+
+
+def _parse_gcs_uri(gcs_uri: str) -> tuple[str, str] | None:
+    if not gcs_uri or not gcs_uri.startswith("gs://"):
+        return None
+
+    uri_without_scheme = gcs_uri[5:]
+    if "/" not in uri_without_scheme:
+        return None
+
+    bucket_name, blob_name = uri_without_scheme.split("/", 1)
+    if not bucket_name or not blob_name:
+        return None
+
+    return bucket_name, blob_name
+
+
+def _generate_signed_read_url(gcs_uri: str) -> str | None:
+    parsed = _parse_gcs_uri(gcs_uri)
+    if not parsed:
+        return None
+
+    bucket_name, blob_name = parsed
+    try:
+        target_bucket = gcs_client.bucket(bucket_name)
+        blob = target_bucket.blob(blob_name)
+        return blob.generate_signed_url(
+            version="v4",
+            method="GET",
+            expiration=timedelta(seconds=settings.SIGNED_URL_EXPIRY_SECONDS),
+        )
+    except Exception as exc:
+        logger.warning("Failed to generate signed URL for '%s': %s", gcs_uri, str(exc))
+        return None
 
 
 # =====================================================
@@ -163,6 +200,11 @@ async def get_receipt(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Receipt '{receipt_id}' not found.",
         )
+
+    image_url = receipt.get("image_url")
+    receipt["image_preview_url"] = (
+        _generate_signed_read_url(image_url) if isinstance(image_url, str) else None
+    )
 
     return receipt
 

@@ -31,6 +31,11 @@ class Settings:
     # Database
     FIRESTORE_DB: str = os.getenv("FIRESTORE_DB", "(default)")
     BIGQUERY_DATASET: str = os.getenv("BIGQUERY_DATASET", "the491_analytics")
+    _SIGNED_URL_EXPIRY_SECONDS_RAW: str = os.getenv("SIGNED_URL_EXPIRY_SECONDS", "1800")
+    try:
+        SIGNED_URL_EXPIRY_SECONDS: int = int(_SIGNED_URL_EXPIRY_SECONDS_RAW)
+    except ValueError:
+        SIGNED_URL_EXPIRY_SECONDS: int = 1800
 
     # Security
     FIREBASE_CREDENTIALS_PATH: str = os.getenv(

@@ -17,7 +17,7 @@ export default function DashboardLayout({
   children: ReactNode;
 }) {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  const { user, loading, displayName } = useAuth();
 
   useEffect(() => {
     if (!loading && !user) {
@@ -54,7 +54,7 @@ export default function DashboardLayout({
             <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5">
               <UserCircle2 className="h-4 w-4 text-slate-600" />
               <span className="max-w-44 truncate text-sm text-slate-700">
-                {user.email ?? "Authenticated User"}
+                {displayName}
               </span>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={handleLogout}>

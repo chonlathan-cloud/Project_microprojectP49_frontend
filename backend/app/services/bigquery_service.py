@@ -42,6 +42,8 @@ def insert_verified_receipt(receipt: dict) -> int:
     receipt_id = receipt.get("id", "unknown")
     branch_id = receipt.get("branch_id", "")
     receipt_date = receipt.get("header", {}).get("date", datetime.utcnow().strftime("%Y-%m-%d"))
+    uploaded_by_user_id = receipt.get("user_id", "")
+    verified_by_user_id = receipt.get("verified_by", "")
     items = receipt.get("items", [])
 
     if not items:
@@ -61,6 +63,8 @@ def insert_verified_receipt(receipt: dict) -> int:
             "amount": float(item.get("amount", 0.0)),
             "payment_method": "CASH",  # Default; POS data will have actual values
             "source": "OCR",
+            "uploaded_by_user_id": uploaded_by_user_id,
+            "verified_by_user_id": verified_by_user_id,
             "created_at": datetime.utcnow().isoformat(),
         }
         rows_to_insert.append(row)
@@ -78,6 +82,7 @@ def get_expense_summary(
     branch_id: str,
     start_date: str,
     end_date: str,
+    category_id: str | None = None,
 ) -> dict:
     """
     Fetch aggregated expense data from BigQuery for the dashboard.
@@ -88,6 +93,8 @@ def get_expense_summary(
         branch_id: Branch to filter by.
         start_date: Start date (YYYY-MM-DD).
         end_date: End date (YYYY-MM-DD).
+        category_id: Optional category filter. If present, REVENUE remains unfiltered
+            and EXPENSE is narrowed to this category.
 
     Returns:
         dict: {
@@ -107,6 +114,11 @@ def get_expense_summary(
     FROM `{table}`
     WHERE branch_id = @branch_id
       AND date BETWEEN @start_date AND @end_date
+      AND (
+        @category_id IS NULL
+        OR type = 'REVENUE'
+        OR category_id = @category_id
+      )
     GROUP BY type, category_id, category_name
     ORDER BY total_amount DESC
     """.format(table=FACT_TRANSACTIONS_TABLE)
@@ -116,6 +128,7 @@ def get_expense_summary(
             bigquery.ScalarQueryParameter("branch_id", "STRING", branch_id),
             bigquery.ScalarQueryParameter("start_date", "DATE", start_date),
             bigquery.ScalarQueryParameter("end_date", "DATE", end_date),
+            bigquery.ScalarQueryParameter("category_id", "STRING", category_id),
         ]
     )
 

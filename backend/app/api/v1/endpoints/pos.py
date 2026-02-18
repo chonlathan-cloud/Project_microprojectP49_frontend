@@ -92,7 +92,7 @@ def _map_payment_method(value: object) -> str:
 async def upload_pos_file(
     branch_id: str = Form(...),
     file: UploadFile = File(...),
-    _current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     """
     Upload POS file (CSV/Excel), normalize fields, validate, and insert REVENUE rows.
@@ -133,6 +133,8 @@ async def upload_pos_file(
                 "amount": float(row["amount"]),
                 "payment_method": row["payment_method"],
                 "source": "POS_FILE",
+                "uploaded_by_user_id": current_user.get("uid", ""),
+                "verified_by_user_id": "",
                 "created_at": datetime.utcnow().isoformat(),
             }
             errors = bigquery_service.bq_client.insert_rows_json(

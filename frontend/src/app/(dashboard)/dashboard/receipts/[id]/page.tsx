@@ -21,6 +21,7 @@ type ReceiptDetail = {
   id: string;
   branch_id: string;
   image_url?: string;
+  image_preview_url?: string | null;
   items: ReceiptItem[];
 };
 
@@ -212,7 +213,7 @@ export default function ReceiptValidationPage() {
     );
   }
 
-  const imageUrl = receipt?.image_url ?? "";
+  const imageUrl = receipt?.image_preview_url || receipt?.image_url || "";
   const canPreviewImage = imageUrl.startsWith("http://") || imageUrl.startsWith("https://");
 
   return (
@@ -251,7 +252,7 @@ export default function ReceiptValidationPage() {
               <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
                 <p>Image preview is unavailable for this URI type.</p>
                 <p className="mt-2 break-all font-mono text-xs text-slate-500">
-                  {imageUrl || "No image URL provided."}
+                  {receipt?.image_url || "No image URL provided."}
                 </p>
               </div>
             )}
