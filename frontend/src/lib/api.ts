@@ -1,4 +1,4 @@
-import axios, { type InternalAxiosRequestConfig } from "axios";
+import axios, { AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
 
 import { auth } from "@/lib/firebase";
 
@@ -18,14 +18,9 @@ api.interceptors.request.use(
     }
 
     const token = await user.getIdToken();
-    if (typeof config.headers?.set === "function") {
-      config.headers.set("Authorization", `Bearer ${token}`);
-    } else {
-      config.headers = {
-        ...(config.headers ?? {}),
-        Authorization: `Bearer ${token}`
-      };
-    }
+    const headers = AxiosHeaders.from(config.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    config.headers = headers;
     return config;
   },
   (error) => Promise.reject(error)

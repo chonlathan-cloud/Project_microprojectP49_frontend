@@ -66,6 +66,20 @@
 - Updated API router:
 - `backend/app/api/v1/api.py` now includes `pos.router`
 
+### Prompt 10.1 ✅ - Branch API and Store Policy Support
+- Added branches list endpoint:
+- `backend/app/api/v1/endpoints/branches.py`
+- `GET /api/v1/branches` returns branch list from Firestore
+- Added branch listing service:
+- `backend/app/services/firestore_service.py` -> `list_branches()`
+- Updated API router:
+- `backend/app/api/v1/api.py` includes `branches.router`
+- Added default branch seeding script:
+- `backend/scripts/seed_default_branches.py`
+- Seeds: Coffee Shop (`COFFEE`), Restaurant (`RESTAURANT`), Steak House (`RESTAURANT`)
+- Hardened Firebase Admin init for ADC:
+- `backend/app/core/security.py` initializes with explicit `projectId=settings.GCP_PROJECT_ID`
+
 ## Backend Progress Summary
 
 | Module | Files | Status |
@@ -79,16 +93,17 @@
 | AI / Vertex AI | `backend/app/services/ai_service.py` | ✅ |
 | Categorization | `backend/app/services/categorization.py` | ✅ |
 | Receipts API | `backend/app/api/v1/endpoints/receipts.py` | ✅ |
+| POS Endpoint | `backend/app/api/v1/endpoints/pos.py` | ✅ |
+| Analytics API | `backend/app/api/v1/endpoints/analytics.py` | ✅ |
+| Branches API | `backend/app/api/v1/endpoints/branches.py` | ✅ |
+| Branch Seeder | `backend/scripts/seed_default_branches.py` | ✅ |
 | Router | `backend/app/api/v1/api.py` | ✅ |
 | App Entry | `backend/app/main.py` | ✅ |
-| BigQuery Service | `backend/app/services/bigquery_service.py` | ✅ |
-| Analytics API | `backend/app/api/v1/endpoints/analytics.py` | ✅ |
-| POS Endpoint | `backend/app/api/v1/endpoints/pos.py` | ✅ |
 
 ## Phase 2: Frontend Implementation (In Progress)
 
 ### Prompt 8 ✅ - Frontend Initialization
-- Created base frontend module in `frontend/` using Next.js App Router + TypeScript + Tailwind.
+- Created base frontend module in `frontend/` using Next.js App Router + TypeScript + Tailwind
 - Added project/config files:
 - `frontend/package.json`
 - `frontend/tsconfig.json`
@@ -101,9 +116,7 @@
 - `frontend/src/lib/firebase.ts`
 - `frontend/src/lib/api.ts`
 - `frontend/src/lib/utils.ts`
-- Implemented axios auth interceptor in `frontend/src/lib/api.ts`:
-- Reads Firebase ID token from `auth.currentUser.getIdToken()`
-- Injects `Authorization: Bearer <token>` automatically on every request
+- Implemented axios auth interceptor in `frontend/src/lib/api.ts`
 - Implemented root app layout with Inter font:
 - `frontend/src/app/layout.tsx`
 - Added auth provider placeholder:
@@ -126,17 +139,35 @@
 - Implemented dashboard sidebar:
 - `frontend/src/components/layout/sidebar.tsx`
 - Links: Dashboard, Upload Receipt, POS Import, Settings
-- Active route highlighting included
 - Implemented protected dashboard layout:
 - `frontend/src/app/(dashboard)/layout.tsx`
 - Includes Sidebar + top bar (user profile + logout)
 - Redirects unauthenticated users to `/login`
-- Added dashboard route placeholders:
-- `frontend/src/app/(dashboard)/dashboard/page.tsx`
+
+### Prompt 10 ✅ - Receipt Upload and Validation UI
+- Implemented upload page:
 - `frontend/src/app/(dashboard)/dashboard/upload-receipt/page.tsx`
-- `frontend/src/app/(dashboard)/dashboard/pos-import/page.tsx`
-- `frontend/src/app/(dashboard)/dashboard/settings/page.tsx`
-- Note: package install/lint in this environment is blocked by network restriction (`ENOTFOUND` to npm registry), so runtime verification is pending.
+- Added drag-and-drop file area
+- Calls `POST /api/v1/receipts/upload`
+- Shows loading spinner while OCR is processing
+- Redirects to `/dashboard/receipts/[id]` on success
+- Implemented validation page:
+- `frontend/src/app/(dashboard)/dashboard/receipts/[id]/page.tsx`
+- Calls `GET /api/v1/receipts/{id}`
+- Split layout: left image panel, right editable form
+- Editable fields: description, amount, `category_id`
+- Category dropdown includes `C1-C9` and `F1-F7`
+- Calls `PUT /api/v1/receipts/{id}/verify`
+- Shows success toast and redirects to Dashboard
+- Fixed build-safe axios header typing:
+- `frontend/src/lib/api.ts`
+
+### Prompt 10.1 ✅ - Store Dropdown UX Policy
+- Upload page now loads stores from Firestore via `GET /api/v1/branches`
+- Replaced Branch ID text input with single-select store dropdown
+- Enforced UX policy: `1 receipt = 1 store`
+- Added retry and empty-store states in upload page
+- Added store lock message in validation page (receipt cannot be reassigned)
 
 ## Frontend Progress Summary
 
@@ -149,12 +180,12 @@
 | Tailwind Utility Helper | `frontend/src/lib/utils.ts` | ✅ |
 | Root Layout | `frontend/src/app/layout.tsx` | ✅ |
 | Auth Provider Placeholder | `frontend/src/components/providers/auth-provider.tsx` | ✅ |
-| Initial App Page/CSS | `frontend/src/app/page.tsx`, `frontend/src/app/globals.css` | ✅ |
-| Reusable UI Components | `frontend/src/components/ui/button.tsx`, `frontend/src/components/ui/input.tsx`, `frontend/src/components/ui/card.tsx`, `frontend/src/components/ui/label.tsx` | ✅ |
-| Login Page | `frontend/src/app/(auth)/login/page.tsx` | ✅ |
-| Dashboard Sidebar | `frontend/src/components/layout/sidebar.tsx` | ✅ |
-| Protected Dashboard Layout | `frontend/src/app/(dashboard)/layout.tsx` | ✅ |
-| Dashboard Route Placeholders | `frontend/src/app/(dashboard)/dashboard/*` | ✅ |
+| UI Components | `frontend/src/components/ui/*` | ✅ |
+| Login UI | `frontend/src/app/(auth)/login/page.tsx` | ✅ |
+| Dashboard Layout + Sidebar | `frontend/src/app/(dashboard)/layout.tsx`, `frontend/src/components/layout/sidebar.tsx` | ✅ |
+| Receipt Upload UI | `frontend/src/app/(dashboard)/dashboard/upload-receipt/page.tsx` | ✅ |
+| Receipt Validation UI | `frontend/src/app/(dashboard)/dashboard/receipts/[id]/page.tsx` | ✅ |
+| Store Dropdown (Firestore) | `frontend/src/app/(dashboard)/dashboard/upload-receipt/page.tsx` | ✅ |
 
 ## Next Prompt
-- Ready for Prompt 10.
+- Ready for Prompt 11.
