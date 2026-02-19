@@ -1,4 +1,5 @@
 import io
+import re
 import uuid
 from datetime import datetime
 
@@ -14,8 +15,23 @@ router = APIRouter(prefix="/pos", tags=["POS"])
 
 REQUIRED_STANDARD_COLUMNS = ("date", "amount", "payment_method")
 COLUMN_ALIASES = {
-    "date": {"date", "วันที่", "transactiondate", "salesdate", "datetime"},
-    "amount": {"amount", "total", "ยอดขาย", "ยอดรวม", "saleamount", "netsales"},
+    "date": {
+        "date",
+        "วันที่",
+        "วันที่ขาย",
+        "transactiondate",
+        "salesdate",
+        "datetime",
+    },
+    "amount": {
+        "amount",
+        "total",
+        "ยอดขาย",
+        "ยอดรวม",
+        "ยอดขายสุทธิ",
+        "saleamount",
+        "netsales",
+    },
     "payment_method": {
         "paymentmethod",
         "payment_type",
@@ -28,14 +44,9 @@ COLUMN_ALIASES = {
 
 
 def _normalize_column_key(column_name: str) -> str:
-    return (
-        str(column_name)
-        .strip()
-        .lower()
-        .replace(" ", "")
-        .replace("_", "")
-        .replace("-", "")
-    )
+    text = str(column_name).strip().lower()
+    # Keep only latin/digits/thai chars, drop spaces and symbols (e.g. "(Net Sales)")
+    return re.sub(r"[^a-z0-9\u0E00-\u0E7F]+", "", text)
 
 
 def _read_pos_file(file_content: bytes, filename: str) -> pd.DataFrame:
@@ -59,17 +70,33 @@ def _read_pos_file(file_content: bytes, filename: str) -> pd.DataFrame:
 
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    alias_to_standard = {}
-    for standard_name, aliases in COLUMN_ALIASES.items():
-        for alias in aliases:
-            alias_to_standard[_normalize_column_key(alias)] = standard_name
-
     rename_map = {}
+    normalized_aliases = {
+        standard_name: [_normalize_column_key(alias) for alias in aliases]
+        for standard_name, aliases in COLUMN_ALIASES.items()
+    }
+
     for column in df.columns:
         normalized_key = _normalize_column_key(column)
-        target_name = alias_to_standard.get(normalized_key)
-        if target_name and target_name not in rename_map.values():
-            rename_map[column] = target_name
+        if not normalized_key:
+            continue
+
+        matched_standard = None
+        for standard_name, aliases in normalized_aliases.items():
+            if standard_name in rename_map.values():
+                continue
+            if any(
+                normalized_key == alias
+                or normalized_key.startswith(alias)
+                or alias in normalized_key
+                for alias in aliases
+                if alias
+            ):
+                matched_standard = standard_name
+                break
+
+        if matched_standard:
+            rename_map[column] = matched_standard
 
     standardized_df = df.rename(columns=rename_map)
     missing = [col for col in REQUIRED_STANDARD_COLUMNS if col not in standardized_df]
