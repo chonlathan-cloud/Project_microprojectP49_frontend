@@ -48,6 +48,9 @@ type AnalyticsSummaryResponse = {
 
 type AiChatResponse = {
   answer: string;
+  citations?: string[];
+  kb_used?: boolean;
+  fallback_mode?: "hybrid" | "bigquery_only";
 };
 
 const PIE_COLORS = ["#ef4444", "#f97316", "#f59e0b", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6"];
@@ -130,6 +133,7 @@ export default function DashboardPage() {
 
   const [question, setQuestion] = useState("");
   const [aiAnswer, setAiAnswer] = useState("");
+  const [aiCitations, setAiCitations] = useState<string[]>([]);
   const [isAskingAi, setIsAskingAi] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
@@ -307,6 +311,7 @@ export default function DashboardPage() {
     setIsAskingAi(true);
     setAiError(null);
     setAiAnswer("");
+    setAiCitations([]);
 
     try {
       const response = await api.post<AiChatResponse>("/api/v1/ai/chat", {
@@ -317,6 +322,7 @@ export default function DashboardPage() {
         category_id: selectedCategoryId || undefined
       });
       setAiAnswer(response.data.answer || "");
+      setAiCitations(Array.isArray(response.data.citations) ? response.data.citations : []);
     } catch (askError) {
       setAiError(getErrorMessage(askError));
     } finally {
@@ -556,7 +562,17 @@ export default function DashboardPage() {
 
           {aiAnswer ? (
             <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-              {aiAnswer}
+              <p className="whitespace-pre-line">{aiAnswer}</p>
+              {aiCitations.length > 0 ? (
+                <div className="mt-3 border-t border-slate-200 pt-2">
+                  <p className="text-xs font-semibold text-slate-600">Citations</p>
+                  <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-slate-600">
+                    {aiCitations.map((citation) => (
+                      <li key={citation}>{citation}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </CardContent>
