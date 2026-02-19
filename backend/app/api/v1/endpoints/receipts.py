@@ -2,8 +2,10 @@ import uuid
 import logging
 import re
 import time
+import mimetypes
 from datetime import datetime, timedelta
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from google.cloud import storage
 
 from app.core.config import settings
@@ -112,6 +114,17 @@ def _generate_signed_read_url(gcs_uri: str) -> str | None:
     except Exception as exc:
         logger.warning("Failed to generate signed URL for '%s': %s", gcs_uri, str(exc))
         return None
+
+
+def _resolve_receipt_preview_url(image_url: str | None) -> str | None:
+    if not image_url:
+        return None
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        return image_url
+
+    # For gs:// objects, only return signed URL.
+    # Do not fallback to public storage URL because private buckets return 403.
+    return _generate_signed_read_url(image_url)
 
 
 def _is_valid_fallback_description(text: str) -> bool:
@@ -245,19 +258,26 @@ def _validate_refined_result(
         quality_flags.append("refine_header_merchant_numeric")
 
     parsed_total = _parse_positive_amount(raw_header.get("total"))
+    parsed_vat = _parse_positive_amount(raw_header.get("vat"))
     items_total = round(sum(item["amount"] for item in normalized_items), 2)
     if parsed_total is None:
         parsed_total = items_total
         quality_flags.append("refine_header_total_missing")
+    if parsed_vat is None:
+        parsed_vat = 0.0
 
     if abs(items_total - parsed_total) > max(3.0, items_total * 0.08):
         quality_flags.append("refine_total_mismatch")
+    if parsed_vat > parsed_total:
+        quality_flags.append("refine_vat_exceeds_total")
+        parsed_vat = 0.0
 
     normalized_data = {
         "header": {
             "merchant": merchant,
             "date": normalized_date,
             "total": float(parsed_total),
+            "vat": float(parsed_vat),
         },
         "items": normalized_items,
         "items_total": items_total,
@@ -380,6 +400,7 @@ async def upload_receipt(
             "merchant": ocr_header.get("merchant"),
             "date": _normalize_date(ocr_header.get("date")) if ocr_header.get("date") else None,
             "total": float(_parse_positive_amount(ocr_header.get("total")) or 0.0),
+            "vat": float(_parse_positive_amount(ocr_header.get("vat")) or 0.0),
         }
 
         if refined_data:
@@ -474,6 +495,10 @@ async def upload_receipt(
         if header.get("date") is None:
             needs_review = True
             quality_flags.append("header_date_missing")
+        if float(header.get("vat", 0.0) or 0.0) > float(header.get("total", 0.0) or 0.0):
+            needs_review = True
+            quality_flags.append("header_vat_exceeds_total")
+            header["vat"] = 0.0
 
         # 6. Save Draft to Firestore
         total_ms = round((time.perf_counter() - pipeline_started) * 1000, 2)
@@ -576,7 +601,7 @@ async def list_receipts(
         for receipt in receipts:
             image_url = receipt.get("image_url")
             receipt["image_preview_url"] = (
-                _generate_signed_read_url(image_url) if isinstance(image_url, str) else None
+                _resolve_receipt_preview_url(image_url) if isinstance(image_url, str) else None
             )
 
     return {
@@ -608,10 +633,88 @@ async def get_receipt(
 
     image_url = receipt.get("image_url")
     receipt["image_preview_url"] = (
-        _generate_signed_read_url(image_url) if isinstance(image_url, str) else None
+        _resolve_receipt_preview_url(image_url) if isinstance(image_url, str) else None
     )
 
+    branch_id = str(receipt.get("branch_id", "")).strip()
+    branch_type = BusinessType.RESTAURANT.value
+    allowed_categories = []
+    if branch_id:
+        branch = firestore_service.get_branch_config(branch_id)
+        if branch and branch.get("type"):
+            branch_type_raw = str(branch.get("type")).upper()
+            if branch_type_raw in {BusinessType.COFFEE.value, BusinessType.RESTAURANT.value}:
+                branch_type = branch_type_raw
+        allowed_categories = [
+            {"id": category.id, "name": category.name}
+            for category in get_categories_for_type(BusinessType(branch_type))
+        ]
+
+    receipt["branch_type"] = branch_type
+    receipt["allowed_categories"] = allowed_categories
+
     return receipt
+
+
+# =====================================================
+# 3.1 GET /{receipt_id}/preview — Authenticated Image Proxy
+# =====================================================
+
+@router.get("/{receipt_id}/preview")
+async def get_receipt_preview(
+    receipt_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Return receipt image bytes via backend auth path.
+    This avoids direct public bucket access requirements on frontend.
+    """
+    receipt = firestore_service.get_receipt(receipt_id)
+    if not receipt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Receipt '{receipt_id}' not found.",
+        )
+
+    image_url = receipt.get("image_url")
+    if not isinstance(image_url, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Receipt image URL is unavailable.",
+        )
+
+    parsed = _parse_gcs_uri(image_url)
+    if not parsed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Receipt image URL is not a valid gs:// URI.",
+        )
+
+    bucket_name, blob_name = parsed
+    try:
+        target_bucket = gcs_client.bucket(bucket_name)
+        blob = target_bucket.blob(blob_name)
+        if not blob.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Receipt image object not found in storage.",
+            )
+
+        image_bytes = blob.download_as_bytes()
+        media_type = blob.content_type or mimetypes.guess_type(blob_name)[0] or "application/octet-stream"
+        return Response(
+            content=image_bytes,
+            media_type=media_type,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Failed to proxy receipt image '%s': %s", image_url, str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to load receipt preview image.",
+        )
 
 
 # =====================================================

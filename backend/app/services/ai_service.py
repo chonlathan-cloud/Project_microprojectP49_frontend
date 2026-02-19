@@ -332,7 +332,8 @@ Rules:
 4) date must be YYYY-MM-DD when possible, otherwise null.
 5) merchant should be a store name, not numeric-only tax IDs.
 6) category_id must be one of allowed IDs, else null.
-7) If uncertain, keep item with lower confidence but still valid structure.
+7) If VAT/Tax amount is explicitly present, populate header.vat; otherwise 0.0.
+8) If uncertain, keep item with lower confidence but still valid structure.
 
 OCR full text:
 {full_text}
@@ -345,7 +346,8 @@ Output JSON format:
   "header": {{
     "merchant": "string|null",
     "date": "YYYY-MM-DD|null",
-    "total": 0.0
+    "total": 0.0,
+    "vat": 0.0
   }},
   "items": [
     {{
@@ -422,6 +424,10 @@ Output JSON format:
             total = float(header.get("total", 0.0) or 0.0)
         except (TypeError, ValueError):
             total = 0.0
+        try:
+            vat = float(header.get("vat", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            vat = 0.0
 
         confidence_summary = parsed.get("confidence_summary", {})
         if not isinstance(confidence_summary, dict):
@@ -432,6 +438,7 @@ Output JSON format:
                 "merchant": merchant or None,
                 "date": date_value or None,
                 "total": round(total, 2),
+                "vat": round(max(vat, 0.0), 2),
             },
             "items": normalized_items,
             "confidence_summary": confidence_summary,
@@ -491,14 +498,16 @@ Rules:
 4) date must be YYYY-MM-DD when confidently parsed, otherwise null.
 5) merchant should be store name (not numeric-only).
 6) category_id must be one of allowed IDs, otherwise null.
-7) Return strict JSON only, no markdown.
+7) If VAT/Tax amount is explicitly present, populate header.vat; otherwise 0.0.
+8) Return strict JSON only, no markdown.
 
 Output JSON:
 {{
   "header": {{
     "merchant": "string|null",
     "date": "YYYY-MM-DD|null",
-    "total": 0.0
+    "total": 0.0,
+    "vat": 0.0
   }},
   "items": [
     {{
@@ -594,6 +603,10 @@ Output JSON:
                 total = float(header.get("total", 0.0) or 0.0)
             except (TypeError, ValueError):
                 total = 0.0
+            try:
+                vat = float(header.get("vat", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                vat = 0.0
 
             confidence_summary = parsed.get("confidence_summary", {})
             if not isinstance(confidence_summary, dict):
@@ -604,6 +617,7 @@ Output JSON:
                     "merchant": merchant or None,
                     "date": date_value or None,
                     "total": round(total, 2),
+                    "vat": round(max(vat, 0.0), 2),
                 },
                 "items": normalized_items,
                 "confidence_summary": confidence_summary,

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CheckCircle2, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,12 +17,27 @@ type ReceiptItem = {
   category_id?: string | null;
 };
 
+type ReceiptHeader = {
+  merchant?: string | null;
+  date?: string | null;
+  total?: number;
+  vat?: number;
+};
+
+type CategoryOption = {
+  id: string;
+  name: string;
+};
+
 type ReceiptDetail = {
   id: string;
   branch_id: string;
+  branch_type?: "COFFEE" | "RESTAURANT";
   image_url?: string;
   image_preview_url?: string | null;
+  header?: ReceiptHeader;
   items: ReceiptItem[];
+  allowed_categories?: CategoryOption[];
 };
 
 type EditableItem = {
@@ -31,7 +46,7 @@ type EditableItem = {
   category_id: string;
 };
 
-const CATEGORY_OPTIONS: Array<{ id: string; name: string }> = [
+const COFFEE_CATEGORY_OPTIONS: CategoryOption[] = [
   { id: "C1", name: "COGS (วัตถุดิบ)" },
   { id: "C2", name: "Labor (ค่าแรง)" },
   { id: "C3", name: "Rent & Place (สถานที่)" },
@@ -40,7 +55,10 @@ const CATEGORY_OPTIONS: Array<{ id: string; name: string }> = [
   { id: "C6", name: "System & Sales (ระบบ)" },
   { id: "C7", name: "Marketing (การตลาด)" },
   { id: "C8", name: "Admin (ทั่วไป)" },
-  { id: "C9", name: "Reserve (สำรองจ่าย)" },
+  { id: "C9", name: "Reserve (สำรองจ่าย)" }
+];
+
+const RESTAURANT_CATEGORY_OPTIONS: CategoryOption[] = [
   { id: "F1", name: "Main Ingredients (วัตถุดิบหลัก)" },
   { id: "F2", name: "Labor (ค่าแรง)" },
   { id: "F3", name: "Fuel (เชื้อเพลิง)" },
@@ -49,6 +67,38 @@ const CATEGORY_OPTIONS: Array<{ id: string; name: string }> = [
   { id: "F6", name: "Daily Waste (ของเสีย)" },
   { id: "F7", name: "Daily Misc (เบ็ดเตล็ด)" }
 ];
+
+function getFallbackCategoryOptions(
+  branchType: ReceiptDetail["branch_type"]
+): CategoryOption[] {
+  if (branchType === "COFFEE") {
+    return COFFEE_CATEGORY_OPTIONS;
+  }
+  return RESTAURANT_CATEGORY_OPTIONS;
+}
+
+function convertGsUriToHttps(uri?: string | null): string {
+  if (!uri) {
+    return "";
+  }
+  if (uri.startsWith("http://") || uri.startsWith("https://")) {
+    return uri;
+  }
+  if (!uri.startsWith("gs://")) {
+    return "";
+  }
+  const withoutScheme = uri.slice(5);
+  const slashIndex = withoutScheme.indexOf("/");
+  if (slashIndex === -1) {
+    return "";
+  }
+  const bucket = withoutScheme.slice(0, slashIndex);
+  const objectPath = withoutScheme.slice(slashIndex + 1);
+  if (!bucket || !objectPath) {
+    return "";
+  }
+  return `https://storage.googleapis.com/${bucket}/${objectPath}`;
+}
 
 function getErrorMessage(error: unknown): string {
   if (
@@ -78,6 +128,8 @@ export default function ReceiptValidationPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [proxyImageUrl, setProxyImageUrl] = useState<string>("");
+  const [proxyImageError, setProxyImageError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!receiptId) {
@@ -121,6 +173,45 @@ export default function ReceiptValidationPage() {
     };
   }, [receiptId]);
 
+  useEffect(() => {
+    if (!receiptId || !receipt?.image_url?.startsWith("gs://")) {
+      setProxyImageUrl("");
+      setProxyImageError(null);
+      return;
+    }
+
+    let isMounted = true;
+    let objectUrl = "";
+
+    async function loadPreviewViaBackend() {
+      try {
+        setProxyImageError(null);
+        const response = await api.get(`/api/v1/receipts/${receiptId}/preview`, {
+          responseType: "blob"
+        });
+        if (!isMounted) {
+          return;
+        }
+        objectUrl = URL.createObjectURL(response.data);
+        setProxyImageUrl(objectUrl);
+      } catch {
+        if (isMounted) {
+          setProxyImageUrl("");
+          setProxyImageError("Failed to load image via secure preview endpoint.");
+        }
+      }
+    }
+
+    loadPreviewViaBackend();
+
+    return () => {
+      isMounted = false;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [receiptId, receipt?.image_url]);
+
   const total = useMemo(
     () =>
       items.reduce((sum, item) => {
@@ -130,10 +221,30 @@ export default function ReceiptValidationPage() {
     [items]
   );
 
+  const categoryOptions = useMemo(() => {
+    if (receipt?.allowed_categories && receipt.allowed_categories.length > 0) {
+      return receipt.allowed_categories;
+    }
+    return getFallbackCategoryOptions(receipt?.branch_type);
+  }, [receipt?.allowed_categories, receipt?.branch_type]);
+
+  const allowedCategoryIds = useMemo(
+    () => new Set(categoryOptions.map((category) => category.id)),
+    [categoryOptions]
+  );
+
   function updateItem(index: number, patch: Partial<EditableItem>) {
     setItems((prev) =>
       prev.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
     );
+  }
+
+  function addItem() {
+    setItems((prev) => [...prev, { description: "", amount: "", category_id: "" }]);
+  }
+
+  function removeItem(index: number) {
+    setItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
   }
 
   async function handleVerifyAndSave() {
@@ -159,6 +270,10 @@ export default function ReceiptValidationPage() {
       }
       if (!item.category_id) {
         setError("Please select category for every item.");
+        return;
+      }
+      if (allowedCategoryIds.size > 0 && !allowedCategoryIds.has(item.category_id)) {
+        setError("One or more selected categories are not allowed for this store.");
         return;
       }
       normalizedItems.push({
@@ -213,7 +328,10 @@ export default function ReceiptValidationPage() {
     );
   }
 
-  const imageUrl = receipt?.image_preview_url || receipt?.image_url || "";
+  const isGcsSource = Boolean(receipt?.image_url?.startsWith("gs://"));
+  const imageUrl = isGcsSource
+    ? proxyImageUrl
+    : convertGsUriToHttps(receipt?.image_preview_url) || convertGsUriToHttps(receipt?.image_url);
   const canPreviewImage = imageUrl.startsWith("http://") || imageUrl.startsWith("https://");
 
   return (
@@ -234,6 +352,30 @@ export default function ReceiptValidationPage() {
         <p className="mt-1">
           {receipt?.branch_id || "-"} - This receipt cannot be split or reassigned to another store.
         </p>
+        <p className="mt-1 text-xs text-slate-500">Business type: {receipt?.branch_type || "-"}</p>
+      </div>
+
+      <div className="grid gap-3 rounded-md border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 md:grid-cols-4">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Merchant</p>
+          <p className="font-medium text-slate-900">{receipt?.header?.merchant || "-"}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Date</p>
+          <p className="font-medium text-slate-900">{receipt?.header?.date || "-"}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Total</p>
+          <p className="font-medium text-slate-900">
+            {Number(receipt?.header?.total || 0).toFixed(2)}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-500">VAT</p>
+          <p className="font-medium text-slate-900">
+            {Number(receipt?.header?.vat || 0).toFixed(2)}
+          </p>
+        </div>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
@@ -250,7 +392,14 @@ export default function ReceiptValidationPage() {
               />
             ) : (
               <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
-                <p>Image preview is unavailable for this URI type.</p>
+                <p>
+                  {isGcsSource
+                    ? "Image preview is currently unavailable via secure proxy."
+                    : "Image preview is unavailable for this URI type."}
+                </p>
+                {proxyImageError ? (
+                  <p className="mt-2 text-xs text-red-600">{proxyImageError}</p>
+                ) : null}
                 <p className="mt-2 break-all font-mono text-xs text-slate-500">
                   {receipt?.image_url || "No image URL provided."}
                 </p>
@@ -260,13 +409,35 @@ export default function ReceiptValidationPage() {
         </Card>
 
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <CardTitle>Extracted Items</CardTitle>
+            <Button type="button" variant="outline" size="sm" onClick={addItem} disabled={saving}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Item
+            </Button>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-4">
-              {items.map((item, index) => (
-                <div key={`item-${index}`} className="rounded-lg border border-slate-200 p-4">
+            {items.length === 0 ? (
+              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                No extracted items yet. Click Add Item to insert a line.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {items.map((item, index) => (
+                  <div key={`item-${index}`} className="rounded-lg border border-slate-200 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-sm font-medium text-slate-700">Line Item {index + 1}</p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => removeItem(index)}
+                        disabled={saving}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+
                   <div className="grid gap-3">
                     <div className="space-y-1.5">
                       <Label htmlFor={`description-${index}`}>Description</Label>
@@ -307,7 +478,7 @@ export default function ReceiptValidationPage() {
                           disabled={saving}
                         >
                           <option value="">Select category</option>
-                          {CATEGORY_OPTIONS.map((category) => (
+                          {categoryOptions.map((category) => (
                             <option key={category.id} value={category.id}>
                               {category.id} - {category.name}
                             </option>
@@ -316,9 +487,10 @@ export default function ReceiptValidationPage() {
                       </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="flex items-center justify-between rounded-md bg-slate-100 px-3 py-2">
               <p className="text-sm font-medium text-slate-700">Total Check</p>

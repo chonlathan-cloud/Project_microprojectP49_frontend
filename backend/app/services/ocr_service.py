@@ -43,6 +43,15 @@ DATE_REGEX = re.compile(
     r"(?<!\d)(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4})(?!\d)"
 )
 TOTAL_LINE_KEYWORDS = ("ยอดรวม", "รวมสุทธิ", "total", "grand total", "net total")
+VAT_LINE_KEYWORDS = (
+    "vat",
+    "tax",
+    "ภาษี",
+    "ภาษีมูลค่าเพิ่ม",
+    "vat 7%",
+    "vat7%",
+    "ภาษีมูลค่าเพิ่ม 7%",
+)
 NOISE_KEYWORDS = (
     "tax id",
     "tax invoice",
@@ -64,6 +73,7 @@ NOISE_KEYWORDS = (
     "promo",
     "rid",
 )
+TRAILING_AMOUNT_PATTERN = re.compile(r"(\d[\d,]*(?:\.\d{1,2})?)\s*$")
 
 
 def _normalize_text(value: str) -> str:
@@ -212,6 +222,13 @@ def _extract_line_items_from_text(text: str) -> list[dict]:
     return line_items
 
 
+def _extract_trailing_amount(line: str) -> float | None:
+    match = TRAILING_AMOUNT_PATTERN.search(line)
+    if not match:
+        return None
+    return _parse_amount(match.group(1))
+
+
 def _build_line_item_candidates(entities: list[dict], full_text: str) -> list[dict]:
     candidates: list[dict] = []
     seen_keys: set[tuple[str, float]] = set()
@@ -268,6 +285,7 @@ def _build_header_candidates(entities: list[dict], full_text: str, line_items: l
     merchants: list[dict] = []
     dates: list[dict] = []
     totals: list[dict] = []
+    vats: list[dict] = []
 
     for entity in entities:
         entity_type = str(entity.get("type", "")).lower()
@@ -293,6 +311,12 @@ def _build_header_candidates(entities: list[dict], full_text: str, line_items: l
                 totals.append(
                     {"value": round(parsed_total, 2), "confidence": confidence, "source": f"entity:{entity_type}"}
                 )
+        if "tax" in entity_type or "vat" in entity_type:
+            parsed_vat = _parse_amount(entity.get("normalized_value") or mention_text)
+            if parsed_vat is not None:
+                vats.append(
+                    {"value": round(parsed_vat, 2), "confidence": confidence, "source": f"entity:{entity_type}"}
+                )
 
     date_match = DATE_REGEX.search(full_text)
     if date_match:
@@ -312,6 +336,10 @@ def _build_header_candidates(entities: list[dict], full_text: str, line_items: l
             parsed_total = _parse_amount(match.group("amount"))
             if parsed_total is not None:
                 totals.append({"value": round(parsed_total, 2), "confidence": 0.65, "source": "text_total_line"})
+        if any(keyword in lowered for keyword in VAT_LINE_KEYWORDS):
+            parsed_vat = _extract_trailing_amount(line)
+            if parsed_vat is not None:
+                vats.append({"value": round(parsed_vat, 2), "confidence": 0.62, "source": "text_vat_line"})
 
     if line_items:
         totals.append(
@@ -326,6 +354,7 @@ def _build_header_candidates(entities: list[dict], full_text: str, line_items: l
         "merchant_candidates": merchants,
         "date_candidates": dates,
         "total_candidates": totals,
+        "vat_candidates": vats,
     }
 
 
@@ -335,6 +364,7 @@ def _extract_header(entities: list[dict], full_text: str, line_items: list[dict]
     merchant: str | None = None
     date_value: str | None = None
     total_value: float | None = None
+    vat_value: float | None = None
 
     if header_candidates["merchant_candidates"]:
         merchant = sorted(
@@ -356,11 +386,18 @@ def _extract_header(entities: list[dict], full_text: str, line_items: list[dict]
             key=lambda item: item.get("confidence", 0.0),
             reverse=True,
         )[0].get("value")
+    if header_candidates["vat_candidates"]:
+        vat_value = sorted(
+            header_candidates["vat_candidates"],
+            key=lambda item: item.get("confidence", 0.0),
+            reverse=True,
+        )[0].get("value")
 
     header = {
         "merchant": merchant,
         "date": date_value,
         "total": float(total_value or 0.0),
+        "vat": float(vat_value or 0.0),
     }
     return header, header_candidates
 

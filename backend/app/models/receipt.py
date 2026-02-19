@@ -42,6 +42,7 @@ class ReceiptHeader(BaseModel):
     merchant: Optional[str] = None
     date: Optional[str] = None               # YYYY-MM-DD
     total: float = 0.0
+    vat: float = 0.0
 
 
 # --- Receipt Schemas ---
