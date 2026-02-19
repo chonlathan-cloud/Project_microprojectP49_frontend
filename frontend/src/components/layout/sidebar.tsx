@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   FileUp,
+  Home,
   Settings,
   WalletCards
 } from "lucide-react";
@@ -19,6 +20,7 @@ type NavItem = {
 };
 
 const navItems: NavItem[] = [
+  { href: "/dashboard/welcome", label: "Welcome", icon: Home },
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
   { href: "/dashboard/upload-receipt", label: "Upload Receipt", icon: FileUp },
   { href: "/dashboard/pos-import", label: "POS Import", icon: WalletCards },
