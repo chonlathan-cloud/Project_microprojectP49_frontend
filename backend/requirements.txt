@@ -20,6 +20,10 @@ google-cloud-aiplatform
 google-cloud-firestore
 google-cloud-bigquery
 google-cloud-storage
+langchain
+langchain-community
+langchain-google-vertexai
+chromadb
 
 # Firebase Authentication
 firebase-admin

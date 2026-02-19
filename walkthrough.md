@@ -87,6 +87,40 @@
 - Updated BigQuery query with parameterized category filter
 - Revenue remains included; expense can be narrowed by category
 
+### Prompt 12 ✅ - AI Insight RAG (BigQuery + Playbook Embeddings)
+- Added AI endpoint for dashboard insight:
+- `backend/app/api/v1/endpoints/ai.py`
+- `POST /api/v1/ai/chat`
+- AI chat now combines:
+- BigQuery summary data
+- Knowledge Base retrieval from playbook embeddings
+- Added response metadata:
+- `citations`
+- `kb_used`
+- `fallback_mode` (`hybrid` / `bigquery_only`)
+- Added fallback policy:
+- If KB unavailable, continue with BigQuery-only response (no hard fail)
+- Added knowledge base service:
+- `backend/app/services/knowledge_base.py`
+- Loads `backend/app/data/business_playbook.json`
+- Uses Vertex embeddings (`text-embedding-004`) + Chroma vector store
+- Auto-init on app startup (configurable)
+- Cloud Run-friendly persist dir default: `/tmp/the49_chroma`
+- Updated AI service for insight generation:
+- `backend/app/services/ai_service.py`
+- Uses dedicated insight model config (`VERTEX_AI_INSIGHT_MODEL`)
+- Thai-first answer policy with English numbers/technical terms
+- Supports in-answer reference style from playbook snippets
+- Expanded business playbook v1:
+- `backend/app/data/business_playbook.json`
+- Increased from 3 to 27 entries
+- Covers `General`, `C1-C9`, `F1-F7`
+- Added KB dependencies:
+- `langchain`
+- `langchain-community`
+- `langchain-google-vertexai`
+- `chromadb`
+
 ### Backend Data Model Update ✅ - Audit Columns in BigQuery
 - `fact_transactions` now expects:
 - `uploaded_by_user_id STRING NULLABLE`
@@ -108,8 +142,11 @@
 | Receipts API | `backend/app/api/v1/endpoints/receipts.py` | ✅ |
 | POS Endpoint | `backend/app/api/v1/endpoints/pos.py` | ✅ |
 | Analytics API | `backend/app/api/v1/endpoints/analytics.py` | ✅ |
+| AI Chat API | `backend/app/api/v1/endpoints/ai.py` | ✅ |
 | Branches API | `backend/app/api/v1/endpoints/branches.py` | ✅ |
 | Branch Seeder | `backend/scripts/seed_default_branches.py` | ✅ |
+| Knowledge Base (RAG) | `backend/app/services/knowledge_base.py` | ✅ |
+| Playbook Data | `backend/app/data/business_playbook.json` | ✅ |
 | Router | `backend/app/api/v1/api.py` | ✅ |
 | App Entry | `backend/app/main.py` | ✅ |
 
@@ -215,6 +252,8 @@
 - Added role-based branch behavior:
 - `admin` / `executive`: choose any branch
 - `staff`: branch locked to `default_branch_id`
+- AI Insight panel now renders backend citations when available
+- Supports `kb_used` and `fallback_mode` response handling
 
 ## Frontend Progress Summary
 

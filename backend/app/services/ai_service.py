@@ -50,6 +50,15 @@ RECEIPT_MODEL_NAMES = _unique_non_empty(
 RECEIPT_MODELS = {name: GenerativeModel(name) for name in RECEIPT_MODEL_NAMES}
 receipt_refine_model = RECEIPT_MODELS[RECEIPT_MODEL_NAMES[0]]
 
+INSIGHT_MODEL_NAMES = _unique_non_empty(
+    [
+        settings.VERTEX_AI_INSIGHT_MODEL,
+        settings.VERTEX_AI_MODEL,
+        "gemini-2.5-flash",
+    ]
+)
+INSIGHT_MODELS = {name: GenerativeModel(name) for name in INSIGHT_MODEL_NAMES}
+
 
 def _extract_json_payload(response_text: str) -> dict | None:
     text = response_text.strip()
@@ -129,6 +138,43 @@ async def _generate_with_receipt_models(
     if last_error:
         raise last_error
     raise RuntimeError("No receipt model available")
+
+
+async def _generate_with_insight_models(
+    payload: list[object],
+    timeout_ms: int,
+) -> tuple[Any, str]:
+    last_error: Exception | None = None
+    for model_name in INSIGHT_MODEL_NAMES:
+        target_model = INSIGHT_MODELS[model_name]
+        try:
+            response = await _generate_content_with_timeout(
+                target_model=target_model,
+                payload=payload,
+                timeout_ms=timeout_ms,
+            )
+            return response, model_name
+        except asyncio.TimeoutError as exc:
+            last_error = exc
+            logger.warning(
+                "Insight model '%s' timed out, trying next model",
+                model_name,
+            )
+            continue
+        except Exception as exc:
+            last_error = exc
+            if _should_try_next_model(exc):
+                logger.warning(
+                    "Insight model '%s' unavailable, trying next model: %s",
+                    model_name,
+                    str(exc),
+                )
+                continue
+            raise
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("No insight model available")
 
 
 def _preprocess_vision_image(
@@ -583,3 +629,85 @@ Output JSON:
             )
 
     return None
+
+
+async def generate_ai_insight(
+    question: str,
+    business_type: str,
+    context: dict,
+    timeout_ms: int | None = None,
+) -> str:
+    """
+    Generate an executive-style answer for dashboard AI insight.
+    """
+    normalized_question = question.strip()
+    if not normalized_question:
+        return "Please provide a question for AI insight."
+
+    effective_timeout = timeout_ms or max(9000, settings.AI_INSIGHT_TIMEOUT_MS)
+    knowledge_items = []
+    if isinstance(context, dict):
+        kb_section = context.get("knowledge_base", {})
+        if isinstance(kb_section, dict):
+            raw_items = kb_section.get("items", [])
+            if isinstance(raw_items, list):
+                knowledge_items = [item for item in raw_items if isinstance(item, dict)]
+
+    if knowledge_items:
+        knowledge_text = "\n".join(
+            (
+                f"- [{item.get('topic', 'Unknown')}|{item.get('category', 'General')}] "
+                f"{str(item.get('content', '')).strip()}"
+            )
+            for item in knowledge_items
+        )
+    else:
+        knowledge_text = "- No playbook snippets matched this question."
+
+    prompt = f"""Role: You are a Senior Business Analyst for a {business_type} business.
+Answer using the provided data only.
+
+Language policy:
+- Default response language: Thai.
+- Keep numbers and specific technical terms in English where appropriate.
+
+Output policy:
+1) Keep the answer concise and practical.
+2) Do not invent metrics that are not in context.
+3) If data is missing, clearly say what is unavailable.
+4) End with one clear next action.
+5) If playbook snippets are used, cite topic+category in text like [High Food Cost|F1].
+
+Question:
+{normalized_question}
+
+Analytics Context JSON:
+{json.dumps(context, ensure_ascii=False)}
+
+Playbook Snippets:
+{knowledge_text}
+"""
+
+    try:
+        response, used_model = await _generate_with_insight_models(
+            payload=[prompt],
+            timeout_ms=effective_timeout,
+        )
+        answer = (response.text or "").strip()
+        if answer:
+            logger.info("AI insight generated with model=%s", used_model)
+            return answer
+    except Exception as exc:
+        logger.warning("AI insight generation failed: %s", str(exc))
+
+    summary = context.get("summary", {}) if isinstance(context, dict) else {}
+    if isinstance(summary, dict):
+        total_revenue = summary.get("total_revenue")
+        total_expense = summary.get("total_expense")
+        net_profit = summary.get("net_profit")
+        return (
+            "AI Insight ไม่พร้อมใช้งานชั่วคราว "
+            f"(Revenue={total_revenue}, Expense={total_expense}, Net Profit={net_profit}). "
+            "Action ที่แนะนำ: ตรวจสอบหมวดค่าใช้จ่ายสูงสุดก่อนเป็นลำดับแรก"
+        )
+    return "AI Insight ไม่พร้อมใช้งานชั่วคราว กรุณาลองอีกครั้ง"

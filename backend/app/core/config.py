@@ -44,10 +44,17 @@ class Settings:
 
     # Vertex AI
     VERTEX_AI_MODEL: str = os.getenv("VERTEX_AI_MODEL", "gemini-pro")
+    VERTEX_AI_INSIGHT_MODEL: str = os.getenv(
+        "VERTEX_AI_INSIGHT_MODEL", "gemini-2.5-pro"
+    )
+    VERTEX_AI_EMBEDDING_MODEL: str = os.getenv(
+        "VERTEX_AI_EMBEDDING_MODEL", "text-embedding-004"
+    )
     VERTEX_AI_RECEIPT_MODEL: str = os.getenv(
         "VERTEX_AI_RECEIPT_MODEL",
         "gemini-2.5-flash-lite",
     )
+    AI_INSIGHT_TIMEOUT_MS: int = _env_int("AI_INSIGHT_TIMEOUT_MS", 25000)
     RECEIPT_EXTRACTION_MODE: str = os.getenv(
         "RECEIPT_EXTRACTION_MODE", "vision_first"
     ).strip().lower()
@@ -60,6 +67,17 @@ class Settings:
     OCR_PREPROCESS_ENABLED: bool = _env_bool("OCR_PREPROCESS_ENABLED", True)
     OCR_MAX_IMAGE_EDGE: int = _env_int("OCR_MAX_IMAGE_EDGE", 1600)
     OCR_JPEG_QUALITY: int = _env_int("OCR_JPEG_QUALITY", 85)
+    KNOWLEDGE_BASE_AUTO_INIT: bool = _env_bool("KNOWLEDGE_BASE_AUTO_INIT", True)
+    KNOWLEDGE_BASE_PLAYBOOK_PATH: str = os.getenv(
+        "KNOWLEDGE_BASE_PLAYBOOK_PATH", "data/business_playbook.json"
+    )
+    KNOWLEDGE_BASE_PERSIST_DIR: str = os.getenv(
+        "KNOWLEDGE_BASE_PERSIST_DIR", "/tmp/the49_chroma"
+    )
+    KNOWLEDGE_BASE_COLLECTION: str = os.getenv(
+        "KNOWLEDGE_BASE_COLLECTION", "business_playbook"
+    )
+    KNOWLEDGE_BASE_TOP_K: int = _env_int("KNOWLEDGE_BASE_TOP_K", 3)
 
     # Database
     FIRESTORE_DB: str = os.getenv("FIRESTORE_DB", "(default)")
