@@ -1,0 +1,27 @@
+# Cloud Build source ignore (relative to backend/)
+.gcloudignore
+.git
+.gitignore
+
+# Local virtualenv / caches
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local-only files
+.env
+firebase-adminsdk.json
+*.pem
+*.key
+
+# Test artifacts / large local samples
+bill for test.jpg
+bill for test2.JPG
+tests/
+scripts/
