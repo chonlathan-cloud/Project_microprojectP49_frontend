@@ -6,6 +6,7 @@ REGION="${REGION:-asia-southeast1}"
 SERVICE_NAME="${SERVICE_NAME:-the49-backend}"
 SOURCE_DIR="${SOURCE_DIR:-backend}"
 ENV_FILE="${ENV_FILE:-backend/.env}"
+BUILD_SERVICE_ACCOUNT="${BUILD_SERVICE_ACCOUNT:-project-the49@the49-487609.iam.gserviceaccount.com}"
 
 # AUTH_MODE: impersonation | key | none
 AUTH_MODE="${AUTH_MODE:-impersonation}"
@@ -37,6 +38,21 @@ fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "ERROR: ENV file not found: $ENV_FILE"
+  exit 1
+fi
+
+if [[ -z "$BUILD_SERVICE_ACCOUNT" ]]; then
+  echo "ERROR: BUILD_SERVICE_ACCOUNT must not be empty."
+  exit 1
+fi
+
+if [[ "$BUILD_SERVICE_ACCOUNT" == projects/*/serviceAccounts/* ]]; then
+  BUILD_SERVICE_ACCOUNT_RESOURCE="$BUILD_SERVICE_ACCOUNT"
+elif [[ "$BUILD_SERVICE_ACCOUNT" == *"@"* ]]; then
+  BUILD_SERVICE_ACCOUNT_RESOURCE="projects/${PROJECT_ID}/serviceAccounts/${BUILD_SERVICE_ACCOUNT}"
+else
+  echo "ERROR: BUILD_SERVICE_ACCOUNT must be either an email or"
+  echo "projects/<projectId>/serviceAccounts/<serviceAccount>."
   exit 1
 fi
 
@@ -101,11 +117,13 @@ with dst.open("w", encoding="utf-8") as f:
 PY
 
 echo "Deploying backend service '$SERVICE_NAME' to Cloud Run..."
+echo "Using build service account: $BUILD_SERVICE_ACCOUNT_RESOURCE"
 deploy_args=(
   run deploy "$SERVICE_NAME"
   --source "$SOURCE_DIR"
   --project "$PROJECT_ID"
   --region "$REGION"
+  --build-service-account "$BUILD_SERVICE_ACCOUNT_RESOURCE"
   --env-vars-file "$tmp_env_yaml"
   --quiet
 )

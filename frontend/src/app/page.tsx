@@ -1,13 +1,28 @@
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+
+import { useAuth } from "@/components/providers/auth-provider";
+
 export default function HomePage() {
+  const router = useRouter();
+  const { user, loading } = useAuth();
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+    if (user) {
+      router.replace("/dashboard");
+      return;
+    }
+    router.replace("/login");
+  }, [loading, router, user]);
+
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl items-center justify-center p-6">
-      <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h1 className="text-2xl font-semibold text-slate-900">The 49 Frontend</h1>
-        <p className="mt-2 text-slate-600">
-          Frontend module initialized with Next.js App Router, TypeScript, Tailwind,
-          Firebase Auth client, and Axios API client.
-        </p>
-      </div>
+    <main className="flex min-h-screen items-center justify-center bg-slate-100 p-6">
+      <p className="text-sm text-slate-600">Checking authentication...</p>
     </main>
   );
 }
