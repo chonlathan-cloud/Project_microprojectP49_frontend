@@ -44,6 +44,7 @@ DATE_PATTERNS = (
     "%d-%m-%Y",
     "%Y/%m/%d",
 )
+VAT_DESCRIPTION_TOKENS = ("vat", "tax", "ภาษี")
 
 
 def _normalize_extraction_mode(raw_mode: str | None) -> str:
@@ -182,6 +183,53 @@ def _is_numeric_only(value: str | None) -> bool:
     return bool(re.fullmatch(r"[\d\W_]+", normalized))
 
 
+def _contains_vat_keyword(text: str | None) -> bool:
+    if not text:
+        return False
+    normalized = str(text).strip().lower()
+    return any(token in normalized for token in VAT_DESCRIPTION_TOKENS)
+
+
+def _append_vat_item_if_missing(
+    items: list[dict],
+    header: dict,
+    business_type: str,
+) -> list[dict]:
+    vat_amount = float(_parse_positive_amount(header.get("vat")) or 0.0)
+    if vat_amount <= 0:
+        return items
+
+    for item in items:
+        description = str(item.get("description", ""))
+        if _contains_vat_keyword(description):
+            # Existing VAT-like line already present.
+            return items
+
+    default_category_id = None
+    if business_type == BusinessType.COFFEE.value:
+        default_category_id = "C8"
+    elif business_type == BusinessType.RESTAURANT.value:
+        default_category_id = "F7"
+
+    category_map = {
+        category.id: category.name
+        for category in get_categories_for_type(BusinessType(business_type))
+    }
+    if default_category_id not in category_map:
+        default_category_id = None
+
+    vat_item = {
+        "id": f"item_{len(items) + 1}",
+        "description": "VAT (ภาษีมูลค่าเพิ่ม)",
+        "amount": round(vat_amount, 2),
+        "category_id": default_category_id,
+        "category_name": category_map.get(default_category_id, "Uncategorized"),
+        "confidence": 0.95,
+        "is_manual_edit": False,
+    }
+    return [*items, vat_item]
+
+
 def _validate_refined_result(
     refined_payload: dict | None,
     business_type: str,
@@ -215,7 +263,8 @@ def _validate_refined_result(
         amount = _parse_positive_amount(item.get("amount"))
         if not description or amount is None:
             continue
-        if _is_valid_fallback_description(description) is False:
+        is_vat_line = _contains_vat_keyword(description)
+        if not is_vat_line and _is_valid_fallback_description(description) is False:
             quality_flags.append("refine_item_noise_removed")
             continue
 
@@ -500,6 +549,13 @@ async def upload_receipt(
             quality_flags.append("header_vat_exceeds_total")
             header["vat"] = 0.0
 
+        # Ensure VAT is represented as a line item when available.
+        enriched_items = _append_vat_item_if_missing(
+            items=enriched_items,
+            header=header,
+            business_type=business_type,
+        )
+
         # 6. Save Draft to Firestore
         total_ms = round((time.perf_counter() - pipeline_started) * 1000, 2)
         receipt_doc = {
@@ -652,6 +708,11 @@ async def get_receipt(
 
     receipt["branch_type"] = branch_type
     receipt["allowed_categories"] = allowed_categories
+    receipt["items"] = _append_vat_item_if_missing(
+        items=list(receipt.get("items", [])),
+        header=receipt.get("header", {}) if isinstance(receipt.get("header"), dict) else {},
+        business_type=branch_type,
+    )
 
     return receipt
 

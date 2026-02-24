@@ -332,7 +332,10 @@ export default function ReceiptValidationPage() {
   const imageUrl = isGcsSource
     ? proxyImageUrl
     : convertGsUriToHttps(receipt?.image_preview_url) || convertGsUriToHttps(receipt?.image_url);
-  const canPreviewImage = imageUrl.startsWith("http://") || imageUrl.startsWith("https://");
+  const canPreviewImage =
+    imageUrl.startsWith("http://") ||
+    imageUrl.startsWith("https://") ||
+    imageUrl.startsWith("blob:");
 
   return (
     <div className="space-y-4">

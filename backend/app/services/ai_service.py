@@ -332,7 +332,7 @@ Rules:
 4) date must be YYYY-MM-DD when possible, otherwise null.
 5) merchant should be a store name, not numeric-only tax IDs.
 6) category_id must be one of allowed IDs, else null.
-7) If VAT/Tax amount is explicitly present, populate header.vat; otherwise 0.0.
+7) If VAT/Tax amount is explicitly present, populate header.vat AND add one line item for VAT.
 8) If uncertain, keep item with lower confidence but still valid structure.
 
 OCR full text:
@@ -498,7 +498,7 @@ Rules:
 4) date must be YYYY-MM-DD when confidently parsed, otherwise null.
 5) merchant should be store name (not numeric-only).
 6) category_id must be one of allowed IDs, otherwise null.
-7) If VAT/Tax amount is explicitly present, populate header.vat; otherwise 0.0.
+7) If VAT/Tax amount is explicitly present, populate header.vat AND add one line item for VAT.
 8) Return strict JSON only, no markdown.
 
 Output JSON:
