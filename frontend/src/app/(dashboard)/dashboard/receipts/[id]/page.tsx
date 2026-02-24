@@ -100,6 +100,14 @@ function convertGsUriToHttps(uri?: string | null): string {
   return `https://storage.googleapis.com/${bucket}/${objectPath}`;
 }
 
+function hasPdfExtension(uri?: string | null): boolean {
+  if (!uri) {
+    return false;
+  }
+  const clean = uri.split("?")[0].toLowerCase();
+  return clean.endsWith(".pdf");
+}
+
 function getErrorMessage(error: unknown): string {
   if (
     typeof error === "object" &&
@@ -130,6 +138,7 @@ export default function ReceiptValidationPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [proxyImageUrl, setProxyImageUrl] = useState<string>("");
   const [proxyImageError, setProxyImageError] = useState<string | null>(null);
+  const [proxyContentType, setProxyContentType] = useState<string | null>(null);
 
   useEffect(() => {
     if (!receiptId) {
@@ -177,6 +186,7 @@ export default function ReceiptValidationPage() {
     if (!receiptId || !receipt?.image_url?.startsWith("gs://")) {
       setProxyImageUrl("");
       setProxyImageError(null);
+      setProxyContentType(null);
       return;
     }
 
@@ -194,10 +204,13 @@ export default function ReceiptValidationPage() {
         }
         objectUrl = URL.createObjectURL(response.data);
         setProxyImageUrl(objectUrl);
+        const contentType = response.headers?.["content-type"];
+        setProxyContentType(typeof contentType === "string" ? contentType : null);
       } catch {
         if (isMounted) {
           setProxyImageUrl("");
           setProxyImageError("Failed to load image via secure preview endpoint.");
+          setProxyContentType(null);
         }
       }
     }
@@ -332,10 +345,14 @@ export default function ReceiptValidationPage() {
   const imageUrl = isGcsSource
     ? proxyImageUrl
     : convertGsUriToHttps(receipt?.image_preview_url) || convertGsUriToHttps(receipt?.image_url);
-  const canPreviewImage =
+  const canPreviewMedia =
     imageUrl.startsWith("http://") ||
     imageUrl.startsWith("https://") ||
     imageUrl.startsWith("blob:");
+  const isPdf =
+    Boolean(proxyContentType?.toLowerCase().includes("pdf")) ||
+    hasPdfExtension(receipt?.image_preview_url) ||
+    hasPdfExtension(receipt?.image_url);
 
   return (
     <div className="space-y-4">
@@ -387,12 +404,24 @@ export default function ReceiptValidationPage() {
             <CardTitle>Receipt Image</CardTitle>
           </CardHeader>
           <CardContent>
-            {canPreviewImage ? (
-              <img
-                src={imageUrl}
-                alt={`Receipt ${receiptId}`}
-                className="w-full rounded-lg border border-slate-200 object-contain"
-              />
+            {canPreviewMedia ? (
+              isPdf ? (
+                <object
+                  data={imageUrl}
+                  type="application/pdf"
+                  className="h-[70vh] w-full rounded-lg border border-slate-200"
+                >
+                  <p className="text-sm text-slate-600">
+                    PDF preview is unavailable in this browser.
+                  </p>
+                </object>
+              ) : (
+                <img
+                  src={imageUrl}
+                  alt={`Receipt ${receiptId}`}
+                  className="w-full rounded-lg border border-slate-200 object-contain"
+                />
+              )
             ) : (
               <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
                 <p>
