@@ -11,6 +11,18 @@ bq_client = bigquery.Client(project=settings.GCP_PROJECT_ID)
 # Fully qualified table ID
 FACT_TRANSACTIONS_TABLE = f"{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}.fact_transactions"
 
+SORTABLE_TRANSACTION_COLUMNS = {
+    "date": "date",
+    "created_at": "created_at",
+    "amount": "amount",
+    "type": "type",
+    "category_id": "category_id",
+    "category_name": "category_name",
+    "item_name": "item_name",
+    "payment_method": "payment_method",
+    "source": "source",
+}
+
 
 def insert_verified_receipt(receipt: dict) -> int:
     """
@@ -174,4 +186,148 @@ def get_expense_summary(
             if top_category else None
         ),
         "expense_by_category": expense_by_category,
+    }
+
+
+def _serialize_bigquery_scalar(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def list_transactions(
+    branch_id: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    transaction_type: str | None = None,
+    category_id: str | None = None,
+    source: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+) -> dict:
+    """
+    Fetch transaction rows from BigQuery with filtering, sorting, and pagination.
+    """
+    sort_column = SORTABLE_TRANSACTION_COLUMNS.get(sort_by, "created_at")
+    sort_direction = "ASC" if str(sort_order).lower() == "asc" else "DESC"
+    order_by_sql = f"{sort_column} {sort_direction}"
+    if sort_column != "created_at":
+        order_by_sql += ", created_at DESC"
+
+    where_clauses = ["branch_id = @branch_id"]
+    query_parameters = [
+        bigquery.ScalarQueryParameter("branch_id", "STRING", branch_id),
+    ]
+
+    if start_date:
+        where_clauses.append("date >= @start_date")
+        query_parameters.append(
+            bigquery.ScalarQueryParameter("start_date", "DATE", start_date)
+        )
+
+    if end_date:
+        where_clauses.append("date <= @end_date")
+        query_parameters.append(
+            bigquery.ScalarQueryParameter("end_date", "DATE", end_date)
+        )
+
+    if transaction_type:
+        where_clauses.append("UPPER(type) = @transaction_type")
+        query_parameters.append(
+            bigquery.ScalarQueryParameter(
+                "transaction_type", "STRING", str(transaction_type).upper()
+            )
+        )
+
+    if category_id:
+        where_clauses.append("UPPER(COALESCE(category_id, '')) = @category_id")
+        query_parameters.append(
+            bigquery.ScalarQueryParameter("category_id", "STRING", str(category_id).upper())
+        )
+
+    if source:
+        where_clauses.append("UPPER(COALESCE(source, '')) = @source")
+        query_parameters.append(
+            bigquery.ScalarQueryParameter("source", "STRING", str(source).upper())
+        )
+
+    where_sql = " AND ".join(where_clauses)
+
+    count_query = """
+    SELECT COUNT(1) AS total
+    FROM `{table}`
+    WHERE {where_sql}
+    """.format(table=FACT_TRANSACTIONS_TABLE, where_sql=where_sql)
+
+    count_job = bq_client.query(
+        count_query,
+        job_config=bigquery.QueryJobConfig(query_parameters=query_parameters),
+    )
+    count_row = next(iter(count_job.result()), None)
+    total = int(count_row.total or 0) if count_row else 0
+
+    page_query = """
+    SELECT
+        branch_id,
+        date,
+        type,
+        NULLIF(category_id, '') AS category_id,
+        NULLIF(category_name, '') AS category_name,
+        NULLIF(item_name, '') AS item_name,
+        amount,
+        NULLIF(payment_method, '') AS payment_method,
+        source,
+        NULLIF(verified_by_user_id, '') AS verified_by_user_id,
+        created_at
+    FROM `{table}`
+    WHERE {where_sql}
+    ORDER BY {order_by_sql}
+    LIMIT @limit
+    OFFSET @offset
+    """.format(
+        table=FACT_TRANSACTIONS_TABLE,
+        where_sql=where_sql,
+        order_by_sql=order_by_sql,
+    )
+
+    page_parameters = [
+        *query_parameters,
+        bigquery.ScalarQueryParameter("limit", "INT64", limit),
+        bigquery.ScalarQueryParameter("offset", "INT64", offset),
+    ]
+
+    page_job = bq_client.query(
+        page_query,
+        job_config=bigquery.QueryJobConfig(query_parameters=page_parameters),
+    )
+
+    transactions = []
+    for row in page_job.result():
+        transactions.append(
+            {
+                "branch_id": row.branch_id,
+                "date": _serialize_bigquery_scalar(row.date),
+                "type": row.type,
+                "category_id": row.category_id,
+                "category_name": row.category_name,
+                "item_name": row.item_name,
+                "amount": float(row.amount or 0),
+                "payment_method": row.payment_method,
+                "source": row.source,
+                "verified_by_user_id": row.verified_by_user_id,
+                "created_at": _serialize_bigquery_scalar(row.created_at),
+            }
+        )
+
+    return {
+        "transactions": transactions,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }

@@ -31,6 +31,22 @@ logger = logging.getLogger(__name__)
 model = GenerativeModel(settings.VERTEX_AI_MODEL)
 
 
+def _normalize_optional_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _normalize_string_list(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized_values: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            normalized_values.append(text)
+    return normalized_values
+
+
 def _unique_non_empty(values: list[str]) -> list[str]:
     unique_values: list[str] = []
     for value in values:
@@ -360,6 +376,15 @@ Output JSON format:
   "confidence_summary": {{
     "overall": 0.0,
     "notes": ["short reason"]
+  }},
+  "document_context": {{
+    "buyer_name": "string|null",
+    "invoice_number": "string|null",
+    "receipt_number": "string|null",
+    "tax_invoice_number": "string|null",
+    "payment_reference": "string|null",
+    "store_branch": "string|null",
+    "notes": ["short reason or extra clue from receipt"]
   }}
 }}
 """
@@ -432,6 +457,9 @@ Output JSON format:
         confidence_summary = parsed.get("confidence_summary", {})
         if not isinstance(confidence_summary, dict):
             confidence_summary = {}
+        document_context = parsed.get("document_context", {})
+        if not isinstance(document_context, dict):
+            document_context = {}
 
         return {
             "header": {
@@ -442,6 +470,15 @@ Output JSON format:
             },
             "items": normalized_items,
             "confidence_summary": confidence_summary,
+            "document_context": {
+                "buyer_name": _normalize_optional_text(document_context.get("buyer_name")),
+                "invoice_number": _normalize_optional_text(document_context.get("invoice_number")),
+                "receipt_number": _normalize_optional_text(document_context.get("receipt_number")),
+                "tax_invoice_number": _normalize_optional_text(document_context.get("tax_invoice_number")),
+                "payment_reference": _normalize_optional_text(document_context.get("payment_reference")),
+                "store_branch": _normalize_optional_text(document_context.get("store_branch")),
+                "notes": _normalize_string_list(document_context.get("notes")),
+            },
             "source": "GEMINI_REFINE",
             "meta": {
                 "model": used_model,
@@ -520,6 +557,15 @@ Output JSON:
   "confidence_summary": {{
     "overall": 0.0,
     "notes": ["short reason"]
+  }},
+  "document_context": {{
+    "buyer_name": "string|null",
+    "invoice_number": "string|null",
+    "receipt_number": "string|null",
+    "tax_invoice_number": "string|null",
+    "payment_reference": "string|null",
+    "store_branch": "string|null",
+    "notes": ["short reason or extra clue from receipt"]
   }}
 }}
 """
@@ -611,6 +657,9 @@ Output JSON:
             confidence_summary = parsed.get("confidence_summary", {})
             if not isinstance(confidence_summary, dict):
                 confidence_summary = {}
+            document_context = parsed.get("document_context", {})
+            if not isinstance(document_context, dict):
+                document_context = {}
 
             return {
                 "header": {
@@ -621,6 +670,15 @@ Output JSON:
                 },
                 "items": normalized_items,
                 "confidence_summary": confidence_summary,
+                "document_context": {
+                    "buyer_name": _normalize_optional_text(document_context.get("buyer_name")),
+                    "invoice_number": _normalize_optional_text(document_context.get("invoice_number")),
+                    "receipt_number": _normalize_optional_text(document_context.get("receipt_number")),
+                    "tax_invoice_number": _normalize_optional_text(document_context.get("tax_invoice_number")),
+                    "payment_reference": _normalize_optional_text(document_context.get("payment_reference")),
+                    "store_branch": _normalize_optional_text(document_context.get("store_branch")),
+                    "notes": _normalize_string_list(document_context.get("notes")),
+                },
                 "source": "GEMINI_VISION",
                 "meta": {
                     "model": used_model,

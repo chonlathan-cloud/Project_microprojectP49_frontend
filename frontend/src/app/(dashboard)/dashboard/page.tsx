@@ -16,20 +16,12 @@ import {
 import { Loader2, Sparkles } from "lucide-react";
 
 import { useAuth } from "@/components/providers/auth-provider";
+import { useBranches } from "@/components/providers/branch-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import api from "@/lib/api";
-
-type Branch = {
-  id: string;
-  name: string;
-  type: "COFFEE" | "RESTAURANT";
-};
-
-type BranchListResponse = {
-  branches: Branch[];
-};
+import type { Branch } from "@/types/branch";
 
 type ExpenseCategoryRow = {
   category_id: string;
@@ -114,20 +106,24 @@ function getErrorMessage(error: unknown): string {
 
 export default function DashboardPage() {
   const { profile } = useAuth();
+  const {
+    branches,
+    loading: isLoadingBranches,
+    error: branchError,
+    refresh: refreshBranches
+  } = useBranches();
   const defaultRange = getDefaultDateRange();
   const normalizedRole = String(profile?.role || "staff").toLowerCase();
   const canSelectAnyBranch = normalizedRole === "admin" || normalizedRole === "executive";
   const defaultBranchId =
     typeof profile?.default_branch_id === "string" ? profile.default_branch_id.trim() : "";
 
-  const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState("");
   const [startDate, setStartDate] = useState(defaultRange.startDate);
   const [endDate, setEndDate] = useState(defaultRange.endDate);
 
   const [summary, setSummary] = useState<AnalyticsSummaryResponse | null>(null);
-  const [isLoadingBranches, setIsLoadingBranches] = useState(true);
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -138,64 +134,30 @@ export default function DashboardPage() {
   const [aiError, setAiError] = useState<string | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function loadBranches() {
-      setIsLoadingBranches(true);
-      setError(null);
-      try {
-        const response = await api.get<BranchListResponse>("/api/v1/branches");
-        if (!isMounted) {
-          return;
-        }
-
-        const branchList = response.data.branches || [];
-        setBranches(branchList);
-
-        let nextBranchId = branchList[0]?.id ?? "";
-        if (canSelectAnyBranch) {
-          const lastBranchId =
-            typeof window !== "undefined"
-              ? window.localStorage.getItem("last_selected_branch_id")
-              : null;
-          const hasLastBranch =
-            !!lastBranchId && branchList.some((branch) => branch.id === lastBranchId);
-          nextBranchId = hasLastBranch ? (lastBranchId as string) : nextBranchId;
-        } else if (defaultBranchId) {
-          const hasDefaultBranch = branchList.some((branch) => branch.id === defaultBranchId);
-          if (hasDefaultBranch) {
-            nextBranchId = defaultBranchId;
-          }
-        }
-
-        setSelectedBranchId(nextBranchId);
-        setSelectedCategoryId("");
-      } catch (fetchError) {
-        if (isMounted) {
-          setError(getErrorMessage(fetchError));
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingBranches(false);
-        }
-      }
-    }
-
-    loadBranches();
-    return () => {
-      isMounted = false;
-    };
-  }, [canSelectAnyBranch, defaultBranchId]);
-
-  useEffect(() => {
-    if (branches.length === 0 || canSelectAnyBranch) {
+    if (branches.length === 0) {
       return;
     }
 
-    const hasDefaultBranch = !!defaultBranchId && branches.some((branch) => branch.id === defaultBranchId);
-    const forcedBranchId = hasDefaultBranch ? defaultBranchId : branches[0]?.id ?? "";
-    if (forcedBranchId && forcedBranchId !== selectedBranchId) {
-      setSelectedBranchId(forcedBranchId);
+    const hasCurrentBranch = branches.some((branch) => branch.id === selectedBranchId);
+    let nextBranchId = hasCurrentBranch ? selectedBranchId : "";
+
+    if (canSelectAnyBranch) {
+      if (!hasCurrentBranch) {
+        const lastBranchId =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem("last_selected_branch_id")
+            : null;
+        const hasLastBranch =
+          !!lastBranchId && branches.some((branch) => branch.id === lastBranchId);
+        nextBranchId = hasLastBranch ? (lastBranchId as string) : (branches[0]?.id ?? "");
+      }
+    } else {
+      const hasDefaultBranch = !!defaultBranchId && branches.some((branch) => branch.id === defaultBranchId);
+      nextBranchId = hasDefaultBranch ? defaultBranchId : branches[0]?.id ?? "";
+    }
+
+    if (nextBranchId && nextBranchId !== selectedBranchId) {
+      setSelectedBranchId(nextBranchId);
       setSelectedCategoryId("");
     }
   }, [branches, canSelectAnyBranch, defaultBranchId, selectedBranchId]);
@@ -351,6 +313,15 @@ export default function DashboardPage() {
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Loading stores...
                 </p>
+              ) : branchError && branches.length === 0 ? (
+                <div className="space-y-2">
+                  <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {branchError}
+                  </p>
+                  <Button type="button" variant="outline" onClick={refreshBranches}>
+                    Retry
+                  </Button>
+                </div>
               ) : (
                 <>
                   <select

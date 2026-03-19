@@ -230,6 +230,36 @@ def _append_vat_item_if_missing(
     return [*items, vat_item]
 
 
+def _build_ocr_by_gemini_payload(
+    pipeline_path: str,
+    gemini_payload: dict | None,
+    ocr_data: dict,
+) -> dict:
+    ocr_text = str(ocr_data.get("text", "") or "").strip()
+    raw_entities = ocr_data.get("entities", [])
+    raw_line_item_candidates = ocr_data.get("line_item_candidates", [])
+
+    return {
+        "captured_at": datetime.utcnow().isoformat(),
+        "pipeline_path": pipeline_path,
+        "gemini_payload": gemini_payload,
+        "ocr_observation": {
+            "text": ocr_text[:20000],
+            "header": ocr_data.get("header", {}) if isinstance(ocr_data.get("header"), dict) else {},
+            "header_candidates": (
+                ocr_data.get("header_candidates", {})
+                if isinstance(ocr_data.get("header_candidates"), dict)
+                else {}
+            ),
+            "line_item_candidates": (
+                raw_line_item_candidates[:40] if isinstance(raw_line_item_candidates, list) else []
+            ),
+            "entities": raw_entities[:100] if isinstance(raw_entities, list) else [],
+            "meta": ocr_data.get("meta", {}) if isinstance(ocr_data.get("meta"), dict) else {},
+        },
+    }
+
+
 def _validate_refined_result(
     refined_payload: dict | None,
     business_type: str,
@@ -366,6 +396,8 @@ async def upload_receipt(
         ocr_ms = 0.0
         ai_ms = 0.0
         vision_meta: dict = {}
+        vision_payload_raw: dict | None = None
+        refined_payload_raw: dict | None = None
 
         # 1. Upload to GCS
         upload_started = time.perf_counter()
@@ -396,6 +428,8 @@ async def upload_receipt(
                 timeout_ms=settings.VISION_TIMEOUT_MS,
                 max_retry=settings.VISION_MAX_RETRY,
             )
+            if isinstance(vision_payload, dict):
+                vision_payload_raw = vision_payload
             vision_ms = round((time.perf_counter() - vision_started) * 1000, 2)
             is_vision_valid, normalized_vision, vision_flags = _validate_refined_result(
                 refined_payload=vision_payload,
@@ -429,6 +463,8 @@ async def upload_receipt(
                     header_candidates=ocr_data.get("header_candidates"),
                     line_item_candidates=ocr_data.get("line_item_candidates"),
                 )
+                if isinstance(refined_payload, dict):
+                    refined_payload_raw = refined_payload
                 ai_ms = round((time.perf_counter() - ai_started) * 1000, 2)
                 is_refined_valid, normalized_refined, refine_flags = _validate_refined_result(
                     refined_payload=refined_payload,
@@ -569,6 +605,11 @@ async def upload_receipt(
                 "v4_vision_direct"
                 if pipeline_path == "vision_direct"
                 else ("v3_refined" if pipeline_path == "ocr_refined" else "v2_parser")
+            ),
+            "OCRbyGemini": _build_ocr_by_gemini_payload(
+                pipeline_path=pipeline_path,
+                gemini_payload=vision_payload_raw or refined_payload_raw,
+                ocr_data=ocr_data,
             ),
             "ai_refined": ai_refined,
             "needs_review": needs_review,

@@ -4,6 +4,7 @@ import type { ComponentType } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  ArrowLeftRight,
   BarChart3,
   FileUp,
   Home,
@@ -22,6 +23,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   { href: "/dashboard/welcome", label: "Welcome", icon: Home },
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
+  { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
   { href: "/dashboard/upload-receipt", label: "Upload Receipt", icon: FileUp },
   { href: "/dashboard/pos-import", label: "POS Import", icon: WalletCards },
   { href: "/dashboard/settings", label: "Settings", icon: Settings }

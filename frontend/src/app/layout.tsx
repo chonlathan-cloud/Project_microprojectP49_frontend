@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 
 import { AuthProvider } from "@/components/providers/auth-provider";
+import { BranchProvider } from "@/components/providers/branch-provider";
 
 import "./globals.css";
 
@@ -21,7 +22,9 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.variable} font-sans antialiased`}>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <BranchProvider>{children}</BranchProvider>
+        </AuthProvider>
       </body>
     </html>
   );

@@ -3,20 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { FileSpreadsheet, Loader2, UploadCloud } from "lucide-react";
 
+import { useBranches } from "@/components/providers/branch-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import api from "@/lib/api";
-
-type Branch = {
-  id: string;
-  name: string;
-  type: "COFFEE" | "RESTAURANT";
-};
-
-type BranchListResponse = {
-  branches: Branch[];
-};
+import type { Branch } from "@/types/branch";
 
 type PosUploadResponse = {
   status: string;
@@ -41,48 +33,33 @@ function getErrorMessage(error: unknown): string {
 
 export default function PosImportPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const {
+    branches,
+    loading: isLoadingBranches,
+    error: branchError,
+    refresh: refreshBranches
+  } = useBranches();
 
-  const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [isLoadingBranches, setIsLoadingBranches] = useState(true);
-  const [branchError, setBranchError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function loadBranches() {
-      setIsLoadingBranches(true);
-      setBranchError(null);
-
-      try {
-        const response = await api.get<BranchListResponse>("/api/v1/branches");
-        if (!isMounted) {
-          return;
-        }
-        const branchList = response.data.branches || [];
-        setBranches(branchList);
-        setSelectedBranchId(branchList[0]?.id ?? "");
-      } catch (fetchError) {
-        if (!isMounted) {
-          return;
-        }
-        setBranchError(getErrorMessage(fetchError));
-      } finally {
-        if (isMounted) {
-          setIsLoadingBranches(false);
-        }
-      }
+    if (branches.length === 0) {
+      return;
     }
 
-    loadBranches();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+    const hasCurrentBranch = branches.some((branch) => branch.id === selectedBranchId);
+    if (!hasCurrentBranch) {
+      const lastBranchId =
+        typeof window !== "undefined" ? window.localStorage.getItem("last_selected_branch_id") : null;
+      const hasLastBranch =
+        !!lastBranchId && branches.some((branch) => branch.id === lastBranchId);
+      setSelectedBranchId(hasLastBranch ? (lastBranchId as string) : (branches[0]?.id ?? ""));
+    }
+  }, [branches, selectedBranchId]);
 
   function handleFileChange(file: File | null) {
     setError(null);
@@ -146,9 +123,14 @@ export default function PosImportPage() {
               Loading stores...
             </p>
           ) : branchError ? (
-            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {branchError}
-            </p>
+            <div className="space-y-2">
+              <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {branchError}
+              </p>
+              <Button type="button" variant="outline" onClick={refreshBranches}>
+                Retry
+              </Button>
+            </div>
           ) : branches.length === 0 ? (
             <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
               No stores found. Please configure branches first.

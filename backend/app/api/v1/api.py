@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import receipts, analytics, pos, branches, ai
+from app.api.v1.endpoints import receipts, analytics, pos, branches, ai, transactions
 
 # --- API v1 Router Aggregator ---
 # Reference: LDD Section 1 (api.py - Router Aggregator)
@@ -20,6 +20,9 @@ api_router.include_router(pos.router)
 
 # Branch endpoints
 api_router.include_router(branches.router)
+
+# Transaction list endpoints
+api_router.include_router(transactions.router)
 
 # AI insight/chat endpoints
 api_router.include_router(ai.router)

@@ -82,6 +82,7 @@ class Settings:
     # Database
     FIRESTORE_DB: str = os.getenv("FIRESTORE_DB", "(default)")
     BIGQUERY_DATASET: str = os.getenv("BIGQUERY_DATASET", "the491_analytics")
+    BRANCH_CACHE_TTL_SECONDS: int = _env_int("BRANCH_CACHE_TTL_SECONDS", 600)
     _SIGNED_URL_EXPIRY_SECONDS_RAW: str = os.getenv("SIGNED_URL_EXPIRY_SECONDS", "1800")
     try:
         SIGNED_URL_EXPIRY_SECONDS: int = int(_SIGNED_URL_EXPIRY_SECONDS_RAW)

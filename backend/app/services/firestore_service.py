@@ -1,5 +1,7 @@
 from google.cloud import firestore
 from datetime import datetime
+from threading import Lock
+import time
 from typing import Optional
 
 from app.core.config import settings
@@ -11,6 +13,10 @@ db = firestore.Client(
     project=settings.GCP_PROJECT_ID,
     database=settings.FIRESTORE_DB,
 )
+
+_branch_cache_lock = Lock()
+_branch_cache_value: list[dict] | None = None
+_branch_cache_expires_at = 0.0
 
 
 # =====================================================
@@ -57,6 +63,40 @@ def get_receipt(receipt_id: str) -> Optional[dict]:
     if doc.exists:
         return doc.to_dict()
     return None
+
+
+def get_user_profile(user_id: str) -> Optional[dict]:
+    """
+    Retrieve a single user profile document by Firebase UID.
+    """
+    doc = db.collection("users").document(user_id).get()
+    if doc.exists:
+        return doc.to_dict()
+    return None
+
+
+def get_user_display_names(user_ids: list[str]) -> dict[str, str]:
+    """
+    Resolve Firebase UIDs to display names from the users collection.
+    Falls back to the UID itself when a profile or display name is missing.
+    """
+    unique_user_ids = sorted({user_id.strip() for user_id in user_ids if user_id and user_id.strip()})
+    if not unique_user_ids:
+        return {}
+
+    doc_refs = [db.collection("users").document(user_id) for user_id in unique_user_ids]
+    docs = db.get_all(doc_refs)
+
+    display_names: dict[str, str] = {}
+    for doc in docs:
+        data = doc.to_dict() or {}
+        raw_name = str(data.get("display_name", "")).strip()
+        display_names[doc.id] = raw_name or doc.id
+
+    for user_id in unique_user_ids:
+        display_names.setdefault(user_id, user_id)
+
+    return display_names
 
 
 def list_receipts(
@@ -170,6 +210,13 @@ def list_branches() -> list[dict]:
     Returns:
         list[dict]: Each branch contains at least id, name, type.
     """
+    global _branch_cache_value, _branch_cache_expires_at
+
+    now = time.monotonic()
+    with _branch_cache_lock:
+        if _branch_cache_value is not None and now < _branch_cache_expires_at:
+            return [dict(branch) for branch in _branch_cache_value]
+
     docs = db.collection("branches").stream()
     branches: list[dict] = []
 
@@ -183,4 +230,9 @@ def list_branches() -> list[dict]:
         branches.append(branch)
 
     branches.sort(key=lambda item: item.get("name", ""))
+
+    with _branch_cache_lock:
+        _branch_cache_value = [dict(branch) for branch in branches]
+        _branch_cache_expires_at = time.monotonic() + max(1, settings.BRANCH_CACHE_TTL_SECONDS)
+
     return branches

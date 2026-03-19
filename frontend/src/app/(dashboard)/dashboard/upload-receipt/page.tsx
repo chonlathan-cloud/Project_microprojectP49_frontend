@@ -4,25 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileUp, Loader2, UploadCloud } from "lucide-react";
 
+import { useBranches } from "@/components/providers/branch-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import api from "@/lib/api";
+import type { Branch } from "@/types/branch";
 
 type UploadResponse = {
   receipt_id: string;
   status: string;
   processing_path?: "vision_direct" | "ocr_refined" | "ocr_parser";
-};
-
-type Branch = {
-  id: string;
-  name: string;
-  type: "COFFEE" | "RESTAURANT";
-};
-
-type BranchListResponse = {
-  branches: Branch[];
 };
 
 function getErrorMessage(error: unknown): string {
@@ -45,12 +37,14 @@ function getErrorMessage(error: unknown): string {
 export default function UploadReceiptPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const {
+    branches,
+    loading: isLoadingBranches,
+    error: branchError,
+    refresh: refreshBranches
+  } = useBranches();
 
-  const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState("");
-  const [isLoadingBranches, setIsLoadingBranches] = useState(true);
-  const [branchError, setBranchError] = useState<string | null>(null);
-  const [branchFetchNonce, setBranchFetchNonce] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -58,47 +52,23 @@ export default function UploadReceiptPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
-
-    async function loadBranches() {
-      setIsLoadingBranches(true);
-      setBranchError(null);
-
-      try {
-        const response = await api.get<BranchListResponse>("/api/v1/branches");
-        if (!isMounted) {
-          return;
-        }
-
-        const branchList = response.data.branches || [];
-        setBranches(branchList);
-
-        const lastSelectedId =
-          typeof window !== "undefined"
-            ? window.localStorage.getItem("last_selected_branch_id")
-            : null;
-        const hasLastSelected = !!lastSelectedId && branchList.some((b) => b.id === lastSelectedId);
-
-        setSelectedBranchId(
-          hasLastSelected ? (lastSelectedId as string) : (branchList[0]?.id ?? "")
-        );
-      } catch (fetchError) {
-        if (!isMounted) {
-          return;
-        }
-        setBranchError(getErrorMessage(fetchError));
-      } finally {
-        if (isMounted) {
-          setIsLoadingBranches(false);
-        }
-      }
+    if (branches.length === 0) {
+      return;
     }
 
-    loadBranches();
-    return () => {
-      isMounted = false;
-    };
-  }, [branchFetchNonce]);
+    const hasCurrentBranch = branches.some((branch) => branch.id === selectedBranchId);
+    if (!hasCurrentBranch) {
+      const lastSelectedId =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem("last_selected_branch_id")
+          : null;
+      const hasLastSelected = !!lastSelectedId && branches.some((branch) => branch.id === lastSelectedId);
+
+      setSelectedBranchId(
+        hasLastSelected ? (lastSelectedId as string) : (branches[0]?.id ?? "")
+      );
+    }
+  }, [branches, selectedBranchId]);
 
   function openFilePicker() {
     fileInputRef.current?.click();
@@ -197,7 +167,7 @@ export default function UploadReceiptPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setBranchFetchNonce((prev) => prev + 1)}
+                  onClick={refreshBranches}
                 >
                   Retry
                 </Button>
