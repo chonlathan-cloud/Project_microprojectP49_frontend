@@ -10,11 +10,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import api from "@/lib/api";
 
+type AdjustmentType = "discount" | "service_charge" | "rounding" | "other";
+
 type ReceiptItem = {
   id?: string;
   description: string;
   amount: number;
   category_id?: string | null;
+};
+
+type ReceiptAdjustment = {
+  id?: string;
+  type: AdjustmentType;
+  label: string;
+  amount: number;
 };
 
 type ReceiptHeader = {
@@ -37,6 +46,7 @@ type ReceiptDetail = {
   image_preview_url?: string | null;
   header?: ReceiptHeader;
   items: ReceiptItem[];
+  adjustments?: ReceiptAdjustment[];
   allowed_categories?: CategoryOption[];
 };
 
@@ -44,6 +54,12 @@ type EditableItem = {
   description: string;
   amount: string;
   category_id: string;
+};
+
+type EditableAdjustment = {
+  type: AdjustmentType;
+  label: string;
+  amount: string;
 };
 
 const COFFEE_CATEGORY_OPTIONS: CategoryOption[] = [
@@ -66,6 +82,13 @@ const RESTAURANT_CATEGORY_OPTIONS: CategoryOption[] = [
   { id: "F5", name: "Water & Ice (น้ำ)" },
   { id: "F6", name: "Daily Waste (ของเสีย)" },
   { id: "F7", name: "Daily Misc (เบ็ดเตล็ด)" }
+];
+
+const ADJUSTMENT_TYPE_OPTIONS: { value: AdjustmentType; label: string }[] = [
+  { value: "discount", label: "Discount" },
+  { value: "service_charge", label: "Service Charge" },
+  { value: "rounding", label: "Rounding" },
+  { value: "other", label: "Other" }
 ];
 
 function getFallbackCategoryOptions(
@@ -125,6 +148,14 @@ function getErrorMessage(error: unknown): string {
   return "Request failed. Please try again.";
 }
 
+function getSignedAdjustmentAmount(adjustment: EditableAdjustment): number {
+  const value = Number(adjustment.amount);
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return adjustment.type === "discount" ? -value : value;
+}
+
 export default function ReceiptValidationPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
@@ -132,6 +163,7 @@ export default function ReceiptValidationPage() {
 
   const [receipt, setReceipt] = useState<ReceiptDetail | null>(null);
   const [items, setItems] = useState<EditableItem[]>([]);
+  const [adjustments, setAdjustments] = useState<EditableAdjustment[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -161,6 +193,13 @@ export default function ReceiptValidationPage() {
             description: item.description ?? "",
             amount: String(item.amount ?? 0),
             category_id: item.category_id ?? ""
+          }))
+        );
+        setAdjustments(
+          (response.data.adjustments || []).map((adjustment) => ({
+            type: adjustment.type ?? "other",
+            label: adjustment.label ?? "",
+            amount: String(adjustment.amount ?? 0)
           }))
         );
       } catch (fetchError) {
@@ -225,7 +264,7 @@ export default function ReceiptValidationPage() {
     };
   }, [receiptId, receipt?.image_url]);
 
-  const total = useMemo(
+  const itemsTotal = useMemo(
     () =>
       items.reduce((sum, item) => {
         const value = Number(item.amount);
@@ -233,6 +272,13 @@ export default function ReceiptValidationPage() {
       }, 0),
     [items]
   );
+
+  const adjustmentsNet = useMemo(
+    () => adjustments.reduce((sum, adjustment) => sum + getSignedAdjustmentAmount(adjustment), 0),
+    [adjustments]
+  );
+
+  const total = useMemo(() => itemsTotal + adjustmentsNet, [adjustmentsNet, itemsTotal]);
 
   const categoryOptions = useMemo(() => {
     if (receipt?.allowed_categories && receipt.allowed_categories.length > 0) {
@@ -258,6 +304,24 @@ export default function ReceiptValidationPage() {
 
   function removeItem(index: number) {
     setItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  function updateAdjustment(index: number, patch: Partial<EditableAdjustment>) {
+    setAdjustments((prev) =>
+      prev.map((adjustment, adjustmentIndex) =>
+        adjustmentIndex === index ? { ...adjustment, ...patch } : adjustment
+      )
+    );
+  }
+
+  function addAdjustment() {
+    setAdjustments((prev) => [...prev, { type: "discount", label: "", amount: "" }]);
+  }
+
+  function removeAdjustment(index: number) {
+    setAdjustments((prev) =>
+      prev.filter((_, adjustmentIndex) => adjustmentIndex !== index)
+    );
   }
 
   async function handleVerifyAndSave() {
@@ -296,12 +360,31 @@ export default function ReceiptValidationPage() {
       });
     }
 
+    const normalizedAdjustments = [];
+    for (const adjustment of adjustments) {
+      const amount = Number(adjustment.amount);
+      if (!adjustment.label.trim()) {
+        setError("Each adjustment must have a label.");
+        return;
+      }
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setError("Each adjustment must have a valid positive amount.");
+        return;
+      }
+      normalizedAdjustments.push({
+        type: adjustment.type,
+        label: adjustment.label.trim(),
+        amount
+      });
+    }
+
     setSaving(true);
     setError(null);
 
     try {
       await api.put(`/api/v1/receipts/${receiptId}/verify`, {
         items: normalizedItems,
+        adjustments: normalizedAdjustments,
         total_check: total
       });
       setToastMessage("Receipt verified and saved successfully.");
@@ -443,10 +526,22 @@ export default function ReceiptValidationPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <CardTitle>Extracted Items</CardTitle>
-            <Button type="button" variant="outline" size="sm" onClick={addItem} disabled={saving}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Item
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={addItem} disabled={saving}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Item
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={addAdjustment}
+                disabled={saving}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add Adjustment
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             {items.length === 0 ? (
@@ -470,63 +565,163 @@ export default function ReceiptValidationPage() {
                       </Button>
                     </div>
 
-                  <div className="grid gap-3">
-                    <div className="space-y-1.5">
-                      <Label htmlFor={`description-${index}`}>Description</Label>
-                      <Input
-                        id={`description-${index}`}
-                        value={item.description}
-                        onChange={(event) =>
-                          updateItem(index, { description: event.target.value })
-                        }
-                        disabled={saving}
-                      />
-                    </div>
-
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className="grid gap-3">
                       <div className="space-y-1.5">
-                        <Label htmlFor={`amount-${index}`}>Amount</Label>
+                        <Label htmlFor={`description-${index}`}>Description</Label>
                         <Input
-                          id={`amount-${index}`}
-                          type="number"
-                          step="0.01"
-                          value={item.amount}
+                          id={`description-${index}`}
+                          value={item.description}
                           onChange={(event) =>
-                            updateItem(index, { amount: event.target.value })
+                            updateItem(index, { description: event.target.value })
                           }
                           disabled={saving}
                         />
                       </div>
 
-                      <div className="space-y-1.5">
-                        <Label htmlFor={`category-${index}`}>Category</Label>
-                        <select
-                          id={`category-${index}`}
-                          className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                          value={item.category_id}
-                          onChange={(event) =>
-                            updateItem(index, { category_id: event.target.value })
-                          }
-                          disabled={saving}
-                        >
-                          <option value="">Select category</option>
-                          {categoryOptions.map((category) => (
-                            <option key={category.id} value={category.id}>
-                              {category.id} - {category.name}
-                            </option>
-                          ))}
-                        </select>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="space-y-1.5">
+                          <Label htmlFor={`amount-${index}`}>Amount</Label>
+                          <Input
+                            id={`amount-${index}`}
+                            type="number"
+                            step="0.01"
+                            value={item.amount}
+                            onChange={(event) =>
+                              updateItem(index, { amount: event.target.value })
+                            }
+                            disabled={saving}
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <Label htmlFor={`category-${index}`}>Category</Label>
+                          <select
+                            id={`category-${index}`}
+                            className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                            value={item.category_id}
+                            onChange={(event) =>
+                              updateItem(index, { category_id: event.target.value })
+                            }
+                            disabled={saving}
+                          >
+                            <option value="">Select category</option>
+                            {categoryOptions.map((category) => (
+                              <option key={category.id} value={category.id}>
+                                {category.id} - {category.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     </div>
-                  </div>
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="flex items-center justify-between rounded-md bg-slate-100 px-3 py-2">
-              <p className="text-sm font-medium text-slate-700">Total Check</p>
-              <p className="font-semibold text-slate-900">{total.toFixed(2)}</p>
+            <div className="space-y-3 rounded-lg border border-slate-200 p-4">
+              <div>
+                <p className="text-sm font-medium text-slate-900">Adjustments</p>
+                <p className="text-xs text-slate-500">
+                  Use this for discounts, service charge, or rounding. Discounts stay
+                  positive here and are subtracted from the final total.
+                </p>
+              </div>
+
+              {adjustments.length === 0 ? (
+                <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                  No adjustments yet. Click Add Adjustment when the receipt includes
+                  discount or other receipt-level adjustments.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {adjustments.map((adjustment, index) => (
+                    <div
+                      key={`adjustment-${index}`}
+                      className="rounded-lg border border-slate-200 p-4"
+                    >
+                      <div className="mb-3 flex items-center justify-between">
+                        <p className="text-sm font-medium text-slate-700">
+                          Adjustment {index + 1}
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => removeAdjustment(index)}
+                          disabled={saving}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div className="space-y-1.5">
+                          <Label htmlFor={`adjustment-type-${index}`}>Type</Label>
+                          <select
+                            id={`adjustment-type-${index}`}
+                            className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                            value={adjustment.type}
+                            onChange={(event) =>
+                              updateAdjustment(index, {
+                                type: event.target.value as AdjustmentType
+                              })
+                            }
+                            disabled={saving}
+                          >
+                            {ADJUSTMENT_TYPE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="space-y-1.5 md:col-span-2">
+                          <Label htmlFor={`adjustment-label-${index}`}>Label</Label>
+                          <Input
+                            id={`adjustment-label-${index}`}
+                            value={adjustment.label}
+                            onChange={(event) =>
+                              updateAdjustment(index, { label: event.target.value })
+                            }
+                            disabled={saving}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-3 max-w-xs space-y-1.5">
+                        <Label htmlFor={`adjustment-amount-${index}`}>Amount</Label>
+                        <Input
+                          id={`adjustment-amount-${index}`}
+                          type="number"
+                          step="0.01"
+                          value={adjustment.amount}
+                          onChange={(event) =>
+                            updateAdjustment(index, { amount: event.target.value })
+                          }
+                          disabled={saving}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2 rounded-md bg-slate-100 px-3 py-3">
+              <div className="flex items-center justify-between text-sm text-slate-700">
+                <p>Items Total</p>
+                <p className="font-medium text-slate-900">{itemsTotal.toFixed(2)}</p>
+              </div>
+              <div className="flex items-center justify-between text-sm text-slate-700">
+                <p>Adjustments Net</p>
+                <p className="font-medium text-slate-900">{adjustmentsNet.toFixed(2)}</p>
+              </div>
+              <div className="flex items-center justify-between border-t border-slate-200 pt-2">
+                <p className="text-sm font-medium text-slate-700">Total Check</p>
+                <p className="font-semibold text-slate-900">{total.toFixed(2)}</p>
+              </div>
             </div>
 
             {error ? (

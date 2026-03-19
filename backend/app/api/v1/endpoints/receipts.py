@@ -45,6 +45,11 @@ DATE_PATTERNS = (
     "%Y/%m/%d",
 )
 VAT_DESCRIPTION_TOKENS = ("vat", "tax", "ภาษี")
+ADJUSTMENT_TYPE_KEYWORDS = {
+    "discount": ("discount", "ส่วนลด"),
+    "service_charge": ("service charge", "service", "ค่าบริการ"),
+    "rounding": ("rounding", "round off", "ปัดเศษ"),
+}
 
 
 def _normalize_extraction_mode(raw_mode: str | None) -> str:
@@ -174,6 +179,34 @@ def _parse_positive_amount(value: object) -> float | None:
     return round(amount, 2) if amount > 0 else None
 
 
+def _normalize_optional_text(value: object) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _split_raw_lines(text: str) -> list[str]:
+    return [line.strip() for line in str(text or "").splitlines() if line and line.strip()]
+
+
+def _extract_last_amount_from_line(text: str) -> float | None:
+    matches = re.findall(r"(-?\d[\d,]*\.?\d{0,2})", str(text or ""))
+    if not matches:
+        return None
+    return _parse_positive_amount(matches[-1])
+
+
+def _normalize_adjustment_type(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"discount", "service_charge", "rounding", "other"}:
+        return normalized
+
+    for adjustment_type, keywords in ADJUSTMENT_TYPE_KEYWORDS.items():
+        if any(keyword in normalized for keyword in keywords):
+            return adjustment_type
+
+    return None
+
+
 def _is_numeric_only(value: str | None) -> bool:
     if not value:
         return False
@@ -188,6 +221,299 @@ def _contains_vat_keyword(text: str | None) -> bool:
         return False
     normalized = str(text).strip().lower()
     return any(token in normalized for token in VAT_DESCRIPTION_TOKENS)
+
+
+def _infer_document_type(raw_text: str) -> str | None:
+    normalized = str(raw_text or "").lower()
+    has_receipt = "ใบเสร็จ" in normalized or "receipt" in normalized
+    has_tax_invoice = "ใบกำกับภาษี" in normalized or "tax invoice" in normalized
+    if has_receipt and has_tax_invoice:
+        return "receipt_and_tax_invoice"
+    if has_tax_invoice:
+        return "tax_invoice"
+    if has_receipt:
+        return "receipt"
+    return None
+
+
+def _extract_first_matching_line(raw_lines: list[str], keywords: tuple[str, ...]) -> str | None:
+    for line in raw_lines:
+        normalized = line.lower()
+        if any(keyword in normalized for keyword in keywords):
+            return line.strip()
+    return None
+
+
+def _extract_financial_value(raw_lines: list[str], keywords: tuple[str, ...]) -> float | None:
+    line = _extract_first_matching_line(raw_lines, keywords)
+    if not line:
+        return None
+    return _extract_last_amount_from_line(line)
+
+
+def _infer_seller_payload(
+    header: dict,
+    document_context: dict,
+    raw_lines: list[str],
+    raw_text: str,
+) -> dict:
+    legal_name = None
+    address_parts: list[str] = []
+    legal_name_index = -1
+
+    for index, line in enumerate(raw_lines[:12]):
+        normalized = line.lower()
+        if any(token in normalized for token in ("บริษัท", "จำกัด", "limited", "co.", "ltd", "หจก")):
+            legal_name = line
+            legal_name_index = index
+            break
+
+    if legal_name_index >= 0:
+        for line in raw_lines[legal_name_index + 1 : legal_name_index + 6]:
+            normalized = line.lower()
+            if any(
+                stop_token in normalized
+                for stop_token in (
+                    "เลขผู้เสียภาษี",
+                    "tax id",
+                    "โทร",
+                    "tel",
+                    "ใบกำกับภาษี",
+                    "receipt",
+                    "invoice",
+                    "พนักงานขาย",
+                    "วันที่",
+                )
+            ):
+                break
+            address_parts.append(line)
+
+    tax_id_match = re.search(
+        r"(?:เลขผู้เสียภาษี|tax id)[^\d]*(\d{10,13})",
+        raw_text,
+        flags=re.IGNORECASE,
+    ) or re.search(r"\b\d{13}\b", raw_text)
+    phone_match = re.search(
+        r"(?:โทร\.?|tel\.?|phone)[^\d]*(\d[\d\- ]{6,})",
+        raw_text,
+        flags=re.IGNORECASE,
+    )
+
+    return {
+        "brand_name": _normalize_optional_text(header.get("merchant")),
+        "legal_name": legal_name,
+        "branch_name": (
+            _normalize_optional_text(document_context.get("store_branch"))
+            or _extract_first_matching_line(raw_lines, ("สำนักงานใหญ่", "สาขา"))
+        ),
+        "tax_id": tax_id_match.group(1) if tax_id_match else None,
+        "phone": re.sub(r"\s+", "", phone_match.group(1)) if phone_match else None,
+        "address": " ".join(address_parts) if address_parts else None,
+    }
+
+
+def _infer_document_numbers(document_context: dict, raw_lines: list[str], raw_text: str) -> dict:
+    fallback_document_number = None
+    for line in raw_lines:
+        stripped = line.strip()
+        if re.fullmatch(r"[A-Z]{1,5}\d{6,}", stripped):
+            fallback_document_number = stripped
+            break
+
+    generic_match = re.search(r"\b[A-Z]{1,5}\d{6,}\b", raw_text)
+    if not fallback_document_number and generic_match:
+        fallback_document_number = generic_match.group(0)
+
+    return {
+        "invoice_number": (
+            _normalize_optional_text(document_context.get("invoice_number"))
+            or fallback_document_number
+        ),
+        "receipt_number": _normalize_optional_text(document_context.get("receipt_number")),
+        "tax_invoice_number": _normalize_optional_text(document_context.get("tax_invoice_number")),
+        "payment_reference": _normalize_optional_text(document_context.get("payment_reference")),
+    }
+
+
+def _normalize_adjustment_payload(raw_adjustment: dict) -> dict | None:
+    if not isinstance(raw_adjustment, dict):
+        return None
+
+    adjustment_type = _normalize_adjustment_type(raw_adjustment.get("type"))
+    label = str(raw_adjustment.get("label", "")).strip()
+    amount = _parse_positive_amount(raw_adjustment.get("amount"))
+    if not adjustment_type or not label or amount is None:
+        return None
+
+    return {
+        "type": adjustment_type,
+        "label": label,
+        "amount": amount,
+        "raw_text": _normalize_optional_text(raw_adjustment.get("raw_text")),
+    }
+
+
+def _infer_adjustments_payload(raw_lines: list[str], gemini_payload: dict | None) -> list[dict]:
+    raw_adjustments = gemini_payload.get("adjustments", []) if isinstance(gemini_payload, dict) else []
+    normalized_adjustments: list[dict] = []
+
+    if isinstance(raw_adjustments, list):
+        for raw_adjustment in raw_adjustments:
+            normalized_adjustment = _normalize_adjustment_payload(raw_adjustment)
+            if normalized_adjustment:
+                normalized_adjustments.append(normalized_adjustment)
+
+    if normalized_adjustments:
+        return normalized_adjustments
+
+    inferred_adjustments: list[dict] = []
+    for line in raw_lines:
+        normalized_line = line.lower()
+        adjustment_type = None
+        for candidate_type, keywords in ADJUSTMENT_TYPE_KEYWORDS.items():
+            if any(keyword in normalized_line for keyword in keywords):
+                adjustment_type = candidate_type
+                break
+
+        if not adjustment_type:
+            continue
+
+        amount = _extract_last_amount_from_line(line)
+        if amount is None:
+            continue
+
+        label = re.sub(r"\s+[-+]?\d[\d,]*\.?\d{0,2}\s*$", "", line).strip(" -:")
+        inferred_adjustments.append(
+            {
+                "type": adjustment_type,
+                "label": label or line.strip(),
+                "amount": amount,
+                "raw_text": line.strip(),
+            }
+        )
+
+    unique_adjustments: list[dict] = []
+    seen_keys: set[tuple[str, str, float]] = set()
+    for adjustment in inferred_adjustments:
+        dedupe_key = (
+            adjustment["type"],
+            adjustment["label"],
+            float(adjustment["amount"]),
+        )
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        unique_adjustments.append(adjustment)
+
+    return unique_adjustments
+
+
+def _infer_financial_summary(
+    header: dict,
+    raw_lines: list[str],
+    raw_text: str,
+    adjustments: list[dict],
+    gemini_payload: dict | None,
+) -> dict:
+    raw_summary = gemini_payload.get("financial_summary", {}) if isinstance(gemini_payload, dict) else {}
+    discount_amount = None
+    for adjustment in adjustments:
+        if adjustment.get("type") == "discount":
+            discount_amount = round((discount_amount or 0.0) + float(adjustment.get("amount", 0.0)), 2)
+
+    subtotal = _parse_positive_amount(raw_summary.get("subtotal")) if isinstance(raw_summary, dict) else None
+    net_amount = _parse_positive_amount(raw_summary.get("net_amount")) if isinstance(raw_summary, dict) else None
+    amount_before_vat = (
+        _parse_positive_amount(raw_summary.get("amount_before_vat"))
+        if isinstance(raw_summary, dict)
+        else None
+    )
+    vat_amount = _parse_positive_amount(raw_summary.get("vat_amount")) if isinstance(raw_summary, dict) else None
+    grand_total = _parse_positive_amount(raw_summary.get("grand_total")) if isinstance(raw_summary, dict) else None
+    vat_included = bool(raw_summary.get("vat_included")) if isinstance(raw_summary, dict) else False
+
+    subtotal = subtotal or _extract_financial_value(raw_lines, ("รวมเป็นเงิน", "subtotal"))
+    if discount_amount is None:
+        discount_amount = _extract_financial_value(raw_lines, ("ส่วนลด", "discount"))
+    net_amount = net_amount or _extract_financial_value(raw_lines, ("จำนวนเงินหลังหักส่วนลด", "after discount", "net amount"))
+    amount_before_vat = amount_before_vat or _extract_financial_value(
+        raw_lines,
+        ("ราคารวมก่อนภาษีมูลค่าเพิ่ม", "before vat", "before tax"),
+    )
+    vat_amount = vat_amount or _parse_positive_amount(header.get("vat")) or _extract_financial_value(
+        raw_lines,
+        ("ภาษีมูลค่าเพิ่ม", "vat"),
+    )
+    grand_total = grand_total or _parse_positive_amount(header.get("total")) or _extract_financial_value(
+        raw_lines,
+        ("รวมทั้งสิ้น", "grand total", "total due"),
+    )
+    if "vat included" in raw_text.lower():
+        vat_included = True
+
+    return {
+        "subtotal": subtotal,
+        "discount_amount": discount_amount,
+        "net_amount": net_amount,
+        "amount_before_vat": amount_before_vat,
+        "vat_amount": vat_amount,
+        "grand_total": grand_total,
+        "vat_included": vat_included,
+    }
+
+
+def _build_field_confidence(
+    header: dict,
+    document_numbers: dict,
+    seller: dict,
+    confidence_summary: dict,
+) -> dict:
+    try:
+        overall_confidence = float(confidence_summary.get("overall", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        overall_confidence = 0.0
+
+    def confidence_for(value: object, fallback: float = 0.0) -> float:
+        return round(overall_confidence, 2) if value not in (None, "", []) else fallback
+
+    return {
+        "merchant": confidence_for(header.get("merchant")),
+        "date": confidence_for(header.get("date")),
+        "total": confidence_for(header.get("total")),
+        "vat": confidence_for(header.get("vat"), 0.0),
+        "invoice_number": confidence_for(document_numbers.get("invoice_number")),
+        "receipt_number": confidence_for(document_numbers.get("receipt_number")),
+        "tax_invoice_number": confidence_for(document_numbers.get("tax_invoice_number")),
+        "seller_tax_id": confidence_for(seller.get("tax_id")),
+        "seller_phone": confidence_for(seller.get("phone")),
+    }
+
+
+def _build_receipt_adjustments(adjustments: list[dict]) -> list[dict]:
+    receipt_adjustments: list[dict] = []
+    for index, adjustment in enumerate(adjustments):
+        receipt_adjustments.append(
+            {
+                "id": f"adj_{index + 1}",
+                "type": adjustment.get("type"),
+                "label": adjustment.get("label"),
+                "amount": float(adjustment.get("amount", 0.0)),
+                "is_manual_edit": False,
+            }
+        )
+    return receipt_adjustments
+
+
+def _get_signed_adjustment_total(adjustments: list[dict]) -> float:
+    signed_total = 0.0
+    for adjustment in adjustments:
+        amount = float(adjustment.get("amount", 0.0) or 0.0)
+        adjustment_type = str(adjustment.get("type", "")).strip().lower()
+        if adjustment_type == "discount":
+            signed_total -= amount
+        else:
+            signed_total += amount
+    return round(signed_total, 2)
 
 
 def _append_vat_item_if_missing(
@@ -236,26 +562,82 @@ def _build_ocr_by_gemini_payload(
     ocr_data: dict,
 ) -> dict:
     ocr_text = str(ocr_data.get("text", "") or "").strip()
-    raw_entities = ocr_data.get("entities", [])
-    raw_line_item_candidates = ocr_data.get("line_item_candidates", [])
+    raw_lines = _split_raw_lines(ocr_text)[:200]
+    gemini_payload = gemini_payload if isinstance(gemini_payload, dict) else {}
+
+    header = gemini_payload.get("header", {})
+    if not isinstance(header, dict):
+        header = {}
+    confidence_summary = gemini_payload.get("confidence_summary", {})
+    if not isinstance(confidence_summary, dict):
+        confidence_summary = {}
+    document_context = gemini_payload.get("document_context", {})
+    if not isinstance(document_context, dict):
+        document_context = {}
+    meta = gemini_payload.get("meta", {})
+    if not isinstance(meta, dict):
+        meta = {}
+
+    adjustments = _infer_adjustments_payload(raw_lines, gemini_payload)
+    seller = _infer_seller_payload(
+        header=header,
+        document_context=document_context,
+        raw_lines=raw_lines,
+        raw_text=ocr_text,
+    )
+    document_numbers = _infer_document_numbers(
+        document_context=document_context,
+        raw_lines=raw_lines,
+        raw_text=ocr_text,
+    )
+    financial_summary = _infer_financial_summary(
+        header=header,
+        raw_lines=raw_lines,
+        raw_text=ocr_text,
+        adjustments=adjustments,
+        gemini_payload=gemini_payload,
+    )
+    extraction_notes = []
+    extraction_notes.extend(confidence_summary.get("notes", []) if isinstance(confidence_summary.get("notes"), list) else [])
+    extraction_notes.extend(document_context.get("notes", []) if isinstance(document_context.get("notes"), list) else [])
 
     return {
-        "captured_at": datetime.utcnow().isoformat(),
+        "schema_version": 2,
         "pipeline_path": pipeline_path,
-        "gemini_payload": gemini_payload,
-        "ocr_observation": {
-            "text": ocr_text[:20000],
-            "header": ocr_data.get("header", {}) if isinstance(ocr_data.get("header"), dict) else {},
-            "header_candidates": (
-                ocr_data.get("header_candidates", {})
-                if isinstance(ocr_data.get("header_candidates"), dict)
-                else {}
-            ),
-            "line_item_candidates": (
-                raw_line_item_candidates[:40] if isinstance(raw_line_item_candidates, list) else []
-            ),
-            "entities": raw_entities[:100] if isinstance(raw_entities, list) else [],
-            "meta": ocr_data.get("meta", {}) if isinstance(ocr_data.get("meta"), dict) else {},
+        "document_type": (
+            _normalize_optional_text(gemini_payload.get("document_type"))
+            or _infer_document_type(ocr_text)
+        ),
+        "seller": seller,
+        "document_numbers": document_numbers,
+        "staff_or_cashier_name": (
+            _normalize_optional_text(gemini_payload.get("staff_or_cashier_name"))
+            or _extract_first_matching_line(raw_lines, ("พนักงานขาย", "cashier", "seller"))
+        ),
+        "financial_summary": financial_summary,
+        "adjustments": adjustments,
+        "header": {
+            "merchant": _normalize_optional_text(header.get("merchant")),
+            "date": _normalize_date(header.get("date")),
+            "total": float(_parse_positive_amount(header.get("total")) or 0.0),
+            "vat": float(_parse_positive_amount(header.get("vat")) or 0.0),
+        },
+        "items": gemini_payload.get("items", []) if isinstance(gemini_payload.get("items"), list) else [],
+        "raw_text": ocr_text[:20000],
+        "raw_lines": raw_lines,
+        "field_confidence": _build_field_confidence(
+            header=header,
+            document_numbers=document_numbers,
+            seller=seller,
+            confidence_summary=confidence_summary,
+        ),
+        "confidence_summary": confidence_summary,
+        "extraction_notes": sorted({str(note).strip() for note in extraction_notes if str(note).strip()}),
+        "meta": {
+            "captured_at": datetime.utcnow().isoformat(),
+            "source": _normalize_optional_text(gemini_payload.get("source")),
+            "gemini": meta,
+            "ocr": ocr_data.get("meta", {}) if isinstance(ocr_data.get("meta"), dict) else {},
         },
     }
 
@@ -592,6 +974,12 @@ async def upload_receipt(
             business_type=business_type,
         )
 
+        ocr_by_gemini = _build_ocr_by_gemini_payload(
+            pipeline_path=pipeline_path,
+            gemini_payload=vision_payload_raw or refined_payload_raw,
+            ocr_data=ocr_data,
+        )
+
         # 6. Save Draft to Firestore
         total_ms = round((time.perf_counter() - pipeline_started) * 1000, 2)
         receipt_doc = {
@@ -601,16 +989,17 @@ async def upload_receipt(
             "image_url": gcs_uri,
             "header": header,
             "items": enriched_items,
+            "adjustments": _build_receipt_adjustments(
+                ocr_by_gemini.get("adjustments", [])
+                if isinstance(ocr_by_gemini.get("adjustments"), list)
+                else []
+            ),
             "ocr_version": (
                 "v4_vision_direct"
                 if pipeline_path == "vision_direct"
                 else ("v3_refined" if pipeline_path == "ocr_refined" else "v2_parser")
             ),
-            "OCRbyGemini": _build_ocr_by_gemini_payload(
-                pipeline_path=pipeline_path,
-                gemini_payload=vision_payload_raw or refined_payload_raw,
-                ocr_data=ocr_data,
-            ),
+            "OCRbyGemini": ocr_by_gemini,
             "ai_refined": ai_refined,
             "needs_review": needs_review,
             "quality_flags": sorted(set(quality_flags)),
@@ -754,6 +1143,11 @@ async def get_receipt(
         header=receipt.get("header", {}) if isinstance(receipt.get("header"), dict) else {},
         business_type=branch_type,
     )
+    receipt["adjustments"] = (
+        list(receipt.get("adjustments", []))
+        if isinstance(receipt.get("adjustments"), list)
+        else []
+    )
 
     return receipt
 
@@ -833,8 +1227,8 @@ async def verify_receipt(
     """
     User confirms the receipt data → Update Firestore to VERIFIED.
 
-    The frontend sends corrected items with total_check.
-    Total must match sum of item amounts.
+    The frontend sends corrected items and adjustments with total_check.
+    Total must match sum(items) plus signed adjustments.
     """
     # Check receipt exists
     existing = firestore_service.get_receipt(receipt_id)
@@ -885,13 +1279,40 @@ async def verify_receipt(
             "already_verified": True,
         }
 
-    # Validate total_check matches sum of items
-    items_total = sum(item.amount for item in verified_data.items)
-    if abs(items_total - verified_data.total_check) > 0.01:
+    # Validate total_check matches sum of items plus signed adjustments.
+    items_total = round(sum(item.amount for item in verified_data.items), 2)
+    verified_adjustments = []
+    for index, adjustment in enumerate(verified_data.adjustments):
+        label = adjustment.label.strip()
+        if not label:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Each adjustment must have a label.",
+            )
+        if adjustment.amount <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Each adjustment must have a positive amount.",
+            )
+        verified_adjustments.append(
+            {
+                "id": f"adj_{index + 1}",
+                "type": adjustment.type.value,
+                "label": label,
+                "amount": round(adjustment.amount, 2),
+                "is_manual_edit": False,
+            }
+        )
+
+    signed_adjustments_total = _get_signed_adjustment_total(verified_adjustments)
+    expected_total = round(items_total + signed_adjustments_total, 2)
+    if abs(expected_total - verified_data.total_check) > 0.01:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Total check ({verified_data.total_check}) does not match "
-                   f"sum of items ({items_total}).",
+            detail=(
+                f"Total check ({verified_data.total_check}) does not match "
+                f"items plus adjustments ({expected_total})."
+            ),
         )
 
     branch_info = firestore_service.get_branch_config(existing.get("branch_id", ""))
@@ -921,6 +1342,7 @@ async def verify_receipt(
     # Convert verified payload to Firestore structure
     update_payload = {
         "items": verified_items,
+        "adjustments": verified_adjustments,
         "total_check": verified_data.total_check,
         "verified_by": current_user["uid"],
     }

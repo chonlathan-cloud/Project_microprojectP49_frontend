@@ -158,6 +158,8 @@ def update_receipt_status(
     # Merge user-corrected items if provided
     if "items" in verified_data:
         update_payload["items"] = verified_data["items"]
+    if "adjustments" in verified_data:
+        update_payload["adjustments"] = verified_data["adjustments"]
     if "total_check" in verified_data:
         update_payload["total_amount"] = verified_data["total_check"]
     if "verified_by" in verified_data:

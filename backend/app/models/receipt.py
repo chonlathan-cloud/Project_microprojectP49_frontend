@@ -20,6 +20,14 @@ class ReceiptStatus(str, Enum):
     REJECTED = "REJECTED"
 
 
+class AdjustmentType(str, Enum):
+    """Adjustment types captured outside normal purchased items."""
+    DISCOUNT = "discount"
+    SERVICE_CHARGE = "service_charge"
+    ROUNDING = "rounding"
+    OTHER = "other"
+
+
 # --- Line Item Models ---
 # Reference: LDD Section 2, TDD Section 1.1 (receipts.items)
 
@@ -32,6 +40,15 @@ class LineItem(BaseModel):
     category_name: Optional[str] = None      # e.g., "COGS (วัตถุดิบ)"
     confidence: float = 0.0                  # AI confidence score (0.0 - 1.0)
     is_manual_edit: bool = False             # True if user overrode AI
+
+
+class AdjustmentItem(BaseModel):
+    """A receipt-level adjustment such as discount or service charge."""
+    id: str
+    type: AdjustmentType
+    label: str
+    amount: float
+    is_manual_edit: bool = False
 
 
 # --- Receipt Header (from OCR) ---
@@ -54,7 +71,8 @@ class ReceiptBase(BaseModel):
     merchant_name: Optional[str] = None
     date: Optional[str] = None               # YYYY-MM-DD
     total_amount: float = 0.0
-    items: List[LineItem] = []
+    items: List[LineItem] = Field(default_factory=list)
+    adjustments: List[AdjustmentItem] = Field(default_factory=list)
 
 
 class ReceiptCreate(ReceiptBase):
@@ -82,7 +100,15 @@ class VerifyLineItem(BaseModel):
     category_id: str                         # Required on verify
 
 
+class VerifyAdjustment(BaseModel):
+    """An adjustment submitted during verification."""
+    type: AdjustmentType
+    label: str
+    amount: float
+
+
 class ReceiptVerify(BaseModel):
     """Request body for verify & submit endpoint."""
     items: List[VerifyLineItem]
-    total_check: float                       # Must match sum of items
+    adjustments: List[VerifyAdjustment] = Field(default_factory=list)
+    total_check: float                       # Must match items + signed adjustments
