@@ -83,6 +83,12 @@ class Settings:
     FIRESTORE_DB: str = os.getenv("FIRESTORE_DB", "(default)")
     BIGQUERY_DATASET: str = os.getenv("BIGQUERY_DATASET", "the491_analytics")
     BRANCH_CACHE_TTL_SECONDS: int = _env_int("BRANCH_CACHE_TTL_SECONDS", 600)
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "").strip()
+    REDIS_PORT: int = _env_int("REDIS_PORT", 6379)
+    REDIS_DB: int = _env_int("REDIS_DB", 0)
+    REDIS_ENABLED: bool = _env_bool("REDIS_ENABLED", bool(REDIS_HOST))
+    REDIS_CONNECT_TIMEOUT_SECONDS: int = _env_int("REDIS_CONNECT_TIMEOUT_SECONDS", 1)
+    REDIS_SOCKET_TIMEOUT_SECONDS: int = _env_int("REDIS_SOCKET_TIMEOUT_SECONDS", 1)
     _SIGNED_URL_EXPIRY_SECONDS_RAW: str = os.getenv("SIGNED_URL_EXPIRY_SECONDS", "1800")
     try:
         SIGNED_URL_EXPIRY_SECONDS: int = int(_SIGNED_URL_EXPIRY_SECONDS_RAW)

@@ -1,10 +1,12 @@
 from google.cloud import firestore
 from datetime import datetime
 from threading import Lock
+import logging
 import time
 from typing import Optional
 
 from app.core.config import settings
+from app.services import redis_cache
 
 # --- Firestore Client ---
 # Reference: TDD Section 1.1, LDD Section 3
@@ -14,9 +16,11 @@ db = firestore.Client(
     database=settings.FIRESTORE_DB,
 )
 
+logger = logging.getLogger(__name__)
 _branch_cache_lock = Lock()
 _branch_cache_value: list[dict] | None = None
 _branch_cache_expires_at = 0.0
+_BRANCH_CACHE_KEY = "branches:v1"
 
 
 # =====================================================
@@ -215,26 +219,65 @@ def list_branches() -> list[dict]:
     global _branch_cache_value, _branch_cache_expires_at
 
     now = time.monotonic()
+    stale_local_cache: list[dict] | None = None
     with _branch_cache_lock:
+        if _branch_cache_value is not None:
+            stale_local_cache = [dict(branch) for branch in _branch_cache_value]
         if _branch_cache_value is not None and now < _branch_cache_expires_at:
             return [dict(branch) for branch in _branch_cache_value]
 
-    docs = db.collection("branches").stream()
-    branches: list[dict] = []
+    redis_branches = redis_cache.get_json(_BRANCH_CACHE_KEY)
+    if isinstance(redis_branches, list):
+        normalized_redis_branches: list[dict] = []
+        for branch in redis_branches:
+            if not isinstance(branch, dict):
+                continue
+            normalized_redis_branches.append(
+                {
+                    "id": str(branch.get("id", "")).strip(),
+                    "name": str(branch.get("name", "")).strip(),
+                    "type": str(branch.get("type", "RESTAURANT")).strip() or "RESTAURANT",
+                }
+            )
 
-    for doc in docs:
-        data = doc.to_dict() or {}
-        branch = {
-            "id": data.get("id", doc.id),
-            "name": data.get("name", ""),
-            "type": data.get("type", "RESTAURANT"),
-        }
-        branches.append(branch)
+        if normalized_redis_branches:
+            normalized_redis_branches.sort(key=lambda item: item.get("name", ""))
+            with _branch_cache_lock:
+                _branch_cache_value = [dict(branch) for branch in normalized_redis_branches]
+                _branch_cache_expires_at = (
+                    time.monotonic() + max(1, settings.BRANCH_CACHE_TTL_SECONDS)
+                )
+            return normalized_redis_branches
 
-    branches.sort(key=lambda item: item.get("name", ""))
+    try:
+        docs = db.collection("branches").stream()
+        branches: list[dict] = []
 
-    with _branch_cache_lock:
-        _branch_cache_value = [dict(branch) for branch in branches]
-        _branch_cache_expires_at = time.monotonic() + max(1, settings.BRANCH_CACHE_TTL_SECONDS)
+        for doc in docs:
+            data = doc.to_dict() or {}
+            branch = {
+                "id": data.get("id", doc.id),
+                "name": data.get("name", ""),
+                "type": data.get("type", "RESTAURANT"),
+            }
+            branches.append(branch)
 
-    return branches
+        branches.sort(key=lambda item: item.get("name", ""))
+
+        with _branch_cache_lock:
+            _branch_cache_value = [dict(branch) for branch in branches]
+            _branch_cache_expires_at = (
+                time.monotonic() + max(1, settings.BRANCH_CACHE_TTL_SECONDS)
+            )
+
+        redis_cache.set_json(
+            key=_BRANCH_CACHE_KEY,
+            value=branches,
+            ttl_seconds=settings.BRANCH_CACHE_TTL_SECONDS,
+        )
+        return branches
+    except Exception:
+        if stale_local_cache:
+            logger.warning("Falling back to stale local branches cache after Firestore failure")
+            return stale_local_cache
+        raise

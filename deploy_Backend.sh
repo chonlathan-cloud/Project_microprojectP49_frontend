@@ -15,6 +15,10 @@ SERVICE_ACCOUNT_KEY_PATH="${SERVICE_ACCOUNT_KEY_PATH:-}"
 
 ALLOW_UNAUTHENTICATED="${ALLOW_UNAUTHENTICATED:-true}"
 CHECK_MAIN_BRANCH="${CHECK_MAIN_BRANCH:-true}"
+MIN_INSTANCES="${MIN_INSTANCES:-}"
+VPC_NETWORK="${VPC_NETWORK:-}"
+VPC_SUBNET="${VPC_SUBNET:-}"
+VPC_EGRESS="${VPC_EGRESS:-private-ranges-only}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -132,6 +136,19 @@ if [[ "$ALLOW_UNAUTHENTICATED" == "true" ]]; then
   deploy_args+=(--allow-unauthenticated)
 else
   deploy_args+=(--no-allow-unauthenticated)
+fi
+
+if [[ -n "$MIN_INSTANCES" ]]; then
+  deploy_args+=(--min-instances "$MIN_INSTANCES")
+fi
+
+if [[ -n "$VPC_NETWORK" ]]; then
+  deploy_args+=(--network "$VPC_NETWORK")
+  deploy_args+=(--vpc-egress "$VPC_EGRESS")
+fi
+
+if [[ -n "$VPC_SUBNET" ]]; then
+  deploy_args+=(--subnet "$VPC_SUBNET")
 fi
 
 gcloud "${GCLOUD_AUTH_ARGS[@]}" "${deploy_args[@]}"

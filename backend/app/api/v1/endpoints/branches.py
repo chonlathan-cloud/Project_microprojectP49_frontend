@@ -1,17 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 
-from app.core.security import get_current_user
 from app.services import firestore_service
 
 router = APIRouter(prefix="/branches", tags=["Branches"])
 
 
 @router.get("")
-async def get_branches(
-    _current_user: dict = Depends(get_current_user),
-):
+async def get_branches():
     """
     Return branch list for frontend selectors.
+    This endpoint is intentionally public read-only so the frontend can avoid
+    cross-origin preflight for simple GET requests.
     """
     try:
         branches = firestore_service.list_branches()

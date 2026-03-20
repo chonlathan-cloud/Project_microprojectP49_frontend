@@ -27,3 +27,6 @@ chromadb
 
 # Firebase Authentication
 firebase-admin
+
+# Cache
+redis

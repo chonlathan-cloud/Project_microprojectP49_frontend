@@ -12,6 +12,11 @@ const api = axios.create({
 
 api.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
+    const requestUrl = String(config.url || "");
+    if (requestUrl === "/api/v1/branches" || requestUrl.startsWith("/api/v1/branches?")) {
+      return config;
+    }
+
     const user = auth.currentUser;
     if (!user) {
       return config;
