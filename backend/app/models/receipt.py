@@ -107,8 +107,31 @@ class VerifyAdjustment(BaseModel):
     amount: float
 
 
+class VerifyParty(BaseModel):
+    """Seller or buyer details submitted during receipt verification."""
+    brand_name: Optional[str] = None
+    legal_name: Optional[str] = None
+    branch_name: Optional[str] = None
+    tax_id: Optional[str] = None
+    contact_person: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+
+
 class ReceiptVerify(BaseModel):
     """Request body for verify & submit endpoint."""
     items: List[VerifyLineItem]
     adjustments: List[VerifyAdjustment] = Field(default_factory=list)
     total_check: float                       # Must match items + signed adjustments
+    seller: Optional[VerifyParty] = None
+    buyer: Optional[VerifyParty] = None
+
+
+class ReceiptVerifyFlowAccount(ReceiptVerify):
+    """Request body for verifying a receipt and syncing it to FlowAccount."""
+    confirm_resync: bool = False
+    payment_method: Optional[str] = "CASH"
+    flowaccount_bank_account_id: Optional[int] = None
+    flowaccount_transfer_bank_id: Optional[int] = None
+    flowaccount_bank_account_label: Optional[str] = None

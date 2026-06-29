@@ -5,7 +5,7 @@ PROJECT_ID="${PROJECT_ID:-the49-487609}"
 REGION="${REGION:-asia-southeast1}"
 SERVICE_NAME="${SERVICE_NAME:-the49-frontend}"
 SOURCE_DIR="${SOURCE_DIR:-frontend}"
-ENV_FILE="${ENV_FILE:-frontend/.env.local}"
+ENV_FILE="${ENV_FILE:-frontend/.env}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-the49-backend}"
 BUILD_SERVICE_ACCOUNT="${BUILD_SERVICE_ACCOUNT:-project-the49@the49-487609.iam.gserviceaccount.com}"
 

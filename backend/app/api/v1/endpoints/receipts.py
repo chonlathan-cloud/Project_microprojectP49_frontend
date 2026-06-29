@@ -11,8 +11,14 @@ from google.cloud import storage
 from app.core.config import settings
 from app.core.security import get_current_user
 from app.models.branch import get_categories_for_type
-from app.models.receipt import BusinessType, ReceiptVerify
-from app.services import ai_service, bigquery_service, firestore_service, ocr_service
+from app.models.receipt import BusinessType, ReceiptVerify, ReceiptVerifyFlowAccount
+from app.services import (
+    ai_service,
+    bigquery_service,
+    firestore_service,
+    flowaccount_service,
+    ocr_service,
+)
 from app.services.categorization import categorize_line_item, categorize_line_item_rule_only
 
 # Reference: LDD Section 4, TDD Section 2.1
@@ -50,6 +56,7 @@ ADJUSTMENT_TYPE_KEYWORDS = {
     "service_charge": ("service charge", "service", "ค่าบริการ"),
     "rounding": ("rounding", "round off", "ปัดเศษ"),
 }
+FLOWACCOUNT_SYNC_ROLES = {"admin", "executive"}
 
 
 def _normalize_extraction_mode(raw_mode: str | None) -> str:
@@ -244,6 +251,141 @@ def _extract_first_matching_line(raw_lines: list[str], keywords: tuple[str, ...]
     return None
 
 
+def _strip_label_prefix(value: str, labels: tuple[str, ...]) -> str:
+    text = str(value or "").strip()
+    for label in labels:
+        text = re.sub(
+            rf"^\s*{re.escape(label)}\s*[:：]?\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+    return text
+
+
+def _extract_labeled_party_block(raw_lines: list[str], labels: tuple[str, ...]) -> dict:
+    start_index = -1
+    for index, line in enumerate(raw_lines):
+        normalized = line.lower()
+        if any(label.lower() in normalized for label in labels):
+            start_index = index
+            break
+    if start_index < 0:
+        return {}
+
+    block_lines = raw_lines[start_index : start_index + 8]
+    block_text = "\n".join(block_lines)
+    legal_name = None
+    address_parts: list[str] = []
+
+    for index, line in enumerate(block_lines):
+        candidate = _strip_label_prefix(line, labels)
+        normalized = candidate.lower()
+        if not legal_name and any(
+            token in normalized
+            for token in ("บริษัท", "จำกัด", "limited", "co.", "ltd", "หจก")
+        ):
+            legal_name = candidate
+            continue
+        if legal_name:
+            if any(
+                token in normalized
+                for token in (
+                    "ชื่อลูกค้า",
+                    "ลูกค้า",
+                    "ผู้ซื้อ",
+                    "buyer",
+                    "customer",
+                    "ลำดับ",
+                    "รายการสินค้า",
+                    "จำนวน",
+                    "ราคา",
+                    "รวมเงิน",
+                    "หมายเหตุ",
+                    "การชำระเงิน",
+                )
+            ):
+                break
+            if any(
+                token in normalized
+                for token in (
+                    "เลขประจำตัวผู้เสียภาษี",
+                    "เลขประจำผู้เสียภาษี",
+                    "เลขที่เสียภาษี",
+                    "เลขผู้เสียภาษี",
+                    "tax id",
+                    "เบอร์โทรศัพท์",
+                    "เบอร์โทร",
+                    "โทร",
+                    "tel",
+                    "อีเมล",
+                    "อีเมล์",
+                    "email",
+                    "ผู้ติดต่อ",
+                    "contact",
+                )
+            ):
+                continue
+            if index > 0:
+                address_candidate = _strip_label_prefix(candidate, ("ที่อยู่", "address"))
+                if address_candidate:
+                    address_parts.append(address_candidate)
+
+    tax_id_match = re.search(
+        r"(?:เลขประจำตัวผู้เสียภาษี|เลขประจำผู้เสียภาษี|เลขที่เสียภาษี|เลขผู้เสียภาษี|tax id)[^\d]*(\d{10,13})",
+        block_text,
+        flags=re.IGNORECASE,
+    ) or re.search(r"\b\d{13}\b", block_text)
+    phone_match = re.search(
+        r"(?:เบอร์โทรศัพท์|เบอร์โทร|โทร\.?|tel\.?|phone)[^\d]*(\d[\d\- ]{6,})",
+        block_text,
+        flags=re.IGNORECASE,
+    )
+    email_match = re.search(
+        r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
+        block_text,
+        flags=re.IGNORECASE,
+    )
+    contact_match = re.search(
+        r"(?:ผู้ติดต่อ|contact)\s*[:：]?\s*([^\n]+)",
+        block_text,
+        flags=re.IGNORECASE,
+    )
+
+    return {
+        "legal_name": legal_name,
+        "tax_id": _first_regex_value(tax_id_match),
+        "phone": re.sub(r"\s+", "", _first_regex_value(phone_match) or "")
+        or None,
+        "email": email_match.group(0) if email_match else None,
+        "contact_person": _first_regex_value(contact_match),
+        "address": " ".join(address_parts) if address_parts else None,
+    }
+
+
+def _first_regex_value(match: re.Match[str] | None) -> str | None:
+    if not match:
+        return None
+    if match.lastindex:
+        return match.group(1)
+    return match.group(0)
+
+
+def _normalize_party_payload(value: object) -> dict:
+    if not isinstance(value, dict):
+        value = {}
+    return {
+        "brand_name": _normalize_optional_text(value.get("brand_name")),
+        "legal_name": _normalize_optional_text(value.get("legal_name")),
+        "branch_name": _normalize_optional_text(value.get("branch_name")),
+        "tax_id": _normalize_optional_text(value.get("tax_id")),
+        "contact_person": _normalize_optional_text(value.get("contact_person")),
+        "email": _normalize_optional_text(value.get("email")),
+        "phone": _normalize_optional_text(value.get("phone")),
+        "address": _normalize_optional_text(value.get("address")),
+    }
+
+
 def _extract_financial_value(raw_lines: list[str], keywords: tuple[str, ...]) -> float | None:
     line = _extract_first_matching_line(raw_lines, keywords)
     if not line:
@@ -256,7 +398,13 @@ def _infer_seller_payload(
     document_context: dict,
     raw_lines: list[str],
     raw_text: str,
+    gemini_seller: dict | None = None,
 ) -> dict:
+    normalized_gemini_seller = _normalize_party_payload(gemini_seller)
+    labeled_seller = _extract_labeled_party_block(
+        raw_lines,
+        ("ผู้ขาย", "ผู้ออก", "ผู้ออกใบเสร็จ", "supplier", "vendor", "dealer"),
+    )
     legal_name = None
     address_parts: list[str] = []
     legal_name_index = -1
@@ -274,8 +422,12 @@ def _infer_seller_payload(
             if any(
                 stop_token in normalized
                 for stop_token in (
+                    "เลขประจำตัวผู้เสียภาษี",
+                    "เลขประจำผู้เสียภาษี",
+                    "เลขที่เสียภาษี",
                     "เลขผู้เสียภาษี",
                     "tax id",
+                    "เบอร์โทรศัพท์",
                     "โทร",
                     "tel",
                     "ใบกำกับภาษี",
@@ -283,32 +435,81 @@ def _infer_seller_payload(
                     "invoice",
                     "พนักงานขาย",
                     "วันที่",
+                    "ชื่อลูกค้า",
+                    "ลูกค้า",
+                    "ผู้ซื้อ",
+                    "buyer",
+                    "customer",
+                    "ลำดับ",
+                    "รายการสินค้า",
+                    "จำนวน",
+                    "ราคา",
+                    "รวมเงิน",
+                    "หมายเหตุ",
+                    "การชำระเงิน",
                 )
             ):
                 break
-            address_parts.append(line)
+            address_candidate = _strip_label_prefix(line, ("ที่อยู่", "address"))
+            if address_candidate:
+                address_parts.append(address_candidate)
 
     tax_id_match = re.search(
-        r"(?:เลขผู้เสียภาษี|tax id)[^\d]*(\d{10,13})",
+        r"(?:เลขประจำตัวผู้เสียภาษี|เลขประจำผู้เสียภาษี|เลขที่เสียภาษี|เลขผู้เสียภาษี|tax id)[^\d]*(\d{10,13})",
         raw_text,
         flags=re.IGNORECASE,
     ) or re.search(r"\b\d{13}\b", raw_text)
     phone_match = re.search(
-        r"(?:โทร\.?|tel\.?|phone)[^\d]*(\d[\d\- ]{6,})",
+        r"(?:เบอร์โทรศัพท์|เบอร์โทร|โทร\.?|tel\.?|phone)[^\d]*(\d[\d\- ]{6,})",
         raw_text,
         flags=re.IGNORECASE,
     )
 
+    tax_id = _first_regex_value(tax_id_match)
+    phone = _first_regex_value(phone_match)
+    email_match = re.search(
+        r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
+        raw_text,
+        flags=re.IGNORECASE,
+    )
+    contact_line = _extract_first_matching_line(raw_lines, ("ผู้ติดต่อ", "contact"))
+
     return {
-        "brand_name": _normalize_optional_text(header.get("merchant")),
-        "legal_name": legal_name,
+        "brand_name": (
+            normalized_gemini_seller.get("brand_name")
+            or _normalize_optional_text(header.get("merchant"))
+        ),
+        "legal_name": (
+            normalized_gemini_seller.get("legal_name")
+            or labeled_seller.get("legal_name")
+            or legal_name
+        ),
         "branch_name": (
-            _normalize_optional_text(document_context.get("store_branch"))
+            normalized_gemini_seller.get("branch_name")
+            or _normalize_optional_text(document_context.get("store_branch"))
             or _extract_first_matching_line(raw_lines, ("สำนักงานใหญ่", "สาขา"))
         ),
-        "tax_id": tax_id_match.group(1) if tax_id_match else None,
-        "phone": re.sub(r"\s+", "", phone_match.group(1)) if phone_match else None,
-        "address": " ".join(address_parts) if address_parts else None,
+        "tax_id": normalized_gemini_seller.get("tax_id")
+        or labeled_seller.get("tax_id")
+        or tax_id,
+        "contact_person": (
+            normalized_gemini_seller.get("contact_person")
+            or labeled_seller.get("contact_person")
+            or (
+                re.sub(r"^(?:ผู้ติดต่อ|contact)\s*[:：]?\s*", "", contact_line, flags=re.IGNORECASE).strip()
+                if contact_line
+                else None
+            )
+        ),
+        "email": normalized_gemini_seller.get("email")
+        or labeled_seller.get("email")
+        or (email_match.group(0) if email_match else None),
+        "phone": normalized_gemini_seller.get("phone")
+        or labeled_seller.get("phone")
+        or (re.sub(r"\s+", "", phone) if phone else None),
+        "address": normalized_gemini_seller.get("address")
+        or labeled_seller.get("address")
+        or (" ".join(address_parts) if address_parts else None),
     }
 
 
@@ -331,6 +532,7 @@ def _infer_document_numbers(document_context: dict, raw_lines: list[str], raw_te
         ),
         "receipt_number": _normalize_optional_text(document_context.get("receipt_number")),
         "tax_invoice_number": _normalize_optional_text(document_context.get("tax_invoice_number")),
+        "due_date": _normalize_date(document_context.get("due_date")),
         "payment_reference": _normalize_optional_text(document_context.get("payment_reference")),
     }
 
@@ -486,6 +688,9 @@ def _build_field_confidence(
         "tax_invoice_number": confidence_for(document_numbers.get("tax_invoice_number")),
         "seller_tax_id": confidence_for(seller.get("tax_id")),
         "seller_phone": confidence_for(seller.get("phone")),
+        "seller_email": confidence_for(seller.get("email")),
+        "seller_address": confidence_for(seller.get("address")),
+        "seller_contact_person": confidence_for(seller.get("contact_person")),
     }
 
 
@@ -574,6 +779,12 @@ def _build_ocr_by_gemini_payload(
     document_context = gemini_payload.get("document_context", {})
     if not isinstance(document_context, dict):
         document_context = {}
+    gemini_seller = gemini_payload.get("seller", {})
+    if not isinstance(gemini_seller, dict):
+        gemini_seller = {}
+    gemini_buyer = gemini_payload.get("buyer", {})
+    if not isinstance(gemini_buyer, dict):
+        gemini_buyer = {}
     meta = gemini_payload.get("meta", {})
     if not isinstance(meta, dict):
         meta = {}
@@ -584,7 +795,9 @@ def _build_ocr_by_gemini_payload(
         document_context=document_context,
         raw_lines=raw_lines,
         raw_text=ocr_text,
+        gemini_seller=gemini_seller,
     )
+    buyer = _normalize_party_payload(gemini_buyer)
     document_numbers = _infer_document_numbers(
         document_context=document_context,
         raw_lines=raw_lines,
@@ -609,6 +822,7 @@ def _build_ocr_by_gemini_payload(
             or _infer_document_type(ocr_text)
         ),
         "seller": seller,
+        "buyer": buyer,
         "document_numbers": document_numbers,
         "staff_or_cashier_name": (
             _normalize_optional_text(gemini_payload.get("staff_or_cashier_name"))
@@ -988,6 +1202,12 @@ async def upload_receipt(
             "status": "DRAFT",
             "image_url": gcs_uri,
             "header": header,
+            "seller": ocr_by_gemini.get("seller")
+            if isinstance(ocr_by_gemini.get("seller"), dict)
+            else {},
+            "buyer": ocr_by_gemini.get("buyer")
+            if isinstance(ocr_by_gemini.get("buyer"), dict)
+            else {},
             "items": enriched_items,
             "adjustments": _build_receipt_adjustments(
                 ocr_by_gemini.get("adjustments", [])
@@ -1046,6 +1266,7 @@ async def upload_receipt(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("receipt_upload_failed branch_id=%s", branch_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process receipt: {str(e)}",
@@ -1218,19 +1439,47 @@ async def get_receipt_preview(
 # Reference: TDD Section 2.1 (Verify & Submit)
 # =====================================================
 
-@router.put("/{receipt_id}/verify")
-async def verify_receipt(
+def _flowaccount_response_ids(flowaccount_document: dict) -> dict:
+    record_id = str(
+        flowaccount_document.get("recordId")
+        or flowaccount_document.get("record_id")
+        or ""
+    ).strip()
+    document_id = str(
+        flowaccount_document.get("documentId")
+        or flowaccount_document.get("document_id")
+        or ""
+    ).strip()
+    document_serial = str(
+        flowaccount_document.get("documentSerial")
+        or flowaccount_document.get("document_serial")
+        or ""
+    ).strip()
+    return {
+        "record_id": record_id,
+        "document_id": document_id,
+        "document_serial": document_serial,
+    }
+
+
+def _assert_flowaccount_sync_allowed(current_user: dict) -> None:
+    user_profile = firestore_service.get_user_profile(current_user.get("uid", "")) or {}
+    normalized_role = str(user_profile.get("role", "staff")).strip().lower()
+    if normalized_role not in FLOWACCOUNT_SYNC_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admin or executive users can sync receipts to FlowAccount.",
+        )
+
+
+def _verify_receipt_for_save(
     receipt_id: str,
     verified_data: ReceiptVerify,
-    current_user: dict = Depends(get_current_user),
-):
+    current_user: dict,
+) -> dict:
     """
-    User confirms the receipt data → Update Firestore to VERIFIED.
-
-    The frontend sends corrected items and adjustments with total_check.
-    Total must match sum(items) plus signed adjustments.
+    Validate and save a receipt using the same behavior as the public verify endpoint.
     """
-    # Check receipt exists
     existing = firestore_service.get_receipt(receipt_id)
     if not existing:
         raise HTTPException(
@@ -1242,17 +1491,20 @@ async def verify_receipt(
     if existing_status == "VERIFIED":
         if existing.get("bigquery_synced", False):
             return {
-                "receipt_id": receipt_id,
-                "status": "VERIFIED",
-                "message": "Receipt already verified. Skipped duplicate save.",
-                "bigquery_rows_inserted": 0,
-                "already_verified": True,
+                "receipt": existing,
+                "response": {
+                    "receipt_id": receipt_id,
+                    "status": "VERIFIED",
+                    "message": "Receipt already verified. Skipped duplicate save.",
+                    "bigquery_rows_inserted": 0,
+                    "already_verified": True,
+                },
             }
 
         # Allow retrying BigQuery sync for previously verified receipts.
         try:
             rows_inserted = bigquery_service.insert_verified_receipt(existing)
-            firestore_service.update_receipt_fields(
+            existing = firestore_service.update_receipt_fields(
                 receipt_id=receipt_id,
                 fields={
                     "bigquery_synced": True,
@@ -1262,7 +1514,7 @@ async def verify_receipt(
                 },
             )
         except Exception as exc:
-            firestore_service.update_receipt_fields(
+            existing = firestore_service.update_receipt_fields(
                 receipt_id=receipt_id,
                 fields={
                     "bigquery_synced": False,
@@ -1272,11 +1524,14 @@ async def verify_receipt(
             rows_inserted = 0
 
         return {
-            "receipt_id": receipt_id,
-            "status": "VERIFIED",
-            "message": "Receipt already verified. BigQuery sync retried.",
-            "bigquery_rows_inserted": rows_inserted,
-            "already_verified": True,
+            "receipt": existing,
+            "response": {
+                "receipt_id": receipt_id,
+                "status": "VERIFIED",
+                "message": "Receipt already verified. BigQuery sync retried.",
+                "bigquery_rows_inserted": rows_inserted,
+                "already_verified": True,
+            },
         }
 
     # Validate total_check matches sum of items plus signed adjustments.
@@ -1346,6 +1601,10 @@ async def verify_receipt(
         "total_check": verified_data.total_check,
         "verified_by": current_user["uid"],
     }
+    if verified_data.seller is not None:
+        update_payload["seller"] = _normalize_party_payload(verified_data.seller.dict())
+    if verified_data.buyer is not None:
+        update_payload["buyer"] = _normalize_party_payload(verified_data.buyer.dict())
 
     updated = firestore_service.update_receipt_status(
         receipt_id=receipt_id,
@@ -1357,7 +1616,7 @@ async def verify_receipt(
     # Reference: TDD Section 1.2, HLD Flow A Step 6
     try:
         rows_inserted = bigquery_service.insert_verified_receipt(updated)
-        firestore_service.update_receipt_fields(
+        updated = firestore_service.update_receipt_fields(
             receipt_id=receipt_id,
             fields={
                 "bigquery_synced": True,
@@ -1368,7 +1627,7 @@ async def verify_receipt(
         )
     except Exception as exc:
         # Log but don't fail — Firestore is already updated
-        firestore_service.update_receipt_fields(
+        updated = firestore_service.update_receipt_fields(
             receipt_id=receipt_id,
             fields={
                 "bigquery_synced": False,
@@ -1378,9 +1637,169 @@ async def verify_receipt(
         rows_inserted = 0
 
     return {
+        "receipt": updated,
+        "response": {
+            "receipt_id": receipt_id,
+            "status": "VERIFIED",
+            "message": "Receipt verified and saved successfully.",
+            "bigquery_rows_inserted": rows_inserted,
+            "already_verified": False,
+        },
+    }
+
+
+@router.put("/{receipt_id}/verify")
+async def verify_receipt(
+    receipt_id: str,
+    verified_data: ReceiptVerify,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    User confirms the receipt data → Update Firestore to VERIFIED.
+
+    The frontend sends corrected items and adjustments with total_check.
+    Total must match sum(items) plus signed adjustments.
+    """
+    result = _verify_receipt_for_save(receipt_id, verified_data, current_user)
+    return result["response"]
+
+
+@router.post("/{receipt_id}/verify-and-sync-flowaccount")
+async def verify_receipt_and_sync_flowaccount(
+    receipt_id: str,
+    verified_data: ReceiptVerifyFlowAccount,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Verify a receipt, save OCR transactions, then create a paid FlowAccount expense
+    and attach the original receipt image.
+    """
+    _assert_flowaccount_sync_allowed(current_user)
+    try:
+        flowaccount_service.ensure_configured()
+    except flowaccount_service.FlowAccountConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    result = _verify_receipt_for_save(receipt_id, verified_data, current_user)
+    receipt = result["receipt"]
+    verify_response = result["response"]
+
+    if receipt.get("flowaccount_synced") and not verified_data.confirm_resync:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Receipt already synced to FlowAccount. Confirm before creating another FlowAccount document.",
+        )
+
+    branch = firestore_service.get_branch_config(receipt.get("branch_id", ""))
+    if not branch:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Receipt branch is missing or invalid.",
+        )
+
+    requested_payment_method = str(verified_data.payment_method or "CASH").strip().upper()
+    flowaccount_payment_method = (
+        "TRANSFER" if requested_payment_method in {"TRANSFER", "BANK_TRANSFER"} else requested_payment_method
+    )
+    selected_bank_account_id = verified_data.flowaccount_bank_account_id
+    selected_transfer_bank_id = verified_data.flowaccount_transfer_bank_id
+    selected_bank_account_label = str(
+        verified_data.flowaccount_bank_account_label or ""
+    ).strip()
+
+    sync_started_at = datetime.utcnow().isoformat()
+    try:
+        flowaccount_document = flowaccount_service.create_paid_expense_from_receipt(
+            receipt=receipt,
+            branch=branch,
+            payment_method=flowaccount_payment_method,
+            bank_account_id=selected_bank_account_id,
+            transfer_bank_id=selected_transfer_bank_id,
+        )
+        ids = _flowaccount_response_ids(flowaccount_document)
+        flowaccount_record_id = ids["record_id"] or ids["document_id"]
+        if not flowaccount_record_id:
+            raise flowaccount_service.FlowAccountAPIError(
+                "FlowAccount response did not include a record id."
+            )
+    except flowaccount_service.FlowAccountConfigurationError as exc:
+        firestore_service.update_receipt_fields(
+            receipt_id=receipt_id,
+            fields={
+                "flowaccount_synced": False,
+                "flowaccount_sync_error": str(exc),
+                "flowaccount_last_attempt_at": sync_started_at,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except flowaccount_service.FlowAccountAPIError as exc:
+        firestore_service.update_receipt_fields(
+            receipt_id=receipt_id,
+            fields={
+                "flowaccount_synced": False,
+                "flowaccount_sync_error": str(exc),
+                "flowaccount_last_attempt_at": sync_started_at,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    attachment_synced = True
+    attachment_error = None
+    try:
+        flowaccount_service.attach_receipt_file(flowaccount_record_id, receipt)
+    except (
+        flowaccount_service.FlowAccountConfigurationError,
+        flowaccount_service.FlowAccountAPIError,
+    ) as exc:
+        attachment_synced = False
+        attachment_error = str(exc)
+
+    sync_count = int(receipt.get("flowaccount_sync_count") or 0) + 1
+    sync_fields = {
+        "flowaccount_synced": True,
+        "flowaccount_synced_at": datetime.utcnow().isoformat(),
+        "flowaccount_synced_by": current_user.get("uid", ""),
+        "flowaccount_record_id": ids["record_id"],
+        "flowaccount_document_id": ids["document_id"],
+        "flowaccount_document_serial": ids["document_serial"],
+        "flowaccount_attachment_synced": attachment_synced,
+        "flowaccount_sync_error": attachment_error,
+        "flowaccount_sync_count": sync_count,
+        "flowaccount_payment_method": flowaccount_payment_method,
+        "flowaccount_bank_account_id": selected_bank_account_id,
+        "flowaccount_transfer_bank_id": selected_transfer_bank_id,
+        "flowaccount_bank_account_label": selected_bank_account_label,
+    }
+    history = {
+        **sync_fields,
+        "created_at": sync_fields["flowaccount_synced_at"],
         "receipt_id": receipt_id,
-        "status": "VERIFIED",
-        "message": "Receipt verified and saved successfully.",
-        "bigquery_rows_inserted": rows_inserted,
-        "already_verified": False,
+        "confirm_resync": verified_data.confirm_resync,
+    }
+    firestore_service.record_receipt_flowaccount_sync(
+        receipt_id=receipt_id,
+        fields=sync_fields,
+        history=history,
+    )
+
+    return {
+        **verify_response,
+        "flowaccount_synced": True,
+        "flowaccount_record_id": ids["record_id"],
+        "flowaccount_document_id": ids["document_id"],
+        "flowaccount_document_serial": ids["document_serial"],
+        "flowaccount_attachment_synced": attachment_synced,
+        "flowaccount_attachment_error": attachment_error,
+        "flowaccount_payment_method": flowaccount_payment_method,
+        "flowaccount_bank_account_id": selected_bank_account_id,
+        "flowaccount_bank_account_label": selected_bank_account_label,
     }

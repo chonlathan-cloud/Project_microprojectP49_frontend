@@ -47,6 +47,21 @@ def _normalize_string_list(values: object) -> list[str]:
     return normalized_values
 
 
+def _normalize_party_payload(value: object) -> dict:
+    if not isinstance(value, dict):
+        value = {}
+    return {
+        "brand_name": _normalize_optional_text(value.get("brand_name")),
+        "legal_name": _normalize_optional_text(value.get("legal_name")),
+        "branch_name": _normalize_optional_text(value.get("branch_name")),
+        "tax_id": _normalize_optional_text(value.get("tax_id")),
+        "contact_person": _normalize_optional_text(value.get("contact_person")),
+        "email": _normalize_optional_text(value.get("email")),
+        "phone": _normalize_optional_text(value.get("phone")),
+        "address": _normalize_optional_text(value.get("address")),
+    }
+
+
 def _unique_non_empty(values: list[str]) -> list[str]:
     unique_values: list[str] = []
     for value in values:
@@ -343,13 +358,16 @@ Allowed category IDs:
 
 Rules:
 1) Return only real purchased items.
-2) Remove noise lines (tax id, member points, payment method, QR, references).
+2) Remove tax IDs, phone numbers, emails, addresses, member points, payment method, QR, and references from items only.
 3) amount must be positive float.
 4) date must be YYYY-MM-DD when possible, otherwise null.
-5) merchant should be a store name, not numeric-only tax IDs.
+5) header.merchant should be the seller/issuer/dealer name, not the buyer/customer name and not numeric-only tax IDs.
 6) category_id must be one of allowed IDs, else null.
 7) If VAT/Tax amount is explicitly present, populate header.vat AND add one line item for VAT.
-8) If uncertain, keep item with lower confidence but still valid structure.
+8) Extract seller/dealer/supplier fields separately from line items.
+9) In Thai receipts, ผู้ขาย, ผู้ออก, ผู้ออกใบเสร็จ, supplier, vendor, dealer = seller. ชื่อลูกค้า, ลูกค้า, ผู้ซื้อ, buyer, customer = buyer.
+10) Extract เลขประจำตัวผู้เสียภาษี/เลขที่เสียภาษี/tax id, อีเมล/email, เบอร์โทร/tel/phone, ผู้ติดต่อ/contact person, and ที่อยู่/address into seller or buyer when labels exist.
+11) If uncertain, keep item with lower confidence but still valid structure.
 
 OCR full text:
 {full_text}
@@ -377,11 +395,32 @@ Output JSON format:
     "overall": 0.0,
     "notes": ["short reason"]
   }},
+  "seller": {{
+    "brand_name": "string|null",
+    "legal_name": "string|null",
+    "branch_name": "string|null",
+    "tax_id": "string|null",
+    "contact_person": "string|null",
+    "email": "string|null",
+    "phone": "string|null",
+    "address": "string|null"
+  }},
+  "buyer": {{
+    "brand_name": "string|null",
+    "legal_name": "string|null",
+    "branch_name": "string|null",
+    "tax_id": "string|null",
+    "contact_person": "string|null",
+    "email": "string|null",
+    "phone": "string|null",
+    "address": "string|null"
+  }},
   "document_context": {{
     "buyer_name": "string|null",
     "invoice_number": "string|null",
     "receipt_number": "string|null",
     "tax_invoice_number": "string|null",
+    "due_date": "YYYY-MM-DD|null",
     "payment_reference": "string|null",
     "store_branch": "string|null",
     "notes": ["short reason or extra clue from receipt"]
@@ -457,6 +496,8 @@ Output JSON format:
         confidence_summary = parsed.get("confidence_summary", {})
         if not isinstance(confidence_summary, dict):
             confidence_summary = {}
+        seller = _normalize_party_payload(parsed.get("seller"))
+        buyer = _normalize_party_payload(parsed.get("buyer"))
         document_context = parsed.get("document_context", {})
         if not isinstance(document_context, dict):
             document_context = {}
@@ -470,11 +511,14 @@ Output JSON format:
             },
             "items": normalized_items,
             "confidence_summary": confidence_summary,
+            "seller": seller,
+            "buyer": buyer,
             "document_context": {
                 "buyer_name": _normalize_optional_text(document_context.get("buyer_name")),
                 "invoice_number": _normalize_optional_text(document_context.get("invoice_number")),
                 "receipt_number": _normalize_optional_text(document_context.get("receipt_number")),
                 "tax_invoice_number": _normalize_optional_text(document_context.get("tax_invoice_number")),
+                "due_date": _normalize_optional_text(document_context.get("due_date")),
                 "payment_reference": _normalize_optional_text(document_context.get("payment_reference")),
                 "store_branch": _normalize_optional_text(document_context.get("store_branch")),
                 "notes": _normalize_string_list(document_context.get("notes")),
@@ -530,13 +574,16 @@ Allowed category IDs:
 
 Rules:
 1) Keep only purchased line items with positive amount.
-2) Ignore tax IDs, loyalty/member points, payment references, QR, phone numbers.
+2) Do not put tax IDs, phone numbers, emails, addresses, loyalty/member points, payment references, or QR data in items.
 3) Preserve Thai text as-is from the receipt where possible.
 4) date must be YYYY-MM-DD when confidently parsed, otherwise null.
-5) merchant should be store name (not numeric-only).
+5) header.merchant should be the seller/issuer/dealer name, not the buyer/customer name and not numeric-only tax IDs.
 6) category_id must be one of allowed IDs, otherwise null.
 7) If VAT/Tax amount is explicitly present, populate header.vat AND add one line item for VAT.
-8) Return strict JSON only, no markdown.
+8) Extract seller/dealer/supplier fields separately from line items.
+9) In Thai receipts, ผู้ขาย, ผู้ออก, ผู้ออกใบเสร็จ, supplier, vendor, dealer = seller. ชื่อลูกค้า, ลูกค้า, ผู้ซื้อ, buyer, customer = buyer.
+10) Extract เลขประจำตัวผู้เสียภาษี/เลขที่เสียภาษี/tax id, อีเมล/email, เบอร์โทร/tel/phone, ผู้ติดต่อ/contact person, and ที่อยู่/address into seller or buyer when labels exist.
+11) Return strict JSON only, no markdown.
 
 Output JSON:
 {{
@@ -558,11 +605,32 @@ Output JSON:
     "overall": 0.0,
     "notes": ["short reason"]
   }},
+  "seller": {{
+    "brand_name": "string|null",
+    "legal_name": "string|null",
+    "branch_name": "string|null",
+    "tax_id": "string|null",
+    "contact_person": "string|null",
+    "email": "string|null",
+    "phone": "string|null",
+    "address": "string|null"
+  }},
+  "buyer": {{
+    "brand_name": "string|null",
+    "legal_name": "string|null",
+    "branch_name": "string|null",
+    "tax_id": "string|null",
+    "contact_person": "string|null",
+    "email": "string|null",
+    "phone": "string|null",
+    "address": "string|null"
+  }},
   "document_context": {{
     "buyer_name": "string|null",
     "invoice_number": "string|null",
     "receipt_number": "string|null",
     "tax_invoice_number": "string|null",
+    "due_date": "YYYY-MM-DD|null",
     "payment_reference": "string|null",
     "store_branch": "string|null",
     "notes": ["short reason or extra clue from receipt"]
@@ -657,6 +725,8 @@ Output JSON:
             confidence_summary = parsed.get("confidence_summary", {})
             if not isinstance(confidence_summary, dict):
                 confidence_summary = {}
+            seller = _normalize_party_payload(parsed.get("seller"))
+            buyer = _normalize_party_payload(parsed.get("buyer"))
             document_context = parsed.get("document_context", {})
             if not isinstance(document_context, dict):
                 document_context = {}
@@ -670,11 +740,14 @@ Output JSON:
                 },
                 "items": normalized_items,
                 "confidence_summary": confidence_summary,
+                "seller": seller,
+                "buyer": buyer,
                 "document_context": {
                     "buyer_name": _normalize_optional_text(document_context.get("buyer_name")),
                     "invoice_number": _normalize_optional_text(document_context.get("invoice_number")),
                     "receipt_number": _normalize_optional_text(document_context.get("receipt_number")),
                     "tax_invoice_number": _normalize_optional_text(document_context.get("tax_invoice_number")),
+                    "due_date": _normalize_optional_text(document_context.get("due_date")),
                     "payment_reference": _normalize_optional_text(document_context.get("payment_reference")),
                     "store_branch": _normalize_optional_text(document_context.get("store_branch")),
                     "notes": _normalize_string_list(document_context.get("notes")),

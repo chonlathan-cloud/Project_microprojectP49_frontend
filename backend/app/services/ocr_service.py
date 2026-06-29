@@ -80,6 +80,17 @@ def _normalize_text(value: str) -> str:
     return " ".join(str(value).strip().split())
 
 
+def _safe_match_group(match, name: str, fallback_index: int | None = None) -> str:
+    group_value = match.groupdict().get(name)
+    if group_value is not None:
+        return group_value
+
+    if fallback_index is not None and (match.lastindex or 0) >= fallback_index:
+        return match.group(fallback_index)
+
+    return ""
+
+
 def _preprocess_image(file_content: bytes, mime_type: str) -> tuple[bytes, str, dict]:
     """
     Normalize image orientation/size for faster OCR and better recognition quality.
@@ -196,8 +207,8 @@ def _extract_line_items_from_text(text: str) -> list[dict]:
         if not match:
             continue
 
-        description = _normalize_text(match.group("description"))
-        amount = _parse_amount(match.group("amount"))
+        description = _normalize_text(_safe_match_group(match, "description", 1))
+        amount = _parse_amount(_safe_match_group(match, "amount", 2))
         if amount is None:
             continue
 
@@ -258,8 +269,8 @@ def _build_line_item_candidates(entities: list[dict], full_text: str) -> list[di
         match = LINE_ITEM_AMOUNT_PATTERN.match(mention_text)
         if not match:
             continue
-        description = _normalize_text(match.group("description"))
-        amount = _parse_amount(match.group("amount"))
+        description = _normalize_text(_safe_match_group(match, "description", 1))
+        amount = _parse_amount(_safe_match_group(match, "amount", 2))
         if not description or amount is None:
             continue
         if _is_noise_text(description):
@@ -333,7 +344,7 @@ def _build_header_candidates(entities: list[dict], full_text: str, line_items: l
             match = LINE_ITEM_AMOUNT_PATTERN.match(line)
             if not match:
                 continue
-            parsed_total = _parse_amount(match.group("amount"))
+            parsed_total = _parse_amount(_safe_match_group(match, "amount", 2))
             if parsed_total is not None:
                 totals.append({"value": round(parsed_total, 2), "confidence": 0.65, "source": "text_total_line"})
         if any(keyword in lowered for keyword in VAT_LINE_KEYWORDS):

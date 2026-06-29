@@ -1,0 +1,4 @@
+interface:
+  display_name: "GCP Project Ops"
+  short_description: "Read-only Google Cloud diagnostics"
+  default_prompt: "Use $gcp-project-ops to inspect read-only Google Cloud status for project the49-487609."

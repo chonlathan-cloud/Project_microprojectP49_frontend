@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.api import api_router
+from app.core.config import settings
 
 # --- FastAPI Application Entry Point ---
 # Reference: LDD Section 1 (main.py), TDD Section 4.2 (CORS)
@@ -14,11 +15,11 @@ app = FastAPI(
 
 # --- CORS Middleware ---
 # Reference: TDD Section 4.2 (Security - CORS)
-# Allow all origins for local development. Restrict in production.
+# Origins are loaded from BACKEND_CORS_ORIGINS as a comma-separated list.
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.BACKEND_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -1,17 +1,19 @@
 "use client";
 
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
-import { auth, db } from "@/lib/firebase";
+import api from "@/lib/api";
+import { auth } from "@/lib/firebase";
 
 type UserProfile = {
+  uid?: string;
   display_name?: string;
   email?: string;
   role?: string;
   default_branch_id?: string;
   created_at?: string;
+  profile_exists?: boolean;
 };
 
 type AuthContextValue = {
@@ -52,17 +54,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       void (async () => {
         try {
-          const profileDoc = await getDoc(doc(db, "users", nextUser.uid));
+          const response = await api.get<UserProfile>("/api/v1/auth/me");
           if (!isMounted) {
             return;
           }
 
-          if (profileDoc.exists()) {
-            setProfile(profileDoc.data() as UserProfile);
-          } else {
-            setProfile(null);
-          }
-        } catch {
+          setProfile(response.data);
+        } catch (error) {
+          console.warn("Failed to load authenticated user profile.", error);
           if (isMounted) {
             setProfile(null);
           }

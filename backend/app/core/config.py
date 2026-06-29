@@ -21,6 +21,30 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_text(name: str, default: str = "") -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip()
+    if value.lower() in {"none", "null", "undefined"}:
+        return ""
+    return value
+
+
+def _env_list(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return list(default)
+
+    values = []
+    for item in raw.split(","):
+        value = item.strip().strip('"').strip("'").rstrip("/")
+        if value:
+            values.append(value)
+
+    return values or list(default)
+
+
 class Settings:
     """
     Application settings loaded from environment variables.
@@ -43,7 +67,7 @@ class Settings:
     DOCAI_PROCESSOR_ID: str = os.getenv("DOCAI_PROCESSOR_ID", "")
 
     # Vertex AI
-    VERTEX_AI_MODEL: str = os.getenv("VERTEX_AI_MODEL", "gemini-pro")
+    VERTEX_AI_MODEL: str = os.getenv("VERTEX_AI_MODEL", "gemini-2.5-flash")
     VERTEX_AI_INSIGHT_MODEL: str = os.getenv(
         "VERTEX_AI_INSIGHT_MODEL", "gemini-2.5-pro"
     )
@@ -52,13 +76,13 @@ class Settings:
     )
     VERTEX_AI_RECEIPT_MODEL: str = os.getenv(
         "VERTEX_AI_RECEIPT_MODEL",
-        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
     )
     AI_INSIGHT_TIMEOUT_MS: int = _env_int("AI_INSIGHT_TIMEOUT_MS", 25000)
     RECEIPT_EXTRACTION_MODE: str = os.getenv(
         "RECEIPT_EXTRACTION_MODE", "vision_first"
     ).strip().lower()
-    VISION_TIMEOUT_MS: int = _env_int("VISION_TIMEOUT_MS", 9000)
+    VISION_TIMEOUT_MS: int = _env_int("VISION_TIMEOUT_MS", 20000)
     VISION_MAX_RETRY: int = _env_int("VISION_MAX_RETRY", 0)
     VISION_PREPROCESS_ENABLED: bool = _env_bool("VISION_PREPROCESS_ENABLED", True)
     VISION_MAX_IMAGE_EDGE: int = _env_int("VISION_MAX_IMAGE_EDGE", 1400)
@@ -81,7 +105,7 @@ class Settings:
 
     # Database
     FIRESTORE_DB: str = os.getenv("FIRESTORE_DB", "(default)")
-    BIGQUERY_DATASET: str = os.getenv("BIGQUERY_DATASET", "the491_analytics")
+    BIGQUERY_DATASET: str = os.getenv("BIGQUERY_DATASET", "the49_analytics")
     BRANCH_CACHE_TTL_SECONDS: int = _env_int("BRANCH_CACHE_TTL_SECONDS", 600)
     REDIS_HOST: str = os.getenv("REDIS_HOST", "").strip()
     REDIS_PORT: int = _env_int("REDIS_PORT", 6379)
@@ -95,7 +119,60 @@ class Settings:
     except ValueError:
         SIGNED_URL_EXPIRY_SECONDS: int = 1800
 
+    # FlowAccount
+    FLOWACCOUNT_ENABLED: bool = _env_bool("FLOWACCOUNT_ENABLED", False)
+    FLOWACCOUNT_BASE_URL: str = os.getenv(
+        "FLOWACCOUNT_BASE_URL", "https://openapi.flowaccount.com/test"
+    ).rstrip("/")
+    FLOWACCOUNT_CLIENT_ID: str = _env_text("FLOWACCOUNT_CLIENT_ID")
+    FLOWACCOUNT_CLIENT_SECRET: str = _env_text("FLOWACCOUNT_CLIENT_SECRET")
+    FLOWACCOUNT_SCOPE: str = _env_text("FLOWACCOUNT_SCOPE", "flowaccount-api")
+    FLOWACCOUNT_GUID: str = _env_text("FLOWACCOUNT_GUID")
+    FLOWACCOUNT_TOKEN_CACHE_SECONDS: int = _env_int(
+        "FLOWACCOUNT_TOKEN_CACHE_SECONDS", 84000
+    )
+    FLOWACCOUNT_TIMEOUT_SECONDS: int = _env_int("FLOWACCOUNT_TIMEOUT_SECONDS", 20)
+    FLOWACCOUNT_DEFAULT_PAYMENT_METHOD: str = _env_text(
+        "FLOWACCOUNT_DEFAULT_PAYMENT_METHOD", "CASH"
+    ).upper()
+    FLOWACCOUNT_DEFAULT_PAYMENT_CHANNEL: str = _env_text(
+        "FLOWACCOUNT_DEFAULT_PAYMENT_CHANNEL", "Cash"
+    )
+    FLOWACCOUNT_BANK_ACCOUNT_ID: int = _env_int(
+        "FLOWACCOUNT_BANK_ACCOUNT_ID",
+        _env_int("FLOWACCOUNT_DEFAULT_BANK_ACCOUNT_ID", 0),
+    )
+    FLOWACCOUNT_EXPENSE_SYSTEM_CODE: int = _env_int(
+        "FLOWACCOUNT_EXPENSE_SYSTEM_CODE", 0
+    )
+    FLOWACCOUNT_EXPENSE_CATEGORY_ID: int = _env_int(
+        "FLOWACCOUNT_EXPENSE_CATEGORY_ID", 0
+    )
+    FLOWACCOUNT_EXPENSE_CREDIT_ID: int = _env_int("FLOWACCOUNT_EXPENSE_CREDIT_ID", 0)
+    FLOWACCOUNT_EXPENSE_CREDIT_CATEGORY: int = _env_int(
+        "FLOWACCOUNT_EXPENSE_CREDIT_CATEGORY", 0
+    )
+    FLOWACCOUNT_EXPENSE_DEBIT_ID: int = _env_int("FLOWACCOUNT_EXPENSE_DEBIT_ID", 0)
+    FLOWACCOUNT_EXPENSE_DEBIT_CATEGORY: int = _env_int(
+        "FLOWACCOUNT_EXPENSE_DEBIT_CATEGORY", 0
+    )
+    FLOWACCOUNT_EXPENSE_CREDIT_CODE: str = _env_text("FLOWACCOUNT_EXPENSE_CREDIT_CODE")
+    FLOWACCOUNT_EXPENSE_CREDIT_NAME_LOCAL: str = _env_text(
+        "FLOWACCOUNT_EXPENSE_CREDIT_NAME_LOCAL"
+    )
+    FLOWACCOUNT_EXPENSE_CREDIT_NAME_FOREIGN: str = _env_text(
+        "FLOWACCOUNT_EXPENSE_CREDIT_NAME_FOREIGN"
+    )
+    FLOWACCOUNT_EXPENSE_DEBIT_CODE: str = _env_text("FLOWACCOUNT_EXPENSE_DEBIT_CODE")
+    FLOWACCOUNT_EXPENSE_DEBIT_NAME_LOCAL: str = _env_text(
+        "FLOWACCOUNT_EXPENSE_DEBIT_NAME_LOCAL"
+    )
+    FLOWACCOUNT_EXPENSE_DEBIT_NAME_FOREIGN: str = _env_text(
+        "FLOWACCOUNT_EXPENSE_DEBIT_NAME_FOREIGN"
+    )
+
     # Security
+    BACKEND_CORS_ORIGINS: list[str] = _env_list("BACKEND_CORS_ORIGINS", ["*"])
     FIREBASE_CREDENTIALS_PATH: str = os.getenv(
         "FIREBASE_CREDENTIALS_PATH", "./firebase-adminsdk.json"
     )

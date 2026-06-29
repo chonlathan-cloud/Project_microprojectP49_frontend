@@ -168,6 +168,10 @@ def update_receipt_status(
         update_payload["total_amount"] = verified_data["total_check"]
     if "verified_by" in verified_data:
         update_payload["verified_by"] = verified_data["verified_by"]
+    if "seller" in verified_data:
+        update_payload["seller"] = verified_data["seller"]
+    if "buyer" in verified_data:
+        update_payload["buyer"] = verified_data["buyer"]
 
     doc_ref.update(update_payload)
 
@@ -181,6 +185,23 @@ def update_receipt_fields(receipt_id: str, fields: dict) -> dict:
     """
     doc_ref = db.collection("receipts").document(receipt_id)
     doc_ref.update(fields)
+    return doc_ref.get().to_dict()
+
+
+def record_receipt_flowaccount_sync(
+    receipt_id: str,
+    fields: dict,
+    history: dict | None = None,
+) -> dict:
+    """
+    Store latest FlowAccount sync metadata on a receipt and append optional history.
+    """
+    doc_ref = db.collection("receipts").document(receipt_id)
+    doc_ref.update(fields)
+    if history is not None:
+        history_ref = doc_ref.collection("flowaccount_syncs").document()
+        history["id"] = history_ref.id
+        history_ref.set(history)
     return doc_ref.get().to_dict()
 
 
