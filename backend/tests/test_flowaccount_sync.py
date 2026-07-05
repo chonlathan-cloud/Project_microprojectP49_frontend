@@ -52,6 +52,16 @@ def _verified_receipt(flowaccount_synced=False):
         "flowaccount_synced": flowaccount_synced,
         "image_url": "gs://the491-receipts/receipts/test.jpg",
         "header": {"merchant": "Makro", "date": "2026-06-29", "total": 95.0},
+        "seller": {
+            "legal_name": "บริษัท แม็คโคร จำกัด",
+            "branch_name": "สำนักงานใหญ่",
+            "tax_id": "0123456789123",
+        },
+        "OCRbyGemini": {
+            "document_numbers": {
+                "tax_invoice_number": "TAX20260629001",
+            }
+        },
         "items": [
             {
                 "description": "Milk",
@@ -118,6 +128,82 @@ def test_paid_expense_payload_uses_seller_contact_fields():
     print("FlowAccount seller contact payload - PASSED")
 
 
+def test_paid_expense_payload_uses_tax_invoice_reference():
+    receipt = {
+        "id": "receipt_123",
+        "header": {
+            "merchant": "Makro",
+            "date": "2026-06-29",
+            "total": 95.0,
+        },
+        "items": [
+            {
+                "description": "Milk",
+                "amount": 95.0,
+                "category_name": "COGS",
+            }
+        ],
+        "adjustments": [],
+        "total_check": 95.0,
+    }
+
+    with patch("app.services.flowaccount_service.ensure_expense_configured"):
+        payload = real_flowaccount_service.build_paid_expense_payload(
+            receipt=receipt,
+            branch={"id": "branch_001", "name": "Siam Square One"},
+            payment_method="CASH",
+            reference="TAX20260629001",
+        )
+
+    assert payload["reference"] == "TAX20260629001"
+    assert payload["externalDocumentId"] == "receipt_123"
+    print("FlowAccount paid expense tax invoice reference - PASSED")
+
+
+def test_supplier_invoice_payload_uses_receipt_tax_details():
+    receipt = {
+        "id": "receipt_123",
+        "header": {
+            "merchant": "Fallback Merchant",
+            "date": "2026-06-29",
+            "total": 9630.0,
+            "vat": 630.0,
+        },
+        "seller": {
+            "legal_name": "บริษัท ซันเดย์ มาร์เก็ตติ้ง จำกัด",
+            "branch_name": "สำนักงานใหญ่",
+            "tax_id": "0123456789123",
+        },
+        "total_check": 9630.0,
+        "OCRbyGemini": {
+            "document_numbers": {
+                "tax_invoice_number": "TAX20260629001",
+            },
+            "financial_summary": {
+                "amount_before_vat": 9000.0,
+                "vat_amount": 630.0,
+                "grand_total": 9630.0,
+            },
+        },
+    }
+
+    payload = real_flowaccount_service.build_supplier_invoice_payload(
+        receipt=receipt,
+        include_file=False,
+    )
+
+    assert payload["documentSerial"] == "TAX20260629001"
+    assert payload["contactName"] == "บริษัท ซันเดย์ มาร์เก็ตติ้ง จำกัด"
+    assert payload["contactBranch"] == "สำนักงานใหญ่"
+    assert payload["contactTaxId"] == "0123456789123"
+    assert payload["documentDate"] == "2026-06-29"
+    assert payload["taxForm"] == 1
+    assert payload["vatableAmount"] == 9000.0
+    assert payload["vatAmount"] == 630.0
+    assert "file" not in payload
+    print("FlowAccount supplier invoice payload - PASSED")
+
+
 def test_verify_save_and_sync_success():
     updated_receipt = _verified_receipt()
     with patch("app.api.v1.endpoints.receipts.firestore_service") as mock_fs, \
@@ -145,10 +231,97 @@ def test_verify_save_and_sync_success():
         }
         mock_bq.insert_verified_receipt.return_value = 1
         mock_flow.ensure_configured.return_value = None
+        mock_flow.build_supplier_invoice_payload.return_value = {
+            "documentSerial": "TAX20260629001",
+        }
         mock_flow.create_paid_expense_from_receipt.return_value = {
             "recordId": 123,
             "documentId": 456,
             "documentSerial": "EXP2026060001",
+        }
+        mock_flow.create_supplier_invoice_from_receipt.return_value = {
+            "id": 789,
+            "documentSerial": "TAX20260629001",
+            "supplierInvoiceStatus": 3,
+        }
+        mock_flow.attach_receipt_file.return_value = {"status": True}
+
+        response = client.post(
+            "/api/v1/receipts/receipt_123/verify-and-sync-flowaccount",
+            json={
+                "items": [
+                    {"description": "Milk", "amount": 95.0, "category_id": "C1"}
+                ],
+                "adjustments": [],
+                "total_check": 95.0,
+                "confirm_resync": False,
+                "flowaccount_supplier_invoice_serial": "TAX20260629001",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["flowaccount_synced"] is True
+        assert data["flowaccount_record_id"] == "123"
+        assert data["flowaccount_document_serial"] == "EXP2026060001"
+        assert data["flowaccount_supplier_invoice_synced"] is True
+        assert data["flowaccount_supplier_invoice_serial"] == "TAX20260629001"
+        mock_flow.create_paid_expense_from_receipt.assert_called_once_with(
+            receipt=updated_receipt,
+            branch={
+                "id": "branch_001",
+                "name": "Siam Square One",
+                "type": "COFFEE",
+            },
+            payment_method="CASH",
+            bank_account_id=None,
+            transfer_bank_id=None,
+            reference="TAX20260629001",
+        )
+        mock_flow.create_supplier_invoice_from_receipt.assert_called_once()
+        mock_flow.attach_receipt_file.assert_called_once()
+        print("✅ Verify/save/sync success — PASSED")
+
+
+def test_verify_sync_reference_uses_resolved_supplier_invoice_serial():
+    updated_receipt = _verified_receipt()
+    with patch("app.api.v1.endpoints.receipts.firestore_service") as mock_fs, \
+         patch("app.api.v1.endpoints.receipts.bigquery_service") as mock_bq, \
+         patch("app.api.v1.endpoints.receipts.flowaccount_service") as mock_flow:
+
+        mock_fs.get_user_profile.return_value = {"role": "admin"}
+        mock_fs.get_receipt.return_value = {
+            "id": "receipt_123",
+            "branch_id": "branch_001",
+            "status": "DRAFT",
+            "image_url": "gs://the491-receipts/receipts/test.jpg",
+            "header": {"merchant": "Makro", "date": "2026-06-29", "total": 95.0},
+        }
+        mock_fs.get_branch_config.return_value = {
+            "id": "branch_001",
+            "name": "Siam Square One",
+            "type": "COFFEE",
+        }
+        mock_fs.update_receipt_status.return_value = updated_receipt
+        mock_fs.update_receipt_fields.return_value = updated_receipt
+        mock_fs.record_receipt_flowaccount_sync.return_value = {
+            **updated_receipt,
+            "flowaccount_synced": True,
+        }
+        mock_bq.insert_verified_receipt.return_value = 1
+        mock_flow.ensure_configured.return_value = None
+        mock_flow.build_supplier_invoice_payload.return_value = {
+            "documentSerial": "TAX20260629001",
+        }
+        mock_flow.create_paid_expense_from_receipt.return_value = {
+            "recordId": 123,
+            "documentId": 456,
+            "documentSerial": "EXP2026060001",
+        }
+        mock_flow.create_supplier_invoice_from_receipt.return_value = {
+            "id": 789,
+            "documentSerial": "TAX20260629001",
+            "supplierInvoiceStatus": 3,
         }
         mock_flow.attach_receipt_file.return_value = {"status": True}
 
@@ -165,13 +338,19 @@ def test_verify_save_and_sync_success():
         )
 
         assert response.status_code == 200
-        data = response.json()
-        assert data["flowaccount_synced"] is True
-        assert data["flowaccount_record_id"] == "123"
-        assert data["flowaccount_document_serial"] == "EXP2026060001"
-        mock_flow.create_paid_expense_from_receipt.assert_called_once()
-        mock_flow.attach_receipt_file.assert_called_once()
-        print("✅ Verify/save/sync success — PASSED")
+        mock_flow.create_paid_expense_from_receipt.assert_called_once_with(
+            receipt=updated_receipt,
+            branch={
+                "id": "branch_001",
+                "name": "Siam Square One",
+                "type": "COFFEE",
+            },
+            payment_method="CASH",
+            bank_account_id=None,
+            transfer_bank_id=None,
+            reference="TAX20260629001",
+        )
+        print("✅ FlowAccount reference from resolved tax invoice — PASSED")
 
 
 def test_already_synced_requires_confirmation():
@@ -230,7 +409,10 @@ if __name__ == "__main__":
     print()
 
     test_paid_expense_payload_uses_seller_contact_fields()
+    test_paid_expense_payload_uses_tax_invoice_reference()
+    test_supplier_invoice_payload_uses_receipt_tax_details()
     test_verify_save_and_sync_success()
+    test_verify_sync_reference_uses_resolved_supplier_invoice_serial()
     test_already_synced_requires_confirmation()
     test_staff_role_is_blocked()
 

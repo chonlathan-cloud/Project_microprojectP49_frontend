@@ -1,3 +1,4 @@
+import base64
 import json
 import mimetypes
 import time
@@ -126,6 +127,16 @@ def _seller_contact_fields(receipt: dict, fallback_name: str) -> dict:
         if value:
             fields[key] = value
     return fields
+
+
+def _get_document_numbers_payload(receipt: dict) -> dict:
+    document_numbers = _get_ocr_payload(receipt).get("document_numbers")
+    return document_numbers if isinstance(document_numbers, dict) else {}
+
+
+def _get_financial_summary_payload(receipt: dict) -> dict:
+    financial_summary = _get_ocr_payload(receipt).get("financial_summary")
+    return financial_summary if isinstance(financial_summary, dict) else {}
 
 
 def _redact_response_json(value):
@@ -369,11 +380,13 @@ def build_paid_expense_payload(
     payment_method: str | None = None,
     bank_account_id: int | None = None,
     transfer_bank_id: int | None = None,
+    reference: str | None = None,
 ) -> dict:
     ensure_expense_configured(payment_method, bank_account_id)
 
     header = _get_header(receipt)
     receipt_id = _safe_text(receipt.get("id"), "unknown")
+    flowaccount_reference = _safe_text(reference, receipt_id)
     document_date = _safe_text(header.get("date"), datetime.utcnow().date().isoformat())
     merchant_name = _safe_text(
         header.get("merchant"),
@@ -429,7 +442,7 @@ def build_paid_expense_payload(
         "creditDays": 0,
         "dueDate": document_date,
         "projectName": branch_name,
-        "reference": receipt_id,
+        "reference": flowaccount_reference,
         "isVatInclusive": False,
         "isManualVat": False,
         "expenseCategoryView": 3,
@@ -461,12 +474,133 @@ def build_paid_expense_payload(
     return payload
 
 
+def _normalize_supplier_invoice_tax_form(tax_form: int | None = None) -> int:
+    normalized = _safe_int(tax_form, 1)
+    if normalized not in {1, 3}:
+        raise FlowAccountConfigurationError(
+            "FlowAccount supplier invoice tax form must be 1 (P.P.30) or 3 (P.P.36)."
+        )
+    return normalized
+
+
+def _supplier_invoice_document_serial(
+    receipt: dict,
+    document_serial: str | None = None,
+) -> str:
+    document_numbers = _get_document_numbers_payload(receipt)
+    serial = _safe_text(
+        document_serial
+        or document_numbers.get("tax_invoice_number")
+        or document_numbers.get("invoice_number")
+        or document_numbers.get("receipt_number")
+    )
+    if not serial:
+        raise FlowAccountConfigurationError(
+            "Purchasing tax invoice number is required before syncing to FlowAccount."
+        )
+    return serial
+
+
+def _supplier_invoice_amount_fields(receipt: dict, tax_form: int) -> dict:
+    financial_summary = _get_financial_summary_payload(receipt)
+    header = _get_header(receipt)
+
+    vat_amount = _round_money(
+        financial_summary.get("vat_amount")
+        or header.get("vat")
+    )
+    vatable_amount = _round_money(financial_summary.get("amount_before_vat"))
+    if vatable_amount <= 0:
+        total = _round_money(
+            financial_summary.get("grand_total")
+            or receipt.get("total_check")
+            or receipt.get("total_amount")
+            or header.get("total")
+        )
+        if total > vat_amount:
+            vatable_amount = _round_money(total - vat_amount)
+
+    if tax_form == 3 and (vatable_amount <= 0 or vat_amount <= 0):
+        raise FlowAccountConfigurationError(
+            "P.P.36 supplier invoice sync requires positive vatable and VAT amounts."
+        )
+
+    fields = {}
+    if vatable_amount > 0:
+        fields["vatableAmount"] = vatable_amount
+    if vat_amount > 0:
+        fields["vatAmount"] = vat_amount
+    return fields
+
+
+def _supplier_invoice_file_payload(receipt: dict) -> dict | None:
+    try:
+        content, filename, _content_type = _download_receipt_file(receipt)
+    except (FlowAccountConfigurationError, FlowAccountAPIError):
+        return None
+
+    if not content or len(content) > 10 * 1024 * 1024:
+        return None
+
+    return {
+        "fileName": filename,
+        "base64Data": base64.b64encode(content).decode("ascii"),
+    }
+
+
+def build_supplier_invoice_payload(
+    receipt: dict,
+    document_serial: str | None = None,
+    tax_form: int | None = None,
+    include_file: bool = True,
+) -> dict:
+    header = _get_header(receipt)
+    merchant_name = _safe_text(
+        header.get("merchant"),
+        _safe_text(receipt.get("merchant_name"), "Receipt Vendor"),
+    )
+    seller = _get_seller_payload(receipt)
+    contact_name = _safe_text(
+        seller.get("legal_name") or seller.get("brand_name"),
+        merchant_name,
+    )
+    contact_branch = _safe_text(seller.get("branch_name"), "สำนักงานใหญ่")
+    normalized_tax_form = _normalize_supplier_invoice_tax_form(tax_form)
+    contact_tax_id = _normalize_tax_id(seller.get("tax_id"))
+    if normalized_tax_form == 1 and not contact_tax_id:
+        raise FlowAccountConfigurationError(
+            "Seller tax ID must contain 13 digits for P.P.30 purchasing tax invoice sync."
+        )
+
+    payload = {
+        "documentSerial": _supplier_invoice_document_serial(receipt, document_serial),
+        "contactName": contact_name,
+        "contactBranch": contact_branch,
+        "documentDate": _safe_text(
+            header.get("date"),
+            datetime.utcnow().date().isoformat(),
+        ),
+        "taxForm": normalized_tax_form,
+    }
+    if contact_tax_id:
+        payload["contactTaxId"] = contact_tax_id
+    payload.update(_supplier_invoice_amount_fields(receipt, normalized_tax_form))
+
+    if include_file:
+        file_payload = _supplier_invoice_file_payload(receipt)
+        if file_payload:
+            payload["file"] = file_payload
+
+    return payload
+
+
 def create_paid_expense_from_receipt(
     receipt: dict,
     branch: dict,
     payment_method: str | None = None,
     bank_account_id: int | None = None,
     transfer_bank_id: int | None = None,
+    reference: str | None = None,
 ) -> dict:
     ensure_configured()
     payload = build_paid_expense_payload(
@@ -475,6 +609,7 @@ def create_paid_expense_from_receipt(
         payment_method=payment_method,
         bank_account_id=bank_account_id,
         transfer_bank_id=transfer_bank_id,
+        reference=reference,
     )
     response = _request_json(
         "POST",
@@ -485,6 +620,38 @@ def create_paid_expense_from_receipt(
     data = response.get("data") if isinstance(response.get("data"), dict) else response
     if not isinstance(data, dict):
         raise FlowAccountAPIError("FlowAccount paid expense response is invalid.")
+    return data
+
+
+def create_supplier_invoice_from_receipt(
+    flowaccount_record_id: str,
+    receipt: dict,
+    document_serial: str | None = None,
+    tax_form: int | None = None,
+    include_file: bool = True,
+) -> dict:
+    ensure_configured()
+    record_id = _safe_text(flowaccount_record_id)
+    if not record_id:
+        raise FlowAccountConfigurationError(
+            "A FlowAccount expense record id is required for supplier invoice sync."
+        )
+
+    payload = build_supplier_invoice_payload(
+        receipt=receipt,
+        document_serial=document_serial,
+        tax_form=tax_form,
+        include_file=include_file,
+    )
+    response = _request_json(
+        "POST",
+        f"/expenses/{record_id}/supplier-invoice",
+        headers=_auth_headers(),
+        payload=payload,
+    )
+    data = response.get("data") if isinstance(response.get("data"), dict) else response
+    if not isinstance(data, dict):
+        raise FlowAccountAPIError("FlowAccount supplier invoice response is invalid.")
     return data
 
 

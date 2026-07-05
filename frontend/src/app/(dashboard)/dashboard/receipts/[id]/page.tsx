@@ -1,14 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Loader2, Plus, Send, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  GripVertical,
+  Loader2,
+  Plus,
+  Send,
+  Trash2
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import api from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 type AdjustmentType = "discount" | "service_charge" | "rounding" | "other";
 type PaymentMethod = "CASH" | "TRANSFER";
@@ -50,6 +60,12 @@ type ReceiptParty = {
   address?: string | null;
 };
 
+type ReceiptDocumentNumbers = {
+  invoice_number?: string | null;
+  receipt_number?: string | null;
+  tax_invoice_number?: string | null;
+};
+
 type ReceiptDetail = {
   id: string;
   branch_id: string;
@@ -62,11 +78,15 @@ type ReceiptDetail = {
   flowaccount_payment_method?: PaymentMethod | null;
   flowaccount_bank_account_id?: number | null;
   flowaccount_bank_account_label?: string | null;
+  flowaccount_supplier_invoice_synced?: boolean;
+  flowaccount_supplier_invoice_serial?: string | null;
+  flowaccount_supplier_invoice_error?: string | null;
   seller?: ReceiptParty | null;
   buyer?: ReceiptParty | null;
   OCRbyGemini?: {
     seller?: ReceiptParty | null;
     buyer?: ReceiptParty | null;
+    document_numbers?: ReceiptDocumentNumbers | null;
   } | null;
   header?: ReceiptHeader;
   items: ReceiptItem[];
@@ -151,6 +171,23 @@ const ADJUSTMENT_TYPE_OPTIONS: { value: AdjustmentType; label: string }[] = [
   { value: "other", label: "Other" }
 ];
 
+const RECEIPT_SPLIT_STORAGE_KEY = "the49-receipt-validation-split-percent";
+const DEFAULT_RECEIPT_SPLIT_PERCENT = 46;
+const RECEIPT_SPLIT_HANDLE_WIDTH = 12;
+const MIN_RECEIPT_IMAGE_WIDTH = 320;
+const MIN_RECEIPT_ITEMS_WIDTH = 480;
+
+function clampReceiptSplitPercent(percent: number, containerWidth = 1200): number {
+  const availableWidth = Math.max(containerWidth - RECEIPT_SPLIT_HANDLE_WIDTH, 1);
+  const minPercent = Math.min(45, (MIN_RECEIPT_IMAGE_WIDTH / availableWidth) * 100);
+  const maxPercent = Math.max(
+    minPercent,
+    ((availableWidth - MIN_RECEIPT_ITEMS_WIDTH) / availableWidth) * 100
+  );
+
+  return Math.min(maxPercent, Math.max(minPercent, percent));
+}
+
 function getFallbackCategoryOptions(
   branchType: ReceiptDetail["branch_type"]
 ): CategoryOption[] {
@@ -177,6 +214,19 @@ function hasPartyValues(party?: ReceiptParty | null): boolean {
     return false;
   }
   return Object.values(party).some((value) => String(value || "").trim().length > 0);
+}
+
+function getSupplierInvoiceSerial(receipt?: ReceiptDetail | null): string {
+  if (!receipt) {
+    return "";
+  }
+  return (
+    receipt.flowaccount_supplier_invoice_serial ||
+    receipt.OCRbyGemini?.document_numbers?.tax_invoice_number ||
+    receipt.OCRbyGemini?.document_numbers?.invoice_number ||
+    receipt.OCRbyGemini?.document_numbers?.receipt_number ||
+    ""
+  );
 }
 
 function convertGsUriToHttps(uri?: string | null): string {
@@ -252,6 +302,7 @@ export default function ReceiptValidationPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const receiptId = params?.id;
+  const splitPaneRef = useRef<HTMLDivElement | null>(null);
 
   const [receipt, setReceipt] = useState<ReceiptDetail | null>(null);
   const [items, setItems] = useState<EditableItem[]>([]);
@@ -269,8 +320,13 @@ export default function ReceiptValidationPage() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("TRANSFER");
   const [bankAccounts, setBankAccounts] = useState<FlowAccountBankAccount[]>([]);
   const [selectedBankAccountId, setSelectedBankAccountId] = useState<string>("");
+  const [supplierInvoiceSerial, setSupplierInvoiceSerial] = useState("");
   const [bankAccountsLoading, setBankAccountsLoading] = useState(false);
   const [bankAccountsError, setBankAccountsError] = useState<string | null>(null);
+  const [receiptSplitPercent, setReceiptSplitPercent] = useState(
+    DEFAULT_RECEIPT_SPLIT_PERCENT
+  );
+  const [isSplitPaneResizing, setIsSplitPaneResizing] = useState(false);
 
   useEffect(() => {
     if (!receiptId) {
@@ -296,6 +352,7 @@ export default function ReceiptValidationPage() {
         if (response.data.flowaccount_bank_account_id) {
           setSelectedBankAccountId(String(response.data.flowaccount_bank_account_id));
         }
+        setSupplierInvoiceSerial(getSupplierInvoiceSerial(response.data));
         const responseSeller = hasPartyValues(response.data.seller)
           ? response.data.seller
           : response.data.OCRbyGemini?.seller;
@@ -332,6 +389,16 @@ export default function ReceiptValidationPage() {
       isMounted = false;
     };
   }, [receiptId]);
+
+  useEffect(() => {
+    const savedPercent = Number(window.localStorage.getItem(RECEIPT_SPLIT_STORAGE_KEY));
+
+    if (Number.isFinite(savedPercent)) {
+      setReceiptSplitPercent(
+        clampReceiptSplitPercent(savedPercent, splitPaneRef.current?.clientWidth)
+      );
+    }
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -451,6 +518,74 @@ export default function ReceiptValidationPage() {
     [bankAccounts, selectedBankAccountId]
   );
   const isSubmitting = saving || syncingToFlowAccount;
+
+  function updateReceiptSplitFromPointer(clientX: number, persist = false) {
+    const container = splitPaneRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    const rect = container.getBoundingClientRect();
+    const nextPercent = clampReceiptSplitPercent(
+      ((clientX - rect.left) / rect.width) * 100,
+      rect.width
+    );
+
+    setReceiptSplitPercent(nextPercent);
+
+    if (persist) {
+      window.localStorage.setItem(RECEIPT_SPLIT_STORAGE_KEY, nextPercent.toFixed(2));
+    }
+  }
+
+  function handleSplitPanePointerDown(event: PointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    setIsSplitPaneResizing(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updateReceiptSplitFromPointer(event.clientX);
+  }
+
+  function handleSplitPanePointerMove(event: PointerEvent<HTMLButtonElement>) {
+    if (!isSplitPaneResizing) {
+      return;
+    }
+
+    updateReceiptSplitFromPointer(event.clientX);
+  }
+
+  function handleSplitPanePointerUp(event: PointerEvent<HTMLButtonElement>) {
+    if (!isSplitPaneResizing) {
+      return;
+    }
+
+    updateReceiptSplitFromPointer(event.clientX, true);
+    setIsSplitPaneResizing(false);
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleSplitPaneKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+
+    event.preventDefault();
+    const direction = event.key === "ArrowLeft" ? -1 : 1;
+    const step = event.shiftKey ? 5 : 2;
+
+    setReceiptSplitPercent((currentPercent) => {
+      const nextPercent = clampReceiptSplitPercent(
+        currentPercent + direction * step,
+        splitPaneRef.current?.clientWidth
+      );
+      window.localStorage.setItem(RECEIPT_SPLIT_STORAGE_KEY, nextPercent.toFixed(2));
+
+      return nextPercent;
+    });
+  }
 
   function updateItem(index: number, patch: Partial<EditableItem>) {
     setItems((prev) =>
@@ -604,6 +739,14 @@ export default function ReceiptValidationPage() {
       setError("Please select a transfer bank account before syncing to FlowAccount.");
       return;
     }
+    if (!supplierInvoiceSerial.trim()) {
+      setError("Purchasing tax invoice number is required before syncing to FlowAccount.");
+      return;
+    }
+    if (seller.tax_id.replace(/\D/g, "").length !== 13) {
+      setError("Dealer tax ID must contain 13 digits for purchasing tax invoice sync.");
+      return;
+    }
 
     setSyncingToFlowAccount(true);
     setError(null);
@@ -621,13 +764,22 @@ export default function ReceiptValidationPage() {
           flowaccount_transfer_bank_id:
             paymentMethod === "TRANSFER" ? selectedBankAccount?.bank_id : undefined,
           flowaccount_bank_account_label:
-            paymentMethod === "TRANSFER" ? selectedBankAccount?.label : undefined
+            paymentMethod === "TRANSFER" ? selectedBankAccount?.label : undefined,
+          flowaccount_supplier_invoice_serial: supplierInvoiceSerial.trim(),
+          flowaccount_supplier_invoice_tax_form: 1
         }
       );
       const documentSerial =
         typeof response.data?.flowaccount_document_serial === "string"
           ? response.data.flowaccount_document_serial
           : "";
+      const supplierInvoiceSynced = Boolean(
+        response.data?.flowaccount_supplier_invoice_synced
+      );
+      const syncedSupplierInvoiceSerial =
+        typeof response.data?.flowaccount_supplier_invoice_serial === "string"
+          ? response.data.flowaccount_supplier_invoice_serial
+          : supplierInvoiceSerial.trim();
       setReceipt((current) =>
         current
           ? {
@@ -639,16 +791,35 @@ export default function ReceiptValidationPage() {
               flowaccount_bank_account_id:
                 paymentMethod === "TRANSFER" ? selectedBankAccount?.bank_account_id : null,
               flowaccount_bank_account_label:
-                paymentMethod === "TRANSFER" ? selectedBankAccount?.label : null
+                paymentMethod === "TRANSFER" ? selectedBankAccount?.label : null,
+              flowaccount_supplier_invoice_synced: supplierInvoiceSynced,
+              flowaccount_supplier_invoice_serial: syncedSupplierInvoiceSerial,
+              flowaccount_supplier_invoice_error:
+                typeof response.data?.flowaccount_supplier_invoice_error === "string"
+                  ? response.data.flowaccount_supplier_invoice_error
+                  : null
             }
           : current
       );
       setShowResyncConfirm(false);
-      setToastMessage(
-        documentSerial
-          ? `Receipt saved and synced to FlowAccount document ${documentSerial}.`
-          : "Receipt saved and synced to FlowAccount."
-      );
+      if (supplierInvoiceSynced) {
+        setToastMessage(
+          documentSerial
+            ? `Receipt saved and synced to FlowAccount document ${documentSerial} with Purchasing Tax Invoice Details.`
+            : "Receipt saved and synced to FlowAccount with Purchasing Tax Invoice Details."
+        );
+      } else {
+        setToastMessage(
+          documentSerial
+            ? `Receipt saved and synced to FlowAccount document ${documentSerial}.`
+            : "Receipt saved and synced to FlowAccount."
+        );
+        setError(
+          typeof response.data?.flowaccount_supplier_invoice_error === "string"
+            ? `Purchasing Tax Invoice Details failed: ${response.data.flowaccount_supplier_invoice_error}`
+            : "Purchasing Tax Invoice Details failed to sync."
+        );
+      }
     } catch (syncError) {
       if (getResponseStatus(syncError) === 409) {
         setShowResyncConfirm(true);
@@ -781,6 +952,18 @@ export default function ReceiptValidationPage() {
                 : ""}
             </p>
           ) : null}
+          <p className="mt-1 text-emerald-700">
+            Purchasing Tax Invoice Details:{" "}
+            {receipt.flowaccount_supplier_invoice_synced ? "synced" : "not synced"}
+            {receipt.flowaccount_supplier_invoice_serial
+              ? ` - ${receipt.flowaccount_supplier_invoice_serial}`
+              : ""}
+          </p>
+          {receipt.flowaccount_supplier_invoice_error ? (
+            <p className="mt-1 text-amber-700">
+              {receipt.flowaccount_supplier_invoice_error}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -807,12 +990,23 @@ export default function ReceiptValidationPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
+      <div
+        ref={splitPaneRef}
+        className={cn(
+          "grid gap-6 xl:grid-cols-[minmax(0,var(--receipt-image-pane))_0.75rem_minmax(0,1fr)] xl:gap-0",
+          isSplitPaneResizing && "select-none"
+        )}
+        style={
+          {
+            "--receipt-image-pane": `${receiptSplitPercent}%`
+          } as CSSProperties
+        }
+      >
+        <Card className="min-w-0 overflow-hidden">
           <CardHeader>
             <CardTitle>Receipt Image</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="xl:max-h-[calc(100vh-15rem)] xl:overflow-auto">
             {canPreviewMedia ? (
               isPdf ? (
                 <object
@@ -828,7 +1022,7 @@ export default function ReceiptValidationPage() {
                 <img
                   src={imageUrl}
                   alt={`Receipt ${receiptId}`}
-                  className="w-full rounded-lg border border-slate-200 object-contain"
+                  className="mx-auto max-h-[70vh] w-full rounded-lg border border-slate-200 object-contain"
                 />
               )
             ) : (
@@ -849,10 +1043,33 @@ export default function ReceiptValidationPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+        <div className="hidden items-stretch justify-center px-1 xl:flex">
+          <button
+            type="button"
+            role="separator"
+            aria-label="Resize receipt image and extracted items"
+            aria-orientation="vertical"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(receiptSplitPercent)}
+            className={cn(
+              "group flex h-full min-h-[70vh] w-3 cursor-col-resize items-center justify-center rounded-md border border-transparent text-slate-400 outline-none transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:border-slate-300 focus-visible:ring-2 focus-visible:ring-slate-400",
+              isSplitPaneResizing && "bg-slate-100 text-slate-700"
+            )}
+            onPointerDown={handleSplitPanePointerDown}
+            onPointerMove={handleSplitPanePointerMove}
+            onPointerUp={handleSplitPanePointerUp}
+            onPointerCancel={handleSplitPanePointerUp}
+            onKeyDown={handleSplitPaneKeyDown}
+          >
+            <GripVertical className="h-5 w-5" />
+          </button>
+        </div>
+
+        <Card className="min-w-0 overflow-hidden">
+          <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle>Extracted Items</CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button type="button" variant="outline" size="sm" onClick={addItem} disabled={isSubmitting}>
                 <Plus className="mr-2 h-4 w-4" />
                 Add Item
@@ -869,31 +1086,104 @@ export default function ReceiptValidationPage() {
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 xl:max-h-[calc(100vh-15rem)] xl:overflow-y-auto">
+            <div className="space-y-3 rounded-lg border border-slate-200 p-4">
+              <p className="text-sm font-medium text-slate-900">Dealer Details</p>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="dealer-legal-name">Dealer Name</Label>
+                  <Input
+                    id="dealer-legal-name"
+                    value={seller.legal_name}
+                    onChange={(event) => updateSeller({ legal_name: event.target.value })}
+                    disabled={isSubmitting}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="dealer-tax-id">Tax ID</Label>
+                  <Input
+                    id="dealer-tax-id"
+                    value={seller.tax_id}
+                    onChange={(event) => updateSeller({ tax_id: event.target.value })}
+                    disabled={isSubmitting}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="dealer-branch-name">Branch</Label>
+                  <Input
+                    id="dealer-branch-name"
+                    value={seller.branch_name}
+                    onChange={(event) => updateSeller({ branch_name: event.target.value })}
+                    disabled={isSubmitting}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="dealer-contact-person">Contact Person</Label>
+                  <Input
+                    id="dealer-contact-person"
+                    value={seller.contact_person}
+                    onChange={(event) => updateSeller({ contact_person: event.target.value })}
+                    disabled={isSubmitting}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="dealer-email">Email</Label>
+                  <Input
+                    id="dealer-email"
+                    type="email"
+                    value={seller.email}
+                    onChange={(event) => updateSeller({ email: event.target.value })}
+                    disabled={isSubmitting}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="dealer-phone">Phone</Label>
+                  <Input
+                    id="dealer-phone"
+                    value={seller.phone}
+                    onChange={(event) => updateSeller({ phone: event.target.value })}
+                    disabled={isSubmitting}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="dealer-address">Address</Label>
+                <textarea
+                  id="dealer-address"
+                  className="flex min-h-24 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                  value={seller.address}
+                  onChange={(event) => updateSeller({ address: event.target.value })}
+                  disabled={isSubmitting}
+                />
+              </div>
+            </div>
+
             {items.length === 0 ? (
               <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
                 No extracted items yet. Click Add Item to insert a line.
               </p>
             ) : (
-              <div className="space-y-4">
-                {items.map((item, index) => (
-                  <div key={`item-${index}`} className="rounded-lg border border-slate-200 p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <p className="text-sm font-medium text-slate-700">Line Item {index + 1}</p>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => removeItem(index)}
-                        disabled={isSubmitting}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
+              <div className="overflow-x-auto pb-1">
+                <div className="min-w-[780px] space-y-2">
+                  <div className="grid grid-cols-[3.75rem_minmax(220px,1fr)_8.5rem_minmax(220px,0.85fr)_2.5rem] items-center gap-3 px-3 text-xs font-medium uppercase tracking-wide text-slate-500">
+                    <span>Line</span>
+                    <span>Description</span>
+                    <span>Amount</span>
+                    <span>Category</span>
+                    <span className="sr-only">Actions</span>
+                  </div>
 
-                    <div className="grid gap-3">
-                      <div className="space-y-1.5">
-                        <Label htmlFor={`description-${index}`}>Description</Label>
+                  {items.map((item, index) => (
+                    <div
+                      key={`item-${index}`}
+                      className="grid grid-cols-[3.75rem_minmax(220px,1fr)_8.5rem_minmax(220px,0.85fr)_2.5rem] items-center gap-3 rounded-lg border border-slate-200 bg-white p-3"
+                    >
+                      <p className="text-sm font-medium text-slate-700">#{index + 1}</p>
+
+                      <div>
+                        <Label htmlFor={`description-${index}`} className="sr-only">
+                          Description
+                        </Label>
                         <Input
                           id={`description-${index}`}
                           value={item.description}
@@ -904,44 +1194,58 @@ export default function ReceiptValidationPage() {
                         />
                       </div>
 
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="space-y-1.5">
-                          <Label htmlFor={`amount-${index}`}>Amount</Label>
-                          <Input
-                            id={`amount-${index}`}
-                            type="number"
-                            step="0.01"
-                            value={item.amount}
-                            onChange={(event) =>
-                              updateItem(index, { amount: event.target.value })
-                            }
-                            disabled={isSubmitting}
-                          />
-                        </div>
-
-                        <div className="space-y-1.5">
-                          <Label htmlFor={`category-${index}`}>Category</Label>
-                          <select
-                            id={`category-${index}`}
-                            className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                            value={item.category_id}
-                            onChange={(event) =>
-                              updateItem(index, { category_id: event.target.value })
-                            }
-                            disabled={isSubmitting}
-                          >
-                            <option value="">Select category</option>
-                            {categoryOptions.map((category) => (
-                              <option key={category.id} value={category.id}>
-                                {category.id} - {category.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                      <div>
+                        <Label htmlFor={`amount-${index}`} className="sr-only">
+                          Amount
+                        </Label>
+                        <Input
+                          id={`amount-${index}`}
+                          type="number"
+                          step="0.01"
+                          value={item.amount}
+                          onChange={(event) =>
+                            updateItem(index, { amount: event.target.value })
+                          }
+                          disabled={isSubmitting}
+                        />
                       </div>
+
+                      <div>
+                        <Label htmlFor={`category-${index}`} className="sr-only">
+                          Category
+                        </Label>
+                        <select
+                          id={`category-${index}`}
+                          className="flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                          value={item.category_id}
+                          onChange={(event) =>
+                            updateItem(index, { category_id: event.target.value })
+                          }
+                          disabled={isSubmitting}
+                        >
+                          <option value="">Select category</option>
+                          {categoryOptions.map((category) => (
+                            <option key={category.id} value={category.id}>
+                              {category.id} - {category.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        aria-label={`Remove line item ${index + 1}`}
+                        title={`Remove line item ${index + 1}`}
+                        onClick={() => removeItem(index)}
+                        disabled={isSubmitting}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             )}
 
@@ -1051,73 +1355,23 @@ export default function ReceiptValidationPage() {
             </div>
 
             <div className="space-y-3 rounded-lg border border-slate-200 p-4">
-              <p className="text-sm font-medium text-slate-900">Dealer Details</p>
+              <p className="text-sm font-medium text-slate-900">
+                Purchasing Tax Invoice Details
+              </p>
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-1.5">
-                  <Label htmlFor="dealer-legal-name">Dealer Name</Label>
+                  <Label htmlFor="supplier-invoice-serial">Tax Invoice Number</Label>
                   <Input
-                    id="dealer-legal-name"
-                    value={seller.legal_name}
-                    onChange={(event) => updateSeller({ legal_name: event.target.value })}
+                    id="supplier-invoice-serial"
+                    value={supplierInvoiceSerial}
+                    onChange={(event) => setSupplierInvoiceSerial(event.target.value)}
                     disabled={isSubmitting}
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="dealer-tax-id">Tax ID</Label>
-                  <Input
-                    id="dealer-tax-id"
-                    value={seller.tax_id}
-                    onChange={(event) => updateSeller({ tax_id: event.target.value })}
-                    disabled={isSubmitting}
-                  />
+                  <Label htmlFor="supplier-invoice-tax-form">Tax Form</Label>
+                  <Input id="supplier-invoice-tax-form" value="P.P.30" disabled />
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="dealer-branch-name">Branch</Label>
-                  <Input
-                    id="dealer-branch-name"
-                    value={seller.branch_name}
-                    onChange={(event) => updateSeller({ branch_name: event.target.value })}
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="dealer-contact-person">Contact Person</Label>
-                  <Input
-                    id="dealer-contact-person"
-                    value={seller.contact_person}
-                    onChange={(event) => updateSeller({ contact_person: event.target.value })}
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="dealer-email">Email</Label>
-                  <Input
-                    id="dealer-email"
-                    type="email"
-                    value={seller.email}
-                    onChange={(event) => updateSeller({ email: event.target.value })}
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="dealer-phone">Phone</Label>
-                  <Input
-                    id="dealer-phone"
-                    value={seller.phone}
-                    onChange={(event) => updateSeller({ phone: event.target.value })}
-                    disabled={isSubmitting}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="dealer-address">Address</Label>
-                <textarea
-                  id="dealer-address"
-                  className="flex min-h-24 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                  value={seller.address}
-                  onChange={(event) => updateSeller({ address: event.target.value })}
-                  disabled={isSubmitting}
-                />
               </div>
             </div>
 

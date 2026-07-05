@@ -1462,6 +1462,18 @@ def _flowaccount_response_ids(flowaccount_document: dict) -> dict:
     }
 
 
+def _flowaccount_supplier_invoice_fields(supplier_invoice: dict | None) -> dict:
+    data = supplier_invoice if isinstance(supplier_invoice, dict) else {}
+    return {
+        "id": str(data.get("id") or data.get("supplierInvoiceId") or "").strip(),
+        "document_serial": str(
+            data.get("documentSerial") or data.get("document_serial") or ""
+        ).strip(),
+        "status": data.get("supplierInvoiceStatus")
+        or data.get("supplier_invoice_status"),
+    }
+
+
 def _assert_flowaccount_sync_allowed(current_user: dict) -> None:
     user_profile = firestore_service.get_user_profile(current_user.get("uid", "")) or {}
     normalized_role = str(user_profile.get("role", "staff")).strip().lower()
@@ -1709,15 +1721,31 @@ async def verify_receipt_and_sync_flowaccount(
     selected_bank_account_label = str(
         verified_data.flowaccount_bank_account_label or ""
     ).strip()
+    supplier_invoice_serial = str(
+        verified_data.flowaccount_supplier_invoice_serial or ""
+    ).strip()
+    supplier_invoice_tax_form = verified_data.flowaccount_supplier_invoice_tax_form or 1
 
     sync_started_at = datetime.utcnow().isoformat()
     try:
+        supplier_invoice_payload = flowaccount_service.build_supplier_invoice_payload(
+            receipt=receipt,
+            document_serial=supplier_invoice_serial,
+            tax_form=supplier_invoice_tax_form,
+            include_file=False,
+        )
+        flowaccount_reference = supplier_invoice_serial
+        if isinstance(supplier_invoice_payload, dict):
+            flowaccount_reference = str(
+                supplier_invoice_payload.get("documentSerial") or flowaccount_reference
+            ).strip()
         flowaccount_document = flowaccount_service.create_paid_expense_from_receipt(
             receipt=receipt,
             branch=branch,
             payment_method=flowaccount_payment_method,
             bank_account_id=selected_bank_account_id,
             transfer_bank_id=selected_transfer_bank_id,
+            reference=flowaccount_reference,
         )
         ids = _flowaccount_response_ids(flowaccount_document)
         flowaccount_record_id = ids["record_id"] or ids["document_id"]
@@ -1752,6 +1780,34 @@ async def verify_receipt_and_sync_flowaccount(
             detail=str(exc),
         ) from exc
 
+    supplier_invoice_synced = True
+    supplier_invoice_error = None
+    supplier_invoice_fields = {
+        "id": "",
+        "document_serial": supplier_invoice_serial,
+        "status": None,
+    }
+    try:
+        supplier_invoice_document = flowaccount_service.create_supplier_invoice_from_receipt(
+            flowaccount_record_id=flowaccount_record_id,
+            receipt=receipt,
+            document_serial=supplier_invoice_serial,
+            tax_form=supplier_invoice_tax_form,
+            include_file=True,
+        )
+        supplier_invoice_fields = _flowaccount_supplier_invoice_fields(
+            supplier_invoice_document
+        )
+        supplier_invoice_fields["document_serial"] = (
+            supplier_invoice_fields["document_serial"] or supplier_invoice_serial
+        )
+    except (
+        flowaccount_service.FlowAccountConfigurationError,
+        flowaccount_service.FlowAccountAPIError,
+    ) as exc:
+        supplier_invoice_synced = False
+        supplier_invoice_error = str(exc)
+
     attachment_synced = True
     attachment_error = None
     try:
@@ -1778,6 +1834,12 @@ async def verify_receipt_and_sync_flowaccount(
         "flowaccount_bank_account_id": selected_bank_account_id,
         "flowaccount_transfer_bank_id": selected_transfer_bank_id,
         "flowaccount_bank_account_label": selected_bank_account_label,
+        "flowaccount_supplier_invoice_synced": supplier_invoice_synced,
+        "flowaccount_supplier_invoice_error": supplier_invoice_error,
+        "flowaccount_supplier_invoice_id": supplier_invoice_fields["id"],
+        "flowaccount_supplier_invoice_serial": supplier_invoice_fields["document_serial"],
+        "flowaccount_supplier_invoice_status": supplier_invoice_fields["status"],
+        "flowaccount_supplier_invoice_tax_form": supplier_invoice_tax_form,
     }
     history = {
         **sync_fields,
@@ -1802,4 +1864,10 @@ async def verify_receipt_and_sync_flowaccount(
         "flowaccount_payment_method": flowaccount_payment_method,
         "flowaccount_bank_account_id": selected_bank_account_id,
         "flowaccount_bank_account_label": selected_bank_account_label,
+        "flowaccount_supplier_invoice_synced": supplier_invoice_synced,
+        "flowaccount_supplier_invoice_error": supplier_invoice_error,
+        "flowaccount_supplier_invoice_id": supplier_invoice_fields["id"],
+        "flowaccount_supplier_invoice_serial": supplier_invoice_fields["document_serial"],
+        "flowaccount_supplier_invoice_status": supplier_invoice_fields["status"],
+        "flowaccount_supplier_invoice_tax_form": supplier_invoice_tax_form,
     }

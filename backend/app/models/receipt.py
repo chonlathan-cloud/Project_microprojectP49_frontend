@@ -135,3 +135,5 @@ class ReceiptVerifyFlowAccount(ReceiptVerify):
     flowaccount_bank_account_id: Optional[int] = None
     flowaccount_transfer_bank_id: Optional[int] = None
     flowaccount_bank_account_label: Optional[str] = None
+    flowaccount_supplier_invoice_serial: Optional[str] = None
+    flowaccount_supplier_invoice_tax_form: Optional[int] = 1

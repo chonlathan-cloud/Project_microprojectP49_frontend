@@ -23,12 +23,29 @@ type AuthContextValue = {
   loading: boolean;
 };
 
+const AUTH_STATE_TIMEOUT_MS = 12000;
+const PROFILE_TIMEOUT_MS = 15000;
+
 const AuthContext = createContext<AuthContextValue>({
   user: null,
   profile: null,
   displayName: "Authenticated User",
   loading: true
 });
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -37,12 +54,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let isMounted = true;
+    let authStateResolved = false;
+
+    const authStateTimeout = setTimeout(() => {
+      if (!isMounted || authStateResolved) {
+        return;
+      }
+
+      console.warn("Timed out while observing authentication state.");
+      setUser(null);
+      setProfile(null);
+      setLoading(false);
+    }, AUTH_STATE_TIMEOUT_MS);
+
+    function resolveAuthState() {
+      authStateResolved = true;
+      clearTimeout(authStateTimeout);
+    }
 
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
       if (!isMounted) {
         return;
       }
 
+      resolveAuthState();
       setUser(nextUser);
 
       if (!nextUser) {
@@ -54,7 +89,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(true);
       void (async () => {
         try {
-          const response = await api.get<UserProfile>("/api/v1/auth/me");
+          const response = await withTimeout(
+            api.get<UserProfile>("/api/v1/auth/me"),
+            PROFILE_TIMEOUT_MS,
+            "Timed out while loading authenticated user profile."
+          );
           if (!isMounted) {
             return;
           }
@@ -71,10 +110,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         }
       })();
+    }, (authError) => {
+      console.warn("Failed to observe authentication state.", authError);
+      if (!isMounted) {
+        return;
+      }
+
+      resolveAuthState();
+      setUser(null);
+      setProfile(null);
+      setLoading(false);
     });
 
     return () => {
       isMounted = false;
+      clearTimeout(authStateTimeout);
       unsubscribe();
     };
   }, []);

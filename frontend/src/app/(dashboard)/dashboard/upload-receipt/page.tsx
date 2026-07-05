@@ -16,6 +16,8 @@ type UploadResponse = {
   processing_path?: "vision_direct" | "ocr_refined" | "ocr_parser";
 };
 
+const UPLOAD_TIMEOUT_MS = 120000;
+
 function getErrorMessage(error: unknown): string {
   if (
     typeof error === "object" &&
@@ -29,6 +31,30 @@ function getErrorMessage(error: unknown): string {
     if (typeof detail === "string" && detail.length > 0) {
       return detail;
     }
+
+    const statusCode = (error as { response?: { status?: unknown } }).response?.status;
+    if (statusCode === 408 || statusCode === 504) {
+      return "Receipt processing timed out. Please try again.";
+    }
+  }
+
+  if (
+    typeof error === "object" &&
+    error &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ECONNABORTED"
+  ) {
+    return "Receipt processing timed out. Please try again.";
+  }
+
+  if (
+    typeof error === "object" &&
+    error &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string" &&
+    (error as { message: string }).message.toLowerCase().includes("timeout")
+  ) {
+    return "Receipt processing timed out. Please try again.";
   }
   return "Upload failed. Please try again.";
 }
@@ -114,7 +140,8 @@ export default function UploadReceiptPage() {
       const response = await api.post<UploadResponse>("/api/v1/receipts/upload", formData, {
         headers: {
           "Content-Type": "multipart/form-data"
-        }
+        },
+        timeout: UPLOAD_TIMEOUT_MS
       });
       if (typeof window !== "undefined") {
         window.localStorage.setItem("last_selected_branch_id", selectedBranchId);
