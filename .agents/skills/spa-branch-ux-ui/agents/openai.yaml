@@ -1,0 +1,15 @@
+interface:
+  display_name: "Spa Branch UX/UI"
+  short_description: "Design and validate Spa Admin and Customer UI"
+  default_prompt: "Use $spa-branch-ux-ui to design or review a Spa branch Admin or Customer experience against the approved sources."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "stitch"
+      description: "Read-only visual references for the two approved Spa Stitch projects"
+      transport: "streamable_http"
+      url: "https://stitch.googleapis.com/mcp"
+
+policy:
+  allow_implicit_invocation: true
