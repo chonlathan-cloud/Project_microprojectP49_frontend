@@ -18,6 +18,14 @@ Build a coherent Spa branch experience from approved product artifacts, local de
 - Do not use any other Stitch project as inspiration, fallback, or source material.
 - Do not invent business rules, roles, permissions, pricing, availability logic, booking constraints, or backend contracts. Mark missing decisions and defer them to the requirements/design sequence.
 
+## Authenticate Stitch Safely
+
+1. Try one read-only call through the configured Stitch MCP connection first. The repository configuration maps `X-Goog-Api-Key` from the `STITCH_API_KEY` environment variable.
+2. If the call returns a generic authentication failure such as `Auth required` or `401`, or reports a missing/invalid API-key credential, retrieve the latest enabled value of Secret Manager secret `STITCH-API-KEY` from GCP project `the49-487609`. Supply it only to the runtime process as `STITCH_API_KEY` for one retry; honor any required cloud or sandbox approval.
+3. Never print the value, return it in tool output, place it in a command argument, write it to disk, persist it in `.codex/config.toml`, or commit it. Capture it directly from Secret Manager into the environment of the process that needs it.
+4. Retry one read-only Stitch call. If the response says OAuth 2.0 is required, API keys are unsupported, or equivalent, stop. Do not repeatedly read the secret; report that an OAuth flow is required because an API key cannot replace OAuth authorization.
+5. If the current Codex Desktop MCP transport cannot reload environment variables, explain that the Desktop application must be restarted after a secure environment update. Continue from approved local `DESIGN.md` and `FLOW_STITCH.md` sources when live Stitch access is unavailable and label that limitation.
+
 ## Respect the Delivery Sequence
 
 Use approved artifacts in this order as they become available:
@@ -87,4 +95,3 @@ Apply authority by dimension rather than treating every source as interchangeabl
 - Compare relevant pages against the matching Stitch screens through read-only retrieval when visual fidelity matters.
 - Check both Thai and English states, primary interaction paths, responsive behavior, focus order, empty/error states, and representative long content.
 - Report changed files, verified commands/viewports, material assumptions, source conflicts, and remaining requirements gaps.
-

@@ -33,3 +33,12 @@ Recent commits use short summaries such as `add NoSQL` and `cache branches...`. 
 ## Security & Configuration Tips
 
 Create backend secrets from `backend/.env.example`; do not commit `.env`, Firebase Admin SDK JSON files, or cloud credentials. Keep deployment changes in `deploy_Backend.sh` and `deploy_Frontend.sh` explicit and documented in the PR.
+
+### Stitch Credential Fallback
+
+- Keep Stitch read-only and follow `.agents/skills/spa-branch-ux-ui/SKILL.md` for the approved project boundary.
+- Try the configured Stitch MCP connection once before retrieving another credential.
+- If the request returns a generic authentication failure such as `Auth required` or `401`, or reports a missing/invalid API-key header, Codex may read the latest enabled value of Secret Manager secret `STITCH-API-KEY` from project `the49-487609` and supply it only as the runtime `STITCH_API_KEY` / `X-Goog-Api-Key` value for one retry.
+- Never print, log, paste into tool output, commit, write to a repository file, or persist the secret value in `.codex/config.toml`. Capture it directly into the environment of the process that needs it; obey any sandbox or cloud-access approval prompt.
+- If Stitch explicitly returns `OAuth 2.0 required`, `API keys are not supported`, or an equivalent response, stop the API-key fallback after one attempt. Report that OAuth authorization is required; repeatedly reading the same secret cannot satisfy OAuth.
+- A running Codex Desktop process may require a secure environment update and application restart before its configured MCP transport can see a newly loaded `STITCH_API_KEY`.
