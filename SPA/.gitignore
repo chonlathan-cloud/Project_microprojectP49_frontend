@@ -1,0 +1,16 @@
+node_modules/
+.next/
+coverage/
+playwright-report/
+test-results/
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+openapi.json

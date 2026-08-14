@@ -1,0 +1,55 @@
+from enum import StrEnum
+
+
+class ActorType(StrEnum):
+    GUEST = "GUEST"
+    LINE_CUSTOMER = "LINE_CUSTOMER"
+    ADMIN_USER = "ADMIN_USER"
+    LINE_GROUP_MEMBER = "LINE_GROUP_MEMBER"
+    SERVICE = "SERVICE"
+
+
+class AppRole(StrEnum):
+    ADMIN = "ADMIN"
+    STAFF = "STAFF"
+
+
+class BookingStatus(StrEnum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    IN_SERVICE = "IN_SERVICE"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    NO_SHOW = "NO_SHOW"
+
+
+class BookingSource(StrEnum):
+    GUEST_WEB = "GUEST_WEB"
+    LIFF = "LIFF"
+    ADMIN_WEB = "ADMIN_WEB"
+
+
+class PricingMode(StrEnum):
+    PER_PARTICIPANT = "PER_PARTICIPANT"
+    PER_BOOKING = "PER_BOOKING"
+
+
+class CustomerProfileStatus(StrEnum):
+    PROVISIONAL = "PROVISIONAL"
+    VERIFIED = "VERIFIED"
+    MERGED = "MERGED"
+
+
+class ConsentPurpose(StrEnum):
+    BOOKING_PRIVACY_ACK = "BOOKING_PRIVACY_ACK"
+    HEALTH_DATA_EXPLICIT = "HEALTH_DATA_EXPLICIT"
+    SECOND_PARTICIPANT_AUTHORIZATION = "SECOND_PARTICIPANT_AUTHORIZATION"
+
+
+class OutboxState(StrEnum):
+    PENDING = "PENDING"
+    ENQUEUED = "ENQUEUED"
+    PROCESSING = "PROCESSING"
+    RETRYABLE = "RETRYABLE"
+    SENT = "SENT"
+    FAILED = "FAILED"
