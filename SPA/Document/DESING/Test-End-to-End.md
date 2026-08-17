@@ -1,29 +1,36 @@
 ## สถานะสำคัญก่อนเริ่ม
 
-  ตอนนี้ยังไม่สามารถรัน End-to-End Testing แบบครบวงจรได้ เพราะ implementation ปัจจุบันยังเป็น foundation/preview ตามที่ระบุใน SPA/README.md:13
+ระบบมี Test Cloud environment แยกจาก Production แล้ว ณ วันที่ 17 สิงหาคม 2026:
 
-  ส่วนที่ยังไม่ได้เชื่อมจริง ได้แก่:
+- Customer Web: `https://spa-customer-web-test-439060579730.asia-southeast1.run.app`
+- Admin Web: `https://spa-admin-web-test-439060579730.asia-southeast1.run.app`
+- API: `https://spa-api-test-439060579730.asia-southeast1.run.app`
+- Firestore: `spa-test-db` (PITR enabled, daily backup 7 วัน)
+- Worker: private `spa-notification-worker-test`
+- Cloud Tasks: `spa-line-notifications-test`
+- Cloud Scheduler: `spa-outbox-reconcile-test`
 
-  - Booking write API และ Firestore transaction
-  - Firebase Authentication
-  - LIFF / LINE Login
-  - LINE webhook handler
-  - LINE Messaging API sender
-  - Cloud Tasks / Cloud Scheduler
-  - reCAPTCHA verification
-  - Playwright E2E configuration
-  - Firestore/Auth Emulator configuration
-  - Admin actions และ Customer submit button ยังถูก disabled
+Booking write, 15-minute capacity transaction, secure status link, Firebase Admin Auth,
+Admin status actions, Cloud Tasks/Scheduler และ LINE sender เชื่อมจริงใน Test environment แล้ว
+ห้ามใช้ `spa-db` สำหรับ Automated Test หรือสร้าง test fixture
 
-  ดังนั้นคู่มือนี้แบ่งเป็น 3 ระดับ:
+ข้อจำกัดที่ยังต้องแก้ก่อน Full Production promotion:
+
+- LINE test access token ใช้งานได้ (`/v2/bot/info` = 200) แต่ push ไป Group ID ปัจจุบันได้ HTTP 400
+  ให้ตรวจว่า Bot ของ Admin Messaging channel ถูกเพิ่มในกลุ่มเดียวกับ `spa-line-admin-group-id`
+- Admin Google Sign-In อาจขอ Passkey/2-Step Verification ซึ่งเจ้าของบัญชีต้องยืนยันเอง
+- `/privacy` และ `/terms` เป็นเนื้อหาร่าง ต้องผ่าน Legal review ก่อนรับข้อมูลลูกค้าจริง
+- LIFF/LINE Login ฝั่ง Customer และ reCAPTCHA Enterprise ยังเป็น Production gate
+
+คู่มือนี้แบ่งเป็น 3 ระดับ:
 
    ระดับ       สิ่งที่ทดสอบ                                          สถานะ
   ━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    Level 1    Unit tests, API smoke tests, UI preview           รันได้แล้ว
   ─────────  ────────────────────────────────────────────────  ─────────────────────────────────────────
-   Level 2    Local E2E ผ่าน Emulator และ LINE provider stubs    ต้อง implement เพิ่ม
+   Level 2    Browser E2E กับ Test Cloud แบบไม่เขียน Booking      Playwright 6 scenarios ผ่านแล้ว
   ─────────  ────────────────────────────────────────────────  ─────────────────────────────────────────
-   Level 3    Pre-production E2E กับ LINE test channels จริง      ต้อง implement และ deploy spa-*-test ก่อน
+   Level 3    Pre-production E2E กับ LINE test channels จริง      พร้อมทดสอบ ยกเว้น LINE Group binding
 
   ———
 
@@ -44,12 +51,14 @@
   npm run lint
   npm run typecheck
   npm run build
+  npm run test:e2e
 
   ผลที่ผมตรวจสอบล่าสุด:
 
   - Shared TypeScript tests: 2 passed
   - ESLint: passed
   - TypeScript typecheck: passed
+  - Playwright desktop/mobile: 6 passed
 
   ### 1.2 รัน API tests
 
@@ -62,7 +71,7 @@
 
   ผลปัจจุบัน:
 
-  17 passed
+  23 passed
 
   รัน API สำหรับ manual smoke test:
 
@@ -74,7 +83,8 @@
   curl -fsS http://127.0.0.1:8080/health/ready
   curl -fsS http://127.0.0.1:8080/api/v1/public/services
 
-  Availability API ปัจจุบันจะคืน slots: [] และ RESOURCE_CONFIGURATION_REQUIRED โดยตั้งใจ เพราะยังไม่มี resource/capacity configuration
+  Test Cloud seed มี 7 เตียง เปิดใช้งานเริ่มต้น 5 เตียง และ Availability คำนวณทุก 15 นาที
+  ตลอด duration ของบริการจริง
 
   ### 1.3 รัน Notification Worker tests
 
@@ -85,7 +95,7 @@
 
   ผลปัจจุบัน:
 
-  3 passed
+  5 passed
 
   รัน Worker:
 
@@ -116,7 +126,8 @@
 
   http://localhost:3001
 
-  ตอนนี้ UI ใช้ preview data เท่านั้น จึงใช้ตรวจ layout, responsive behavior และ navigation ได้ แต่ยังทดสอบการสร้างหรือยืนยัน Booking จริงไม่ได้
+  UI ทั้งสองฝั่งใช้ Live Test API แล้ว Customer Web สร้าง Booking จริงใน `spa-test-db` ได้
+  และ Admin Web ยืนยัน/ยกเลิกผ่าน Firebase ID token พร้อม optimistic version ได้
 
   ———
 
@@ -130,7 +141,7 @@
   ─────────────  ────────────────────────────────────  ───────────────────────────────────  ────────────────────────
    Test Cloud     แยก test database/resources           LINE test channels และ test group    Manual integration/E2E
   ─────────────  ────────────────────────────────────  ───────────────────────────────────  ────────────────────────
-   Production     Named database spa                    Production LINE channels             UAT/production เท่านั้น
+   Production     Named database spa-db                 Production LINE channels             UAT/production เท่านั้น
 
   CI ต้องไม่ใช้ production LINE credentials, production Group ID หรือ production Firestore data ตาม SPA/Document/TDD.md:852
 
@@ -246,7 +257,8 @@
   NEXT_PUBLIC_LINE_LIFF_ID=test-stub
   NEXT_PUBLIC_RECAPTCHA_SITE_KEY=test-stub
 
-  คำเตือน: Environment variables เหล่านี้ยังไม่ได้ถูกอ่านโดย frontend ปัจจุบัน จึงต้อง implement integration ก่อน
+  Admin Web อ่าน Firebase public configuration และ `SPA_API_URL` แล้ว Customer Web อ่าน
+  `SPA_API_URL` ผ่าน server-side proxy; LIFF ID และ reCAPTCHA site key ยังเป็น gate ที่ต้องเพิ่ม
 
   ———
 
@@ -572,7 +584,9 @@
 
   ## สรุป
 
-  คุณสามารถรัน unit tests, API smoke tests และ UI preview ได้แล้ว แต่ Full E2E ยังต้อง implement infrastructure/test harness และ integrations
+  คุณสามารถรัน unit tests, API smoke tests, Customer Booking E2E, Capacity/Idempotency check
+  และ Admin Firebase flow ใน Test Cloud ได้แล้ว Full E2E จะผ่านเมื่อแก้ LINE Group binding,
+  เจ้าของบัญชียืนยัน Passkey และเพิ่ม LIFF/reCAPTCHA/automated browser harness ครบ
   ที่กล่าวข้างต้นก่อน โดยลำดับพัฒนาที่เหมาะสมคือ:
 
   1. Firebase Emulator + Firestore repositories

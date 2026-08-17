@@ -1,0 +1,259 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import re
+from datetime import UTC, datetime
+from typing import Annotated, Literal
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from google.api_core.exceptions import AlreadyExists
+from google.cloud import firestore
+
+from app.infrastructure.firestore import get_firestore_client
+
+router = APIRouter(prefix="/api/v1/webhooks/line", tags=["line-webhooks"])
+
+Channel = Literal["customer", "admin"]
+CONFIRM_COMMAND = re.compile(r"^ยืนยันการจอง\s+(BK-[A-Za-z0-9-]+)$")
+
+
+def _channel_secret(channel: Channel) -> str:
+    variable = (
+        "LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET"
+        if channel == "customer"
+        else "LINE_ADMIN_MESSAGING_CHANNEL_SECRET"
+    )
+    secret = os.getenv(variable, "")
+    if not secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LINE webhook channel secret is not configured",
+        )
+    return secret
+
+
+def _valid_signature(raw_body: bytes, signature: str, secret: str) -> bool:
+    digest = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).digest()
+    expected = base64.b64encode(digest).decode("ascii")
+    return hmac.compare_digest(expected, signature)
+
+
+def _dedupe_key(channel: Channel, event: dict[str, object]) -> str:
+    webhook_event_id = event.get("webhookEventId")
+    if webhook_event_id:
+        return f"{channel}_{webhook_event_id}"
+    canonical = json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"{channel}_fallback_{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def _source_projection(event: dict[str, object]) -> dict[str, object]:
+    source = event.get("source")
+    if not isinstance(source, dict):
+        return {}
+    return {
+        "sourceType": source.get("type"),
+        "hasUserId": bool(source.get("userId")),
+        "hasGroupId": bool(source.get("groupId")),
+        "hasRoomId": bool(source.get("roomId")),
+    }
+
+
+def _capture_admin_group_candidate(
+    client: firestore.Client,
+    *,
+    channel: Channel,
+    event: dict[str, object],
+) -> None:
+    if channel != "admin":
+        return
+    source = event.get("source")
+    if not isinstance(source, dict) or source.get("type") != "group":
+        return
+    group_id = source.get("groupId")
+    if not isinstance(group_id, str) or not group_id:
+        return
+    now = datetime.now(UTC)
+    candidate_id = hashlib.sha256(group_id.encode("utf-8")).hexdigest()
+    ref = client.collection("line_group_candidates").document(candidate_id)
+    snapshot = ref.get()
+    record: dict[str, object] = {
+        "channel": channel,
+        "sourceType": "group",
+        "groupId": group_id,
+        "lastSeenAt": now,
+    }
+    if not snapshot.exists:
+        record["firstSeenAt"] = now
+    ref.set(record, merge=True)
+
+
+def _process_admin_command(
+    client: firestore.Client,
+    *,
+    event: dict[str, object],
+    webhook_ref,
+) -> None:
+    message = event.get("message")
+    source = event.get("source")
+    if not isinstance(message, dict) or message.get("type") != "text":
+        return
+    match = CONFIRM_COMMAND.fullmatch(str(message.get("text", "")).strip())
+    if not match:
+        return
+    configured_group = os.getenv("LINE_ADMIN_GROUP_ID", "")
+    if (
+        not configured_group
+        or not isinstance(source, dict)
+        or source.get("type") != "group"
+        or source.get("groupId") != configured_group
+        or not source.get("userId")
+    ):
+        webhook_ref.set(
+            {"processingState": "REJECTED", "processedAt": datetime.now(UTC)},
+            merge=True,
+        )
+        return
+    booking_id = match.group(1)
+    matches = list(
+        client.collection("bookings").where("publicBookingId", "==", booking_id).limit(1).stream()
+    )
+    if not matches:
+        webhook_ref.set(
+            {
+                "processingState": "REJECTED",
+                "result": "BOOKING_NOT_FOUND",
+                "processedAt": datetime.now(UTC),
+            },
+            merge=True,
+        )
+        return
+    booking_ref = matches[0].reference
+    transaction = client.transaction()
+
+    @firestore.transactional
+    def confirm(tx: firestore.Transaction) -> str:
+        snapshot = booking_ref.get(transaction=tx)
+        booking = snapshot.to_dict() or {}
+        current = str(booking.get("status", ""))
+        now = datetime.now(UTC)
+        if current != "PENDING":
+            return current
+        tx.update(
+            booking_ref,
+            {
+                "status": "CONFIRMED",
+                "version": int(booking.get("version", 1)) + 1,
+                "updatedAt": now,
+            },
+        )
+        audit_ref = client.collection("audit_events").document()
+        tx.set(
+            audit_ref,
+            {
+                "eventType": "BOOKING_STATUS_CHANGED",
+                "bookingDocId": booking_ref.id,
+                "publicBookingId": booking_id,
+                "actorType": "LINE_GROUP_APPROVER",
+                "actorId": str(source["userId"]),
+                "groupId": configured_group,
+                "fromStatus": "PENDING",
+                "toStatus": "CONFIRMED",
+                "webhookEventId": event.get("webhookEventId"),
+                "createdAt": now,
+            },
+        )
+        outbox_ref = client.collection("notification_outbox").document()
+        tx.set(
+            outbox_ref,
+            {
+                "eventId": outbox_ref.id,
+                "eventType": "BOOKING_CONFIRMED",
+                "aggregateId": booking_ref.id,
+                "publicBookingId": booking_id,
+                "state": "PENDING",
+                "enqueueGeneration": 0,
+                "createdAt": now,
+                "updatedAt": now,
+            },
+        )
+        return "CONFIRMED"
+
+    result = confirm(transaction)
+    webhook_ref.set(
+        {"processingState": "PROCESSED", "result": result, "processedAt": datetime.now(UTC)},
+        merge=True,
+    )
+
+
+async def _receive(
+    channel: Channel,
+    request: Request,
+    signature: str | None,
+    client: firestore.Client,
+) -> dict[str, int | str]:
+    raw_body = await request.body()
+    if not signature or not _valid_signature(raw_body, signature, _channel_secret(channel)):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid LINE webhook signature",
+        )
+    try:
+        payload = json.loads(raw_body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=400, detail="Invalid LINE webhook body") from error
+    events = payload.get("events", []) if isinstance(payload, dict) else []
+    if not isinstance(events, list):
+        raise HTTPException(status_code=400, detail="LINE webhook events must be an array")
+
+    accepted = 0
+    duplicates = 0
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        _capture_admin_group_candidate(client, channel=channel, event=event)
+        key = _dedupe_key(channel, event)
+        record = {
+            "dedupeKey": key,
+            "channel": channel,
+            "eventType": event.get("type"),
+            "timestamp": event.get("timestamp"),
+            "deliveryIsRedelivery": bool(
+                isinstance(event.get("deliveryContext"), dict)
+                and event["deliveryContext"].get("isRedelivery")
+            ),
+            **_source_projection(event),
+            "processingState": "RECEIVED",
+            "receivedAt": datetime.now(UTC),
+        }
+        try:
+            webhook_ref = client.collection("line_webhook_events").document(key)
+            webhook_ref.create(record)
+            accepted += 1
+            if channel == "admin":
+                _process_admin_command(client, event=event, webhook_ref=webhook_ref)
+        except AlreadyExists:
+            duplicates += 1
+
+    return {"status": "ok", "accepted": accepted, "duplicates": duplicates}
+
+
+@router.post("/customer")
+async def customer_webhook(
+    request: Request,
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+    x_line_signature: Annotated[str | None, Header(alias="x-line-signature")] = None,
+) -> dict[str, int | str]:
+    return await _receive("customer", request, x_line_signature, client)
+
+
+@router.post("/admin")
+async def admin_webhook(
+    request: Request,
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+    x_line_signature: Annotated[str | None, Header(alias="x-line-signature")] = None,
+) -> dict[str, int | str]:
+    return await _receive("admin", request, x_line_signature, client)

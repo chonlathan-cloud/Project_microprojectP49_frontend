@@ -1,6 +1,39 @@
 from fastapi.testclient import TestClient
 
+from app.infrastructure.firestore import get_firestore_client
 from app.main import app
+
+
+class MissingSnapshot:
+    exists = False
+
+    def to_dict(self):
+        return None
+
+
+class EmptyCollection:
+    def document(self, *_):
+        return self
+
+    def get(self):
+        return MissingSnapshot()
+
+    def where(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_):
+        return self
+
+    def stream(self):
+        return iter(())
+
+
+class EmptyFirestore:
+    def collection(self, *_):
+        return EmptyCollection()
+
+
+app.dependency_overrides[get_firestore_client] = EmptyFirestore
 
 client = TestClient(app)
 

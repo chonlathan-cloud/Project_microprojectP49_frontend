@@ -10,7 +10,8 @@ export const PREVIEW_BOOKINGS: PreviewBooking[] = [
     durationMinutes: 60,
     pax: 1,
     status: "PENDING",
-    healthAlert: true
+    healthAlert: true,
+    version: 1
   },
   {
     bookingId: "BK-20260815-002",
@@ -21,7 +22,8 @@ export const PREVIEW_BOOKINGS: PreviewBooking[] = [
     durationMinutes: 90,
     pax: 2,
     status: "CONFIRMED",
-    healthAlert: false
+    healthAlert: false,
+    version: 1
   },
   {
     bookingId: "BK-20260815-003",
@@ -33,6 +35,7 @@ export const PREVIEW_BOOKINGS: PreviewBooking[] = [
     pax: 1,
     status: "CONFIRMED",
     healthAlert: false,
+    version: 1,
     therapistName: "พี่น้อย"
   },
   {
@@ -45,6 +48,7 @@ export const PREVIEW_BOOKINGS: PreviewBooking[] = [
     pax: 1,
     status: "IN_SERVICE",
     healthAlert: false,
+    version: 1,
     therapistName: "พี่ฝน"
   }
 ];

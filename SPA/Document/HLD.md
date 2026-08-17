@@ -68,7 +68,7 @@ This HLD intentionally does not define exact API payloads, Firestore document sc
 | HLD-002 | Deploy regional resources in `asia-southeast1` and co-locate Cloud Run, Firestore, Cloud Tasks, and related services where supported. |
 | HLD-003 | Create four independently deployable applications: Customer Web, Admin Web, SPA API, and Notification Worker. |
 | HLD-004 | Use Next.js for both web applications and FastAPI for the API and Notification Worker. |
-| HLD-005 | Use a Firestore Native-mode named database `spa` as the Phase 1 operational database. Keep the existing Receipt `(default)` database separate and do not add BigQuery in Phase 1. |
+| HLD-005 | Use a Firestore Native-mode named database `spa-db` as the Phase 1 operational database. Keep the existing Receipt `(default)` database separate and do not add BigQuery in Phase 1. |
 | HLD-006 | Support two customer access modes: verified LINE-linked access and anonymous Website Guest access. |
 | HLD-007 | Use Firebase Authentication for invite-only Admin Web identities and enforce exactly two application roles: `ADMIN` and `STAFF`. |
 | HLD-008 | Treat LINE Admin Group approval as a separate authorization boundary from Admin Web RBAC. |
@@ -235,7 +235,7 @@ flowchart TB
         WorkerRun[Cloud Run: Notification Worker - private]
         Tasks[Cloud Tasks]
         Scheduler[Cloud Scheduler]
-        Firestore[(Firestore Native: spa)]
+        Firestore[(Firestore Native: spa-db)]
         Auth[Existing Firebase Authentication]
         Secrets[Secret Manager]
         Logs[Cloud Logging and Monitoring]
@@ -273,7 +273,7 @@ flowchart TB
 | --- | --- | --- |
 | Google Cloud project | Local Firebase Emulator Suite by default; scoped test resources in `the49-487609` only when required | `the49-487609` |
 | Region | `asia-southeast1` | `asia-southeast1` |
-| Data | Synthetic test data only, never copied from production | Named Firestore database `spa` |
+| Data | Synthetic test data only, never copied from production | Named Firestore database `spa-db` |
 | Firebase Auth | Emulator or dedicated test identities | Existing project Firebase Auth with SPA `app_users` authorization records |
 | Customer LINE | Test channel/OA | Production Customer LINE OA |
 | Admin LINE | Test channel/OA and test group | Production Admin LINE OA and registered group |
@@ -281,7 +281,7 @@ flowchart TB
 | Public URL | Localhost or test Cloud Run `run.app` URL | Cloud Run-generated `run.app` URLs; no custom domain in Phase 1 |
 | Deployment approval | Automated local/CI validation | Controlled Cloud Run revision promotion |
 
-Test code and identities must not read the production `spa` database. Production LINE credentials must never be used by local tests or CI message tests.
+Test code and identities must not read the production `spa-db` database. Production LINE credentials must never be used by local tests or CI message tests.
 
 ## 9. Identity and Authorization Architecture
 
@@ -675,7 +675,7 @@ The baseline is RPO 24 hours and RTO 4 hours. A future requirement for lower RPO
 | Any registered group member can confirm | Broad approval authority | Explicit group registration, verified User ID, audit trail, atomic transition, and restricted group membership managed by the store |
 | Secure Status Link is forwarded | Unauthorized viewer sees appointment data | High-entropy token, minimized response, masked contact, rate limit, revocation, and expiry policy |
 | Two OAs and test/production credentials in one project | Channel or secret misrouting | Explicit secret names, channel identity validation, test-only groups, and deployment checks |
-| SPA and Receipt share one GCP/Firebase project | Accidental data or IAM coupling | Named Firestore database `spa`, SPA-prefixed resources, dedicated service accounts, closed client rules, and scoped IAM |
+| SPA and Receipt share one GCP/Firebase project | Accidental data or IAM coupling | Named Firestore database `spa-db`, SPA-prefixed resources, dedicated service accounts, closed client rules, and scoped IAM |
 | Health data leaks into logs or messages | Privacy and customer-safety impact | Separate data projection, log redaction, prohibited fields, access audit, and tests |
 | Admin role token becomes stale | Revoked privilege remains usable temporarily | Server-side active-user check, short token lifecycle, revocation handling, and audit |
 | One-region baseline | Regional outage can exceed availability target | Daily backup, infrastructure-as-code, recovery runbook; multi-region is a future decision |

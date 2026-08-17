@@ -14,6 +14,11 @@ export const viewport: Viewport = {
   initialScale: 1
 };
 
+// The Admin shell depends on Firebase auth and must not be cached as a
+// long-lived static document by the Next.js/Cloud Run edge.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="th">

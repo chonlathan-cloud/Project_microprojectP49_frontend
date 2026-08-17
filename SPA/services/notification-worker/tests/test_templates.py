@@ -7,7 +7,10 @@ from app.templates.booking import (
     AdminNotificationBookingView,
     NotificationBookingView,
     NotificationParticipantView,
+    flex_message,
+    render_admin_booking_confirmed,
     render_admin_new_booking,
+    render_customer_confirmed,
     render_customer_pending,
 )
 
@@ -18,7 +21,8 @@ def base_values() -> dict[str, object]:
         "status": "PENDING",
         "contact_nickname": "Som",
         "contact_phone_display": "081-***-5678",
-        "local_date_label": "15 Aug 2026",
+        "contact_phone_uri": "tel:0812345678",
+        "local_date": "2026-08-15",
         "local_time": "14:00",
         "participants": [
             NotificationParticipantView(
@@ -29,6 +33,7 @@ def base_values() -> dict[str, object]:
         ],
         "pax": 1,
         "estimated_amount_satang": 60000,
+        "admin_booking_url": "https://admin.example/?booking=BK-20260815-001",
     }
 
 
@@ -38,8 +43,10 @@ def test_customer_projection_rejects_health_fields() -> None:
 
 
 def test_customer_template_contains_no_health_key() -> None:
-    payload = render_customer_pending(NotificationBookingView(**base_values()))
-    serialized = json.dumps(payload).lower()
+    payload = render_customer_confirmed(
+        NotificationBookingView(**{**base_values(), "status": "CONFIRMED"})
+    )
+    serialized = json.dumps(payload, ensure_ascii=False).lower()
     assert "health" not in serialized
     assert "allergy" not in serialized
 
@@ -48,6 +55,59 @@ def test_admin_template_has_indicator_but_not_detail() -> None:
     payload = render_admin_new_booking(
         AdminNotificationBookingView(**base_values(), health_alert=True)
     )
-    serialized = json.dumps(payload).lower()
-    assert "health information requires review" in serialized
+    serialized = json.dumps(payload, ensure_ascii=False).lower()
+    assert "กรุณาเปิดรายละเอียดในระบบ admin" in serialized
+    assert "allergy" not in serialized
+
+
+def test_admin_flex_uses_line_message_action() -> None:
+    bubble = render_admin_new_booking(
+        AdminNotificationBookingView(**base_values(), health_alert=False)
+    )
+    confirm = bubble["footer"]["contents"][1]
+    assert confirm["action"] == {
+        "type": "message",
+        "label": "✅ ยืนยันการจอง",
+        "text": "ยืนยันการจอง BK-20260815-001",
+    }
+    message = flex_message(alt_text="new booking", bubble=bubble)
+    assert message["type"] == "flex"
+    assert message["altText"] == "new booking"
+
+
+def test_customer_flex_contains_price_and_map() -> None:
+    values = {**base_values(), "status": "CONFIRMED", "map_url": "https://maps.example/spa49"}
+    bubble = render_customer_confirmed(NotificationBookingView(**values))
+    serialized = json.dumps(bubble, ensure_ascii=False)
+    assert "600.00 บาท (รวม VAT แล้ว)" in serialized
+    assert "https://maps.example/spa49" in serialized
+
+
+def test_customer_flex_percent_encodes_non_ascii_map_uri() -> None:
+    values = {
+        **base_values(),
+        "status": "CONFIRMED",
+        "map_url": "https://www.bing.com/maps?q=ถนนเฉลิมพระเกียรติ กรุงเทพ",
+    }
+    bubble = render_customer_confirmed(NotificationBookingView(**values))
+    uri = bubble["footer"]["contents"][0]["action"]["uri"]
+    assert uri.startswith("https://www.bing.com/maps?q=")
+    assert "ถนน" not in uri
+    assert " " not in uri
+    assert "%E0%B8" in uri
+
+
+def test_customer_flex_replaces_unsafe_map_uri() -> None:
+    values = {**base_values(), "status": "CONFIRMED", "map_url": "javascript:alert(1)"}
+    bubble = render_customer_confirmed(NotificationBookingView(**values))
+    assert bubble["footer"]["contents"][0]["action"]["uri"] == "https://maps.google.com"
+
+
+def test_pending_and_admin_confirmed_templates_are_privacy_safe() -> None:
+    customer = render_customer_pending(NotificationBookingView(**base_values()))
+    admin = render_admin_booking_confirmed(
+        AdminNotificationBookingView(**{**base_values(), "status": "CONFIRMED"}, health_alert=True)
+    )
+    serialized = json.dumps([customer, admin], ensure_ascii=False).lower()
+    assert "health_details" not in serialized
     assert "allergy" not in serialized

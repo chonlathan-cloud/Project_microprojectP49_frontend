@@ -1,9 +1,9 @@
 "use client";
 
-import type { BookingStatus, Locale } from "@spa/shared-types";
+import type { BookingStatus, Locale, PreviewBooking } from "@spa/shared-types";
 import { useEffect, useMemo, useState } from "react";
 
-import { PREVIEW_BOOKINGS } from "@/lib/preview-data";
+import { AdminModulePage, type AdminView } from "@/components/admin-module-pages";
 
 const statusLabel: Record<BookingStatus, { th: string; en: string }> = {
   PENDING: { th: "รอยืนยัน", en: "Pending" },
@@ -32,24 +32,158 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
-export function AdminDashboard() {
+export function AdminDashboard({ idToken }: { idToken: string }) {
+  const [activeView, setActiveView] = useState<"bookings" | AdminView>("bookings");
   const [locale, setLocale] = useState<Locale>("th");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"ALL" | BookingStatus>("ALL");
   const [selectedId, setSelectedId] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [connection, setConnection] = useState<"checking" | "connected" | "unavailable">("checking");
+  const [liveBookings, setLiveBookings] = useState<PreviewBooking[]>([]);
+  const [bookingState, setBookingState] = useState<"loading" | "ready" | "error">("loading");
+  const [actionState, setActionState] = useState<"idle" | "submitting">("idle");
+  const [actionMessage, setActionMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [healthDetails, setHealthDetails] = useState<Array<{ nickname: string; details: string }> | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [bookingRefresh, setBookingRefresh] = useState(0);
 
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
 
-  const filtered = useMemo(() => PREVIEW_BOOKINGS.filter((booking) => {
+  useEffect(() => {
+    if (bookingState !== "ready") return;
+    const bookingId = new URLSearchParams(window.location.search).get("booking");
+    if (bookingId && liveBookings.some((booking) => booking.bookingId === bookingId)) {
+      queueMicrotask(() => {
+        setActiveView("bookings");
+        setSelectedId(bookingId);
+        setQuery(bookingId);
+      });
+    }
+  }, [bookingState, liveBookings]);
+
+  useEffect(() => {
+    const update = () => setCurrentTime(Date.now());
+    queueMicrotask(update);
+    const timer = window.setInterval(update, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/spa/health/ready", { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json() as { status?: string; dependencies?: { firestore?: { status?: string } } };
+        if (!active) return;
+        setConnection(payload.status === "ready" && payload.dependencies?.firestore?.status === "ready" ? "connected" : "unavailable");
+      })
+      .catch(() => {
+        if (active) setConnection("unavailable");
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/spa/api/v1/admin/bookings", {
+      headers: { Authorization: `Bearer ${idToken}` },
+      cache: "no-store"
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Admin booking API unavailable");
+        const payload = await response.json() as { items?: PreviewBooking[] };
+        setLiveBookings(payload.items ?? []);
+        setBookingState("ready");
+      })
+      .catch(() => {
+        setLiveBookings([]);
+        setBookingState("error");
+      });
+  }, [idToken, bookingRefresh]);
+
+  async function transitionBooking(action: "confirm" | "cancel" | "start" | "no_show" | "complete") {
+    const booking = liveBookings.find((item) => item.bookingId === selectedId);
+    if (!booking || actionState === "submitting") return;
+
+    let reason: string | null = null;
+    if (action !== "cancel") {
+      const accepted = window.confirm(locale === "th"
+        ? `ยืนยันการเปลี่ยนสถานะ ${booking.bookingId} ใช่หรือไม่?`
+        : `Confirm the status change for ${booking.bookingId}?`);
+      if (!accepted) return;
+    } else {
+      reason = window.prompt(locale === "th"
+        ? `กรุณาระบุเหตุผลในการยกเลิก ${booking.bookingId}`
+        : `Enter a cancellation reason for ${booking.bookingId}`)?.trim() ?? null;
+      if (!reason) return;
+      const accepted = window.confirm(locale === "th"
+        ? `ยืนยันการยกเลิก ${booking.bookingId}? การดำเนินการนี้จะคืน Capacity`
+        : `Cancel ${booking.bookingId}? This will release its capacity.`);
+      if (!accepted) return;
+    }
+
+    setActionState("submitting");
+    setActionMessage(null);
+    try {
+      const response = await fetch(`/api/spa/api/v1/admin/bookings/${encodeURIComponent(booking.bookingId)}:${action}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          reason,
+          expectedVersion: booking.version,
+          commandId: crypto.randomUUID()
+        }),
+        cache: "no-store"
+      });
+      const payload = await response.json() as { status?: BookingStatus; version?: number; detail?: string };
+      if (!response.ok || !payload.status) {
+        throw new Error(payload.detail ?? "Booking transition failed");
+      }
+      setLiveBookings((items) => items.map((item) => item.bookingId === booking.bookingId
+        ? { ...item, status: payload.status as BookingStatus, version: payload.version ?? item.version + 1 }
+        : item));
+      setActionMessage({
+        kind: "success",
+        text: locale === "th" ? "อัปเดตสถานะการจองเรียบร้อยแล้ว" : "Booking status updated successfully."
+      });
+    } catch (caught) {
+      setActionMessage({
+        kind: "error",
+        text: caught instanceof Error ? caught.message : "Booking transition failed"
+      });
+    } finally {
+      setActionState("idle");
+    }
+  }
+
+  async function revealHealthDetails() {
+    if (!selected || !selected.healthAlert) return;
+    setActionMessage(null);
+    try {
+      const response = await fetch(`/api/spa/api/v1/admin/bookings/${encodeURIComponent(selected.bookingId)}/health`, {
+        headers: { Authorization: `Bearer ${idToken}` },
+        cache: "no-store"
+      });
+      if (!response.ok) throw new Error("Health information unavailable");
+      const payload = await response.json() as { participants?: Array<{ nickname: string; details: string }> };
+      setHealthDetails(payload.participants ?? []);
+    } catch (caught) {
+      setActionMessage({ kind: "error", text: caught instanceof Error ? caught.message : "Health information unavailable" });
+    }
+  }
+
+  const bookings = liveBookings;
+  const filtered = useMemo(() => bookings.filter((booking) => {
     const haystack = `${booking.bookingId} ${booking.customerName} ${booking.customerPhoneMasked}`.toLowerCase();
     return (filter === "ALL" || booking.status === filter) && haystack.includes(query.trim().toLowerCase());
-  }), [filter, query]);
-  const selected = PREVIEW_BOOKINGS.find((booking) => booking.bookingId === selectedId);
-  const pending = PREVIEW_BOOKINGS.filter((booking) => booking.status === "PENDING").length;
-  const unassigned = PREVIEW_BOOKINGS.filter((booking) => booking.status === "CONFIRMED" && !booking.therapistName).length;
+  }), [bookings, filter, query]);
+  const selected = bookings.find((booking) => booking.bookingId === selectedId);
+  const pending = bookings.filter((booking) => booking.status === "PENDING").length;
+  const unassigned = bookings.filter((booking) => booking.status === "CONFIRMED" && !booking.therapistName).length;
 
   const text = locale === "th" ? {
     title: "รายการจองวันนี้",
@@ -59,7 +193,11 @@ export function AdminDashboard() {
     pending: "รอยืนยัน",
     unassigned: "ยังไม่มอบหมายหมอนวด",
     notification: "การส่งแจ้งเตือนล้มเหลว",
-    preview: "ข้อมูลตัวอย่าง • ยังไม่เชื่อม Firebase หรือ SPA API",
+    preview: connection === "checking" || bookingState === "loading"
+      ? "กำลังตรวจสอบการเชื่อมต่อ SPA API และ Firestore..."
+      : connection === "connected" && bookingState === "ready"
+        ? `เชื่อมต่อ SPA API และ Firestore แล้ว • ข้อมูลจริง ${liveBookings.length} รายการ`
+        : "โหลดข้อมูลการจองจริงไม่สำเร็จ • กรุณาเข้าสู่ระบบใหม่หรือตรวจสอบสิทธิ์",
     all: "ทั้งหมด",
     time: "เวลา",
     customer: "ลูกค้า",
@@ -71,7 +209,7 @@ export function AdminDashboard() {
     health: "มีข้อมูลสุขภาพให้ตรวจสอบในระบบ Admin",
     confirm: "ยืนยันการจอง",
     cancel: "ยกเลิก",
-    apiGate: "การเปลี่ยนสถานะจะเปิดใช้หลังเชื่อม Firebase Auth และ API"
+    apiGate: bookingState === "ready" ? "การเปลี่ยนสถานะเชื่อมต่อ Firebase Auth และ API แล้ว" : "การเปลี่ยนสถานะจะเปิดใช้หลังโหลดข้อมูลจริงสำเร็จ"
   } : {
     title: "Today’s bookings",
     subtitle: "Track capacity-holding requests and run front-desk operations",
@@ -80,7 +218,11 @@ export function AdminDashboard() {
     pending: "Pending review",
     unassigned: "Therapist unassigned",
     notification: "Notification failures",
-    preview: "Preview data • Firebase and the SPA API are not connected",
+    preview: connection === "checking" || bookingState === "loading"
+      ? "Checking SPA API and Firestore connection..."
+      : connection === "connected" && bookingState === "ready"
+        ? `SPA API and Firestore connected • ${liveBookings.length} live records`
+        : "Live bookings could not be loaded • Sign in again or check account permissions",
     all: "All",
     time: "Time",
     customer: "Customer",
@@ -92,16 +234,16 @@ export function AdminDashboard() {
     health: "Health information requires review in Admin",
     confirm: "Confirm booking",
     cancel: "Cancel",
-    apiGate: "Status actions will be enabled after Firebase Auth and the API are connected"
+    apiGate: bookingState === "ready" ? "Status actions are connected to Firebase Auth and the API" : "Status actions will be enabled after live data loads"
   };
 
   return (
-    <div className={selected ? "admin-layout drawer-open" : "admin-layout"}>
+    <div className={selected && activeView === "bookings" ? "admin-layout drawer-open" : "admin-layout"}>
       <aside className={sidebarOpen ? "sidebar open" : "sidebar"}>
         <div className="admin-brand"><span aria-hidden="true">✦</span><div><strong>SPA 49</strong><small>BRANCH OPERATIONS</small></div></div>
         <div className="branch-chip"><span className="live-dot" />{text.branch}</div>
         <nav aria-label="Main navigation">
-          {navItems.map(([id, icon, th, en], index) => <button className={index === 0 ? "nav-item active" : "nav-item"} key={id}><span aria-hidden="true">{icon}</span>{locale === "th" ? th : en}</button>)}
+          {navItems.map(([id, icon, th, en]) => <button className={activeView === id ? "nav-item active" : "nav-item"} aria-current={activeView === id ? "page" : undefined} onClick={() => { setActiveView(id); setSelectedId(""); setSidebarOpen(false); }} key={id}><span aria-hidden="true">{icon}</span>{locale === "th" ? th : en}</button>)}
         </nav>
         <div className="sidebar-footer">
           <div className="avatar">พ</div><div><strong>คุณภา</strong><small>ADMIN</small></div>
@@ -113,18 +255,18 @@ export function AdminDashboard() {
           <button className="menu-button" aria-label="Toggle navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((value) => !value)}>☰</button>
           <label className="global-search"><span aria-hidden="true">⌕</span><input aria-label={text.search} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={text.search} /></label>
           <div className="admin-language" role="group" aria-label="Language"><button aria-pressed={locale === "th"} onClick={() => setLocale("th")}>TH</button><button aria-pressed={locale === "en"} onClick={() => setLocale("en")}>EN</button></div>
-          <button className="notification-button" aria-label="Notifications">♢<span>1</span></button>
+          <button className="notification-button" aria-label="Notifications" onClick={() => { setActiveView("notifications"); setSelectedId(""); }}>♢<span>!</span></button>
         </header>
 
         <div className="preview-strip" role="status">{text.preview}</div>
 
-        <main className="dashboard-content">
+        {activeView === "bookings" ? <main className="dashboard-content">
           <div className="page-heading"><div><p className="eyebrow">FRONT DESK • ASIA/BANGKOK</p><h1>{text.title}</h1><p>{text.subtitle}</p></div><button className="new-booking" disabled>＋ {locale === "th" ? "เพิ่มการจอง" : "New booking"}</button></div>
 
           <section className="metric-grid" aria-label="Operational queue summary">
             <article className="metric warning"><span className="metric-icon">!</span><div><small>{text.pending}</small><strong>{pending}</strong><p>{locale === "th" ? "รายการนี้กัน Capacity แล้ว" : "These bookings hold capacity"}</p></div></article>
             <article className="metric info"><span className="metric-icon">♙</span><div><small>{text.unassigned}</small><strong>{unassigned}</strong><p>{locale === "th" ? "ต้องมอบหมายก่อนเริ่มบริการ" : "Assign before starting service"}</p></div></article>
-            <article className="metric danger"><span className="metric-icon">↻</span><div><small>{text.notification}</small><strong>1</strong><p>{locale === "th" ? "ต้องติดตามลูกค้าทางโทรศัพท์" : "Phone follow-up required"}</p></div></article>
+            <article className="metric danger"><span className="metric-icon">↻</span><div><small>{text.notification}</small><strong>0</strong><p>{locale === "th" ? "ไม่มีรายการล้มเหลวที่ตรวจพบ" : "No detected delivery failures"}</p></div></article>
           </section>
 
           <section className="operations-panel" aria-labelledby="bookings-table-title">
@@ -143,10 +285,10 @@ export function AdminDashboard() {
             </div>
             {filtered.length === 0 && <div className="empty-state">{locale === "th" ? "ไม่พบรายการที่ตรงกับตัวกรอง" : "No bookings match these filters"}</div>}
           </section>
-        </main>
+        </main> : <AdminModulePage view={activeView} locale={locale} idToken={idToken} bookings={bookings} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} />}
       </div>
 
-      {selected && <aside className="detail-drawer" aria-labelledby="detail-title"><div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button aria-label="Close detail" onClick={() => setSelectedId("")}>×</button></div><div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>{selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดไม่แสดงในรายการหรือ LINE Group" : "Details stay out of lists and the LINE group"}</small></div>}<dl><div><dt>{text.time}</dt><dd>{formatTime(selected.startLocal)} น.</dd></div><div><dt>{text.service}</dt><dd>{selected.serviceName}</dd></div><div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div><div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div></dl><div className="drawer-actions"><button className="confirm-button" disabled>{text.confirm}</button><button className="cancel-button" disabled>{text.cancel}</button></div><p className="api-gate">{text.apiGate}</p></aside>}
+      {selected && <aside className="detail-drawer" aria-labelledby="detail-title"><div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button aria-label="Close detail" onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div><div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>{selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดไม่แสดงในรายการหรือ LINE Group" : "Details stay out of lists and the LINE group"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}<dl><div><dt>{text.time}</dt><dd>{formatTime(selected.startLocal)} น.</dd></div><div><dt>{text.service}</dt><dd>{selected.serviceName}</dd></div><div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div><div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div></dl><div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready" || selected.status !== "PENDING"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready" || !["PENDING", "CONFIRMED"].includes(selected.status)} onClick={() => transitionBooking("cancel")}>{text.cancel}</button>{selected.status === "CONFIRMED" && <button className="confirm-button" disabled={!selected.therapistName} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button>}{selected.status === "CONFIRMED" && <button className="cancel-button" disabled={currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button>}{selected.status === "IN_SERVICE" && <button className="confirm-button" onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button>}</div>{selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}{actionMessage && <p className={`action-message ${actionMessage.kind}`} role="status">{actionMessage.text}</p>}<p className="api-gate">{text.apiGate}</p></aside>}
     </div>
   );
 }

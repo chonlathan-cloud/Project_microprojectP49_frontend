@@ -1,0 +1,44 @@
+displayName: SPA Cloud Run production 5xx
+documentation:
+  content: >-
+    Production SPA API or Notification Worker returned a 5xx response. Check Cloud Run logs,
+    Firestore connectivity, Cloud Tasks retries and LINE provider status. Never include phone or
+    health details in incident notes.
+  mimeType: text/markdown
+combiner: OR
+enabled: true
+alertStrategy:
+  autoClose: 1800s
+conditions:
+  - displayName: SPA API 5xx responses
+    conditionThreshold:
+      filter: >-
+        resource.type = "cloud_run_revision" AND
+        resource.labels.service_name = "spa-api" AND
+        metric.type = "run.googleapis.com/request_count" AND
+        metric.labels.response_code_class = "5xx"
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_RATE
+          crossSeriesReducer: REDUCE_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 60s
+      trigger:
+        count: 1
+  - displayName: SPA Notification Worker 5xx responses
+    conditionThreshold:
+      filter: >-
+        resource.type = "cloud_run_revision" AND
+        resource.labels.service_name = "spa-notification-worker" AND
+        metric.type = "run.googleapis.com/request_count" AND
+        metric.labels.response_code_class = "5xx"
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_RATE
+          crossSeriesReducer: REDUCE_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 60s
+      trigger:
+        count: 1

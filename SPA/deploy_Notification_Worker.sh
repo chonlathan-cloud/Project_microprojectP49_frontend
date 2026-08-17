@@ -11,6 +11,12 @@ SOURCE_DIR="${SOURCE_DIR:-$SCRIPT_DIR/services/notification-worker}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/services/notification-worker/.env}"
 REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-false}"
+FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-spa-db}"
+APP_ENV="${APP_ENV:-production}"
+TASK_QUEUE_NAME="${TASK_QUEUE_NAME:-spa-line-notifications}"
+WORKER_TASK_URL="${WORKER_TASK_URL:-}"
+TASK_SERVICE_ACCOUNT="${TASK_SERVICE_ACCOUNT:-}"
+ADMIN_WEB_URL="${ADMIN_WEB_URL:-}"
 
 ARTIFACT_REPOSITORY="${ARTIFACT_REPOSITORY:-spa}"
 IMAGE_NAME="${IMAGE_NAME:-spa-notification-worker}"
@@ -19,6 +25,7 @@ CREATE_ARTIFACT_REPOSITORY="${CREATE_ARTIFACT_REPOSITORY:-true}"
 
 BUILD_SERVICE_ACCOUNT="${BUILD_SERVICE_ACCOUNT:-project-the49@the49-487609.iam.gserviceaccount.com}"
 RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-spa-worker-sa@${PROJECT_ID}.iam.gserviceaccount.com}"
+TASK_SERVICE_ACCOUNT="${TASK_SERVICE_ACCOUNT:-$RUNTIME_SERVICE_ACCOUNT}"
 
 # AUTH_MODE: impersonation | key | none
 AUTH_MODE="${AUTH_MODE:-impersonation}"
@@ -27,6 +34,7 @@ SERVICE_ACCOUNT_KEY_PATH="${SERVICE_ACCOUNT_KEY_PATH:-}"
 
 ALLOW_UNAUTHENTICATED="${ALLOW_UNAUTHENTICATED:-false}"
 CHECK_MAIN_BRANCH="${CHECK_MAIN_BRANCH:-true}"
+REQUIRE_CLEAN_WORKTREE="${REQUIRE_CLEAN_WORKTREE:-true}"
 CPU="${CPU:-1}"
 MEMORY="${MEMORY:-512Mi}"
 CONCURRENCY="${CONCURRENCY:-10}"
@@ -55,6 +63,12 @@ if [[ "$CHECK_MAIN_BRANCH" == "true" ]]; then
     echo "Set CHECK_MAIN_BRANCH=false only when deliberately bypassing this safety guard."
     exit 1
   fi
+fi
+
+if [[ "$REQUIRE_CLEAN_WORKTREE" == "true" ]] && [[ -n "$(git status --porcelain -- "$SCRIPT_DIR")" ]]; then
+  echo "ERROR: SPA worktree has uncommitted changes. Production deploy requires a traceable clean source tree."
+  echo "Set REQUIRE_CLEAN_WORKTREE=false only for an isolated Test deployment."
+  exit 1
 fi
 
 if [[ ! -f "$SOURCE_DIR/$DOCKERFILE" ]]; then
@@ -134,7 +148,7 @@ YAML
 env_args=()
 if [[ -f "$ENV_FILE" ]]; then
   tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_worker_env.XXXXXX.yaml")"
-  python3 - "$ENV_FILE" "$tmp_env_yaml" <<'PY'
+  python3 - "$ENV_FILE" "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" "$TASK_QUEUE_NAME" "$WORKER_TASK_URL" "$TASK_SERVICE_ACCOUNT" "$ADMIN_WEB_URL" <<'PY'
 import json
 import re
 import sys
@@ -142,6 +156,8 @@ from pathlib import Path
 
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
+firestore_database = sys.argv[3]
+app_env, queue_name, worker_url, task_service_account, admin_web_url = sys.argv[4:9]
 valid_key = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 environment = {}
 
@@ -162,6 +178,15 @@ for raw_line in source.read_text(encoding="utf-8").splitlines():
         value = value[1:-1]
     environment[key] = value
 
+environment["FIRESTORE_DATABASE"] = firestore_database
+environment["APP_ENV"] = app_env
+environment["TASK_QUEUE_NAME"] = queue_name
+environment["WORKER_TASK_URL"] = worker_url
+environment["TASK_SERVICE_ACCOUNT"] = task_service_account
+environment["ADMIN_WEB_URL"] = admin_web_url
+environment["GCP_PROJECT_ID"] = "the49-487609"
+environment["GCP_REGION"] = "asia-southeast1"
+
 with destination.open("w", encoding="utf-8") as output:
     for key, value in environment.items():
         output.write(f"{key}: {json.dumps(value, ensure_ascii=False)}\n")
@@ -171,7 +196,30 @@ elif [[ "$REQUIRE_ENV_FILE" == "true" ]]; then
   echo "ERROR: Environment file not found: $ENV_FILE"
   exit 1
 else
-  echo "Environment file not found; deploying without optional runtime variables: $ENV_FILE"
+  echo "Environment file not found; using FIRESTORE_DATABASE=$FIRESTORE_DATABASE: $ENV_FILE"
+  tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_worker_env.XXXXXX.yaml")"
+  python3 - "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" "$TASK_QUEUE_NAME" "$WORKER_TASK_URL" "$TASK_SERVICE_ACCOUNT" "$ADMIN_WEB_URL" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+destination = Path(sys.argv[1])
+destination.write_text(
+    "\n".join([
+        f"FIRESTORE_DATABASE: {json.dumps(sys.argv[2])}",
+        f"APP_ENV: {json.dumps(sys.argv[3])}",
+        f"TASK_QUEUE_NAME: {json.dumps(sys.argv[4])}",
+        f"WORKER_TASK_URL: {json.dumps(sys.argv[5])}",
+        f"TASK_SERVICE_ACCOUNT: {json.dumps(sys.argv[6])}",
+        f"ADMIN_WEB_URL: {json.dumps(sys.argv[7])}",
+        "GCP_PROJECT_ID: \"the49-487609\"",
+        "GCP_REGION: \"asia-southeast1\"",
+        "",
+    ]),
+    encoding="utf-8",
+)
+PY
+  env_args+=(--env-vars-file "$tmp_env_yaml")
 fi
 
 echo "Building '$IMAGE_URI' with Cloud Build..."
@@ -200,6 +248,7 @@ deploy_args=(
   --quiet
 )
 deploy_args+=("${env_args[@]}")
+deploy_args+=(--set-secrets "LINE_ADMIN_ACCESS_TOKEN=spa-line-admin-messaging-channel-access-token:latest,LINE_ADMIN_GROUP_ID=spa-line-admin-group-id:latest,LINE_CUSTOMER_ACCESS_TOKEN=spa-line-customer-messaging-channel-access-token:latest")
 
 if [[ "$ALLOW_UNAUTHENTICATED" == "true" ]]; then
   deploy_args+=(--allow-unauthenticated)

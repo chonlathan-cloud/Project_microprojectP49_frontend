@@ -40,7 +40,7 @@ Stitch sample wording, states, and flows are not production behavior. The only a
 | Admin Web | Next.js App Router, TypeScript | Desktop operational interface with shared frontend conventions |
 | SPA API | Python 3.12, FastAPI, Pydantic v2 | Typed REST API, OpenAPI generation, and existing team alignment |
 | Notification Worker | Python 3.12, FastAPI | Reuse backend integrations and receive authenticated HTTP tasks |
-| Operational database | Firestore Native-mode named database `spa` | Isolate SPA operational data from the Receipt `(default)` database while retaining transactional concurrency control |
+| Operational database | Firestore Native-mode named database `spa-db` | Isolate SPA operational data from the Receipt `(default)` database while retaining transactional concurrency control |
 | Admin identity | Firebase Authentication with Google provider | Invite-only identity without application-managed passwords |
 | Guest protection | reCAPTCHA Enterprise plus application controls | Layered anonymous abuse protection |
 | Async delivery | Firestore outbox, Cloud Tasks, Cloud Scheduler | Durable state, bounded retries, and recovery of enqueue gaps |
@@ -72,9 +72,9 @@ All four services are independently built and deployed. They share contracts, no
 | --- | --- | --- |
 | Local/CI | Firebase Emulator Suite and synthetic data by default | No production LINE credentials or groups |
 | Cloud integration test | Explicit `spa-*-test` resources in `the49-487609` only when required | Dedicated test channels, secrets, and Group ID |
-| Production | Existing project `the49-487609`, `asia-southeast1`, existing Firebase Auth | Named Firestore database `spa`, production Customer/Admin LINE channels, registered production Group ID |
+| Production | Existing project `the49-487609`, `asia-southeast1`, existing Firebase Auth | Named Firestore database `spa-db`, production Customer/Admin LINE channels, registered production Group ID |
 
-Only the existing `(default)` Firestore database was present when this document was updated. The named `spa` database is an implementation-time infrastructure resource and must be created with delete protection; this documentation change does not create it. BigQuery is not provisioned for SPA Phase 1.
+The named Firestore database `spa-db` has now been created in `the49-487609` as Firestore Native/Standard in `asia-southeast1`, with pessimistic concurrency and delete protection enabled. The existing Receipt `(default)` database remains separate. BigQuery is not provisioned for SPA Phase 1.
 
 ### 4.2 Initial Cloud Run URLs
 
@@ -873,7 +873,7 @@ Production LINE sandbox/test channels are used for pre-production integration; C
 | `BL-PAY-001` | No payment endpoints, fields, or service |
 | `BL-PRI-001`–`003` | Profile/snapshot isolation, versioned consent receipts, explicit projections, and audited health operations |
 | `BL-CAT-001` | Versioned initial seed, `pricingMode`, `requiredPax`, and charge-once Booking line items |
-| `HLD-001`–`002` | Existing `the49-487609` project, named `spa` database, SPA-isolated resources, and Singapore region |
+| `HLD-001`–`002` | Existing `the49-487609` project, named `spa-db` database, SPA-isolated resources, and Singapore region |
 | `HLD-003`–`004` | Four Cloud Run deployables using Next.js/FastAPI |
 | `HLD-005`–`013` | Named Firestore, dual auth, LINE boundaries, transactions, outbox, IAM, secrets, and Pub/Sub-to-LINE operational alerts |
 
@@ -881,7 +881,6 @@ Production LINE sandbox/test channels are used for pre-production integration; C
 
 The following values may be supplied after TDD and do not block LLD, but they block production release:
 
-- Creation of the named Firestore database `spa` with delete protection in `the49-487609`
 - Generated production Cloud Run `run.app` URLs and corresponding CORS/CSP, Firebase authorized-domain, and LIFF endpoint configuration
 - Store branch identity, contact, holidays, map URL, and resource compatibility/capacity; default hours and initial service catalog are already defined
 - Production invited Admin Web emails

@@ -2,7 +2,8 @@
 
 import { INITIAL_SERVICE_CATALOG } from "@spa/shared-types/catalog";
 import type { Locale, Service, ServiceVariant } from "@spa/shared-types";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { loadLiff } from "@/lib/line-liff";
 
 type Step = "SERVICE" | "PARTICIPANTS" | "SCHEDULE" | "DETAILS" | "REVIEW";
 
@@ -13,6 +14,7 @@ type ParticipantDraft = {
   healthDetails: string;
   healthConsent: boolean;
 };
+type AvailabilitySlot = { localDate: string; localStartTime: string; availableUnits: number };
 
 const steps: Step[] = ["SERVICE", "PARTICIPANTS", "SCHEDULE", "DETAILS", "REVIEW"];
 
@@ -81,8 +83,8 @@ function formatBaht(amountSatang: number, locale: Locale) {
   }).format(amountSatang / 100);
 }
 
-function variantById(id: string) {
-  for (const service of INITIAL_SERVICE_CATALOG) {
+function variantById(id: string, catalog: Service[]) {
+  for (const service of catalog) {
     const variant = service.variants.find((item) => item.id === id);
     if (variant) return { service, variant };
   }
@@ -117,12 +119,61 @@ export function BookingExperience() {
   const [phone, setPhone] = useState("");
   const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [secondPersonAuthorized, setSecondPersonAuthorized] = useState(false);
+  const [submittedBookingId, setSubmittedBookingId] = useState<string | null>(null);
+  const [submittedStatusToken, setSubmittedStatusToken] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [availableSlots, setAvailableSlots] = useState<AvailabilitySlot[]>([]);
+  const [availabilityState, setAvailabilityState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [category, setCategory] = useState<Service["category"]>("SIGNATURE");
+  const [services, setServices] = useState<Service[]>(INITIAL_SERVICE_CATALOG);
+  const [catalogLive, setCatalogLive] = useState(false);
+  const [lineIdToken, setLineIdToken] = useState<string | null>(null);
+  const [lineState, setLineState] = useState<"loading" | "linked" | "guest" | "error">("loading");
+  const idempotencyKey = useRef(crypto.randomUUID());
   const t = copy[locale];
 
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/config", { cache: "no-store" })
+      .then(async (response) => {
+        const config = await response.json() as { lineLiffId?: string };
+        if (!config.lineLiffId) throw new Error("LIFF is not configured");
+        const liff = await loadLiff();
+        await liff.init({ liffId: config.lineLiffId });
+        if (!liff.isLoggedIn()) {
+          if (liff.isInClient()) {
+            liff.login({ redirectUri: window.location.href });
+            return;
+          }
+          if (active) setLineState("guest");
+          return;
+        }
+        const token = liff.getIDToken();
+        if (!token) throw new Error("LINE ID token is unavailable");
+        if (active) {
+          setLineIdToken(token);
+          setLineState("linked");
+        }
+      })
+      .catch(() => active && setLineState("error"));
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/spa/api/v1/public/services", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Catalog unavailable");
+        const payload = await response.json() as { items?: Service[] };
+        if (!payload.items?.length) throw new Error("Catalog is empty");
+        setServices(payload.items.map((service, index) => ({ ...service, active: true, displayOrder: index })));
+        setCatalogLive(true);
+      })
+      .catch(() => setCatalogLive(false));
+  }, []);
 
   useEffect(() => {
     const saved = window.sessionStorage.getItem("spa49-booking-preview");
@@ -152,7 +203,33 @@ export function BookingExperience() {
     );
   }, [participants, date, time, phone]);
 
-  const chosen = participants.map((participant) => variantById(participant.variantId));
+  useEffect(() => {
+    if (step !== "SCHEDULE" || !date) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setAvailabilityState("loading");
+      setAvailableSlots([]);
+    });
+    fetch("/api/spa/api/v1/public/availability/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ branchId: "branch_001", dateFrom: date, dateTo: date, participants: participants.map((person) => ({ serviceVariantId: person.variantId })) })
+    }).then(async (response) => {
+      if (!response.ok) throw new Error("Availability unavailable");
+      const payload = await response.json() as { slots?: AvailabilitySlot[] };
+      if (!active) return;
+      setAvailableSlots(payload.slots ?? []);
+      setAvailabilityState("ready");
+    }).catch(() => {
+      if (!active) return;
+      setAvailableSlots([]);
+      setAvailabilityState("error");
+    });
+    return () => { active = false; };
+  }, [date, participants, step]);
+
+  const chosen = participants.map((participant) => variantById(participant.variantId, services));
   const selectedCount = chosen.filter(Boolean).length;
   const total = useMemo(() => {
     const seenPerBooking = new Set<string>();
@@ -182,7 +259,7 @@ export function BookingExperience() {
   }
 
   function setPax(pax: 1 | 2) {
-    const firstSelection = variantById(participants[0]?.variantId);
+    const firstSelection = variantById(participants[0]?.variantId, services);
     if (firstSelection?.variant.requiredPax === 2) return;
     setParticipants((current) =>
       pax === 1 ? [current[0]] : [current[0], current[1] ?? defaultParticipant()]
@@ -194,6 +271,37 @@ export function BookingExperience() {
     if (next >= 0 && next < steps.length) {
       setStep(steps[next]);
       window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  async function submitBooking() {
+    setSubmitError(null);
+    try {
+      const response = await fetch("/api/spa/api/v1/public/bookings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey.current },
+        body: JSON.stringify({
+          branchId: "branch_001",
+          date,
+          time,
+          phone,
+          lineIdToken,
+          participants: participants.map((person) => ({
+            nickname: person.nickname,
+            serviceVariantId: person.variantId,
+            hasHealthInformation: Boolean(person.hasHealthInformation),
+            healthDetails: person.healthDetails || null,
+            healthConsent: person.healthConsent
+          }))
+        })
+      });
+      const payload = await response.json() as { bookingId?: string; statusToken?: string; detail?: string };
+      if (!response.ok || !payload.bookingId) throw new Error(payload.detail || "Booking request failed");
+      setSubmittedBookingId(payload.bookingId);
+      setSubmittedStatusToken(payload.statusToken ?? null);
+      window.sessionStorage.removeItem("spa49-booking-preview");
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "Booking request failed");
     }
   }
 
@@ -226,7 +334,7 @@ export function BookingExperience() {
         </div>
       </header>
 
-      <div className="preview-banner" role="status">{t.preview}</div>
+      <div className="preview-banner" role="status">{catalogLive ? (locale === "th" ? "เชื่อมต่อ SPA API และข้อมูลบริการจริงแล้ว" : "Connected to the live SPA API and service catalog") : t.preview}</div>
 
       <section className="hero" id="main-content">
         <p className="eyebrow">BOTANICAL SANCTUARY</p>
@@ -258,7 +366,7 @@ export function BookingExperience() {
             ))}
           </div>
           <div className="service-grid">
-            {INITIAL_SERVICE_CATALOG.filter((service) => service.category === category).map((service) => (
+            {services.filter((service) => service.category === category).map((service) => (
               <article className="service-card" key={service.id}>
                 <div>
                   <p className="service-th">{service.nameTh}</p>
@@ -300,7 +408,7 @@ export function BookingExperience() {
                 {locale === "th" ? "บริการและระยะเวลา" : "Service and duration"}
                 <select value={participant.variantId} onChange={(event) => updateParticipant(index, { variantId: event.target.value })} disabled={chosen[0]?.variant.requiredPax === 2}>
                   <option value="">— {locale === "th" ? "เลือกบริการ" : "Choose"} —</option>
-                  {INITIAL_SERVICE_CATALOG.filter((service) => service.variants[0]?.requiredPax === 1).flatMap((service) =>
+                  {services.filter((service) => service.variants[0]?.requiredPax === 1).flatMap((service) =>
                     service.variants.map((variant) => <option value={variant.id} key={variant.id}>{locale === "th" ? service.nameTh : service.nameEn} • {variant.durationMinutes} min • {formatBaht(variant.priceSatang, locale)}</option>)
                   )}
                 </select>
@@ -313,14 +421,14 @@ export function BookingExperience() {
       {step === "SCHEDULE" && (
         <section className="content-section narrow" aria-labelledby="schedule-title">
           <p className="eyebrow">STEP 3</p><h2 id="schedule-title">{t.schedule}</h2>
-          <div className="notice">{locale === "th" ? "เวลาที่แสดงเป็นข้อมูลตัวอย่าง จนกว่าจะเชื่อมต่อ Availability API" : "Times shown are preview data until the Availability API is connected."}</div>
+          <div className="notice" role="status">{availabilityState === "loading" ? (locale === "th" ? "กำลังตรวจสอบเวลาว่าง…" : "Checking availability…") : availabilityState === "error" ? (locale === "th" ? "ตรวจสอบเวลาว่างไม่สำเร็จ กรุณาลองใหม่" : "Availability could not be loaded. Please retry.") : availableSlots.length ? (locale === "th" ? "เวลานี้มาจาก Availability API และ capacity จริง" : "Times are provided by the live Availability API and capacity.") : (locale === "th" ? "ไม่พบเวลาว่างสำหรับวันที่เลือก" : "No available times for this date")}</div>
           <h3>{locale === "th" ? "วันที่" : "Date"}</h3>
           <div className="choice-grid date-grid">
             {previewDates.map((item) => <button aria-pressed={date === item.value} onClick={() => setDate(item.value)} key={item.value}>{item.label}</button>)}
           </div>
           <h3>{locale === "th" ? "เวลาเริ่ม" : "Start time"}</h3>
           <div className="choice-grid time-grid">
-            {["10:00", "11:30", "13:00", "14:30", "16:00", "17:30", "19:00"].map((slot) => <button aria-pressed={time === slot} onClick={() => setTime(slot)} key={slot}>{slot}</button>)}
+            {availableSlots.map((slot) => <button aria-pressed={time === slot.localStartTime} onClick={() => setTime(slot.localStartTime)} key={slot.localStartTime}>{slot.localStartTime}</button>)}
           </div>
           <p className="helper">Asia/Bangkok • {locale === "th" ? "ต้องจองล่วงหน้าอย่างน้อย 1 วัน" : "Minimum one-day advance booking"}</p>
         </section>
@@ -354,10 +462,14 @@ export function BookingExperience() {
             <div className="review-row"><span>{locale === "th" ? "วันและเวลา" : "Date and time"}</span><strong>{date} • {time}</strong></div>
             <div className="review-total"><span>{t.total}</span><strong>{formatBaht(total, locale)}</strong></div>
           </div>
-          <label className="consent consent-panel"><input type="checkbox" checked={privacyAccepted} onChange={(event) => setPrivacyAccepted(event.target.checked)} /><span>{locale === "th" ? "ฉันยืนยันว่าข้อมูลถูกต้อง และรับทราบนโยบายความเป็นส่วนตัวและเงื่อนไขการจอง" : "I confirm the details are correct and acknowledge the Privacy Notice and Booking Terms."}</span></label>
+          <label className="consent consent-panel"><input type="checkbox" checked={privacyAccepted} onChange={(event) => setPrivacyAccepted(event.target.checked)} /><span>{locale === "th" ? "ฉันยืนยันว่าข้อมูลถูกต้อง และรับทราบ" : "I confirm the details are correct and acknowledge the "}<a href="/privacy" target="_blank">{locale === "th" ? "นโยบายความเป็นส่วนตัว" : "Privacy Notice"}</a>{locale === "th" ? " และ" : " and "}<a href="/terms" target="_blank">{locale === "th" ? "เงื่อนไขการจอง" : "Booking Terms"}</a></span></label>
           <p className="pay-note">{t.payAtStore}</p>
-          <button className="primary-button submit-button" disabled title="SPA API connection required">{t.submit}</button>
-          <p className="helper centered">{locale === "th" ? "ปุ่มส่งคำขอจะเปิดใช้หลังเชื่อม reCAPTCHA และ Booking API" : "Submission will be enabled after reCAPTCHA and the Booking API are connected."}</p>
+          {lineState === "linked" && <p className="helper centered" role="status">{locale === "th" ? "เชื่อมกับ LINE แล้ว คุณจะได้รับข้อความเมื่อส่งคำขอและเมื่อร้านยืนยัน" : "Connected to LINE. You will receive request and confirmation updates."}</p>}
+          {lineState === "loading" && <p className="helper centered" role="status">{locale === "th" ? "กำลังตรวจสอบ LINE…" : "Checking LINE…"}</p>}
+          <button className="primary-button submit-button" disabled={!privacyAccepted || Boolean(submittedBookingId)} onClick={submitBooking}>{submittedBookingId ? `${t.submit} • ${submittedBookingId}` : t.submit}</button>
+          {submittedBookingId && <p className="helper centered" role="status">{locale === "th" ? "ส่งคำขอจองเข้าระบบแล้ว ร้านจะตรวจสอบและยืนยันอีกครั้ง" : "Booking request sent. The store will review and confirm it."}</p>}
+          {submittedBookingId && submittedStatusToken && <a className="primary-button inline-button" href={`/status#id=${encodeURIComponent(submittedBookingId)}&t=${encodeURIComponent(submittedStatusToken)}`}>{locale === "th" ? "ตรวจสอบสถานะการจอง" : "Check booking status"}</a>}
+          {submitError && <p className="helper centered" role="alert">{submitError}</p>}
         </section>
       )}
 

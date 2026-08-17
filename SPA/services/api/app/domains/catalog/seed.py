@@ -75,5 +75,9 @@ class CatalogManifest(BaseModel):
 
 @lru_cache(maxsize=1)
 def load_catalog_manifest() -> CatalogManifest:
-    path = Path(__file__).resolve().parents[5] / "infra" / "seed" / "service-catalog.v1.json"
+    packaged_path = Path(__file__).resolve().parent / "service-catalog.v1.json"
+    workspace_path = (
+        Path(__file__).resolve().parents[5] / "infra" / "seed" / "service-catalog.v1.json"
+    )  # noqa: E501
+    path = packaged_path if packaged_path.exists() else workspace_path
     return CatalogManifest.model_validate(json.loads(path.read_text(encoding="utf-8")))

@@ -104,6 +104,11 @@ textarea { min-height: 110px; resize: vertical; }
 .status-card h1 { font-size: 34px; }
 .english-subtitle { color: var(--muted); }
 .inline-button { display: inline-flex; align-items: center; text-decoration: none; }
+.line-link-panel { margin: 20px 0; padding: 18px; border: 1px solid #93b78b; border-radius: 14px; background: #edf5ea; text-align: left; }
+.line-link-panel h2 { margin: 0 0 8px; color: var(--forest-deep); font-size: 18px; }
+.line-link-panel p { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.line-link-button { width: 100%; min-height: 48px; }
+.link-error { color: var(--error) !important; font-weight: 700; }
 
 @media (max-width: 640px) {
   .section-heading { display: block; }

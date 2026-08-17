@@ -1,0 +1,124 @@
+{
+  "catalogVersion": "spa49-phase1-v1-2026-08-14",
+  "source": "BusinessLogic.md#7.1",
+  "branchId": "branch_001",
+  "services": [
+    {
+      "id": "complete-relaxation",
+      "category": "SIGNATURE",
+      "nameTh": "แพ็กเกจผ่อนคลายครบสูตร",
+      "nameEn": "Complete Relaxation Ritual",
+      "displayOrder": 10,
+      "active": true,
+      "variants": [{"id":"complete-relaxation-105","durationMinutes":105,"priceSatang":59000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}]
+    },
+    {
+      "id": "couple-relaxation",
+      "category": "SIGNATURE",
+      "nameTh": "แพ็กเกจผ่อนคลายสำหรับสองท่าน",
+      "nameEn": "Couple Relaxation Package",
+      "displayOrder": 20,
+      "active": true,
+      "variants": [{"id":"couple-relaxation-90","durationMinutes":90,"priceSatang":119000,"pricingMode":"PER_BOOKING","requiredPax":2,"active":true,"resourceRequirements":[]}]
+    },
+    {
+      "id": "foot-reflexology",
+      "category": "MASSAGE",
+      "nameTh": "นวดเท้า",
+      "nameEn": "Reflexology Foot Massage",
+      "displayOrder": 30,
+      "active": true,
+      "variants": [
+        {"id":"foot-reflexology-60","durationMinutes":60,"priceSatang":35000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]},
+        {"id":"foot-reflexology-120","durationMinutes":120,"priceSatang":65000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}
+      ]
+    },
+    {
+      "id": "traditional-thai",
+      "category": "MASSAGE",
+      "nameTh": "นวดแผนไทย",
+      "nameEn": "Traditional Thai Massage",
+      "displayOrder": 40,
+      "active": true,
+      "variants": [
+        {"id":"traditional-thai-60","durationMinutes":60,"priceSatang":30000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]},
+        {"id":"traditional-thai-120","durationMinutes":120,"priceSatang":60000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}
+      ]
+    },
+    {
+      "id": "lamenatt-oil",
+      "category": "MASSAGE",
+      "nameTh": "นวดออย / น้ำมัน",
+      "nameEn": "Lamenatt Oil Massage",
+      "displayOrder": 50,
+      "active": true,
+      "variants": [
+        {"id":"lamenatt-oil-60","durationMinutes":60,"priceSatang":45000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]},
+        {"id":"lamenatt-oil-120","durationMinutes":120,"priceSatang":85000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}
+      ]
+    },
+    {
+      "id": "tendon-relief",
+      "category": "MASSAGE",
+      "nameTh": "นวดแก้อาการ",
+      "nameEn": "Tendon Relief Massage",
+      "displayOrder": 60,
+      "active": true,
+      "variants": [
+        {"id":"tendon-relief-60","durationMinutes":60,"priceSatang":45000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]},
+        {"id":"tendon-relief-120","durationMinutes":120,"priceSatang":90000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}
+      ]
+    },
+    {
+      "id": "aroma-therapy",
+      "category": "MASSAGE",
+      "nameTh": "นวดน้ำมันอโรม่า",
+      "nameEn": "Aroma Therapy",
+      "displayOrder": 70,
+      "active": true,
+      "variants": [
+        {"id":"aroma-therapy-60","durationMinutes":60,"priceSatang":60000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]},
+        {"id":"aroma-therapy-120","durationMinutes":120,"priceSatang":120000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}
+      ]
+    },
+    {
+      "id": "herbal-compress",
+      "category": "MASSAGE",
+      "nameTh": "นวดประคบสมุนไพร",
+      "nameEn": "Herbal Compress Massage",
+      "displayOrder": 80,
+      "active": true,
+      "variants": [
+        {"id":"herbal-compress-60","durationMinutes":60,"priceSatang":60000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]},
+        {"id":"herbal-compress-120","durationMinutes":120,"priceSatang":110000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}
+      ]
+    },
+    {
+      "id": "body-scrub",
+      "category": "MASSAGE",
+      "nameTh": "สครับผิวกาย",
+      "nameEn": "Body Scrub",
+      "displayOrder": 90,
+      "active": true,
+      "variants": [{"id":"body-scrub-60","durationMinutes":60,"priceSatang":60000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}]
+    },
+    {
+      "id": "herbal-steam",
+      "category": "MASSAGE",
+      "nameTh": "อบสมุนไพร",
+      "nameEn": "Herbal Steam",
+      "displayOrder": 100,
+      "active": true,
+      "variants": [{"id":"herbal-steam-30","durationMinutes":30,"priceSatang":30000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}]
+    },
+    {
+      "id": "hot-compress-neck-shoulder-back",
+      "category": "STANDALONE",
+      "nameTh": "ประคบร้อน คอ บ่า ไหล่",
+      "nameEn": "Hot Compress — Neck, Shoulder & Back",
+      "displayOrder": 110,
+      "active": true,
+      "variants": [{"id":"hot-compress-neck-shoulder-back-20","durationMinutes":20,"priceSatang":19000,"pricingMode":"PER_PARTICIPANT","requiredPax":1,"active":true,"resourceRequirements":[]}]
+    }
+  ]
+}

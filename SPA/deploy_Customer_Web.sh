@@ -11,6 +11,7 @@ SOURCE_DIR="${SOURCE_DIR:-$SCRIPT_DIR}"
 DOCKERFILE="${DOCKERFILE:-apps/customer-web/Dockerfile}"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/apps/customer-web/.env}"
 REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-false}"
+SPA_API_URL="${SPA_API_URL:-}"
 
 ARTIFACT_REPOSITORY="${ARTIFACT_REPOSITORY:-spa}"
 IMAGE_NAME="${IMAGE_NAME:-spa-customer-web}"
@@ -27,6 +28,7 @@ SERVICE_ACCOUNT_KEY_PATH="${SERVICE_ACCOUNT_KEY_PATH:-}"
 
 ALLOW_UNAUTHENTICATED="${ALLOW_UNAUTHENTICATED:-true}"
 CHECK_MAIN_BRANCH="${CHECK_MAIN_BRANCH:-true}"
+REQUIRE_CLEAN_WORKTREE="${REQUIRE_CLEAN_WORKTREE:-true}"
 CPU="${CPU:-1}"
 MEMORY="${MEMORY:-512Mi}"
 CONCURRENCY="${CONCURRENCY:-80}"
@@ -55,6 +57,12 @@ if [[ "$CHECK_MAIN_BRANCH" == "true" ]]; then
     echo "Set CHECK_MAIN_BRANCH=false only when deliberately bypassing this safety guard."
     exit 1
   fi
+fi
+
+if [[ "$REQUIRE_CLEAN_WORKTREE" == "true" ]] && [[ -n "$(git status --porcelain -- "$SCRIPT_DIR")" ]]; then
+  echo "ERROR: SPA worktree has uncommitted changes. Production deploy requires a traceable clean source tree."
+  echo "Set REQUIRE_CLEAN_WORKTREE=false only for an isolated Test deployment."
+  exit 1
 fi
 
 if [[ ! -f "$SOURCE_DIR/$DOCKERFILE" ]]; then
@@ -134,7 +142,7 @@ YAML
 env_args=()
 if [[ -f "$ENV_FILE" ]]; then
   tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_customer_web_env.XXXXXX.yaml")"
-  python3 - "$ENV_FILE" "$tmp_env_yaml" <<'PY'
+  python3 - "$ENV_FILE" "$tmp_env_yaml" "$SPA_API_URL" <<'PY'
 import json
 import re
 import sys
@@ -156,11 +164,14 @@ for raw_line in source.read_text(encoding="utf-8").splitlines():
     key, value = line.split("=", 1)
     key = key.strip()
     value = value.strip()
-    if not valid_key.match(key) or not key.startswith("NEXT_PUBLIC_"):
+    if not valid_key.match(key) or not (key.startswith("NEXT_PUBLIC_") or key == "SPA_API_URL"):
         continue
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         value = value[1:-1]
     environment[key] = value
+
+if sys.argv[3]:
+    environment["SPA_API_URL"] = sys.argv[3]
 
 with destination.open("w", encoding="utf-8") as output:
     for key, value in environment.items():
@@ -171,7 +182,18 @@ elif [[ "$REQUIRE_ENV_FILE" == "true" ]]; then
   echo "ERROR: Environment file not found: $ENV_FILE"
   exit 1
 else
-  echo "Environment file not found; deploying without optional public runtime variables: $ENV_FILE"
+  if [[ -n "$SPA_API_URL" ]]; then
+    tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_customer_env.XXXXXX.yaml")"
+    python3 - "$tmp_env_yaml" "$SPA_API_URL" <<'PY'
+import json
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(f"SPA_API_URL: {json.dumps(sys.argv[2])}\n", encoding="utf-8")
+PY
+    env_args+=(--env-vars-file "$tmp_env_yaml")
+  else
+    echo "Environment file not found; deploying without optional public runtime variables: $ENV_FILE"
+  fi
 fi
 
 echo "Building '$IMAGE_URI' with Cloud Build..."
@@ -200,6 +222,7 @@ deploy_args=(
   --quiet
 )
 deploy_args+=("${env_args[@]}")
+deploy_args+=(--set-secrets "LINE_LIFF_ID=spa-line-customer-liff-id:latest")
 
 if [[ "$ALLOW_UNAUTHENTICATED" == "true" ]]; then
   deploy_args+=(--allow-unauthenticated)

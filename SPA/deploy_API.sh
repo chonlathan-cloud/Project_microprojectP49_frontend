@@ -11,6 +11,10 @@ SOURCE_DIR="${SOURCE_DIR:-$SCRIPT_DIR/services/api}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/services/api/.env}"
 REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-false}"
+FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-spa-db}"
+APP_ENV="${APP_ENV:-production}"
+LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME="${LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME:-spa-line-customer-messaging-channel-secret}"
+LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME="${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME:-spa-line-admin-messaging-channel-secret}"
 
 ARTIFACT_REPOSITORY="${ARTIFACT_REPOSITORY:-spa}"
 IMAGE_NAME="${IMAGE_NAME:-spa-api}"
@@ -27,6 +31,7 @@ SERVICE_ACCOUNT_KEY_PATH="${SERVICE_ACCOUNT_KEY_PATH:-}"
 
 ALLOW_UNAUTHENTICATED="${ALLOW_UNAUTHENTICATED:-true}"
 CHECK_MAIN_BRANCH="${CHECK_MAIN_BRANCH:-true}"
+REQUIRE_CLEAN_WORKTREE="${REQUIRE_CLEAN_WORKTREE:-true}"
 CPU="${CPU:-1}"
 MEMORY="${MEMORY:-1Gi}"
 CONCURRENCY="${CONCURRENCY:-40}"
@@ -55,6 +60,12 @@ if [[ "$CHECK_MAIN_BRANCH" == "true" ]]; then
     echo "Set CHECK_MAIN_BRANCH=false only when deliberately bypassing this safety guard."
     exit 1
   fi
+fi
+
+if [[ "$REQUIRE_CLEAN_WORKTREE" == "true" ]] && [[ -n "$(git status --porcelain -- "$SCRIPT_DIR")" ]]; then
+  echo "ERROR: SPA worktree has uncommitted changes. Production deploy requires a traceable clean source tree."
+  echo "Set REQUIRE_CLEAN_WORKTREE=false only for an isolated Test deployment."
+  exit 1
 fi
 
 if [[ ! -f "$SOURCE_DIR/$DOCKERFILE" ]]; then
@@ -134,7 +145,7 @@ YAML
 env_args=()
 if [[ -f "$ENV_FILE" ]]; then
   tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_api_env.XXXXXX.yaml")"
-  python3 - "$ENV_FILE" "$tmp_env_yaml" <<'PY'
+  python3 - "$ENV_FILE" "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" <<'PY'
 import json
 import re
 import sys
@@ -142,6 +153,8 @@ from pathlib import Path
 
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
+firestore_database = sys.argv[3]
+app_env = sys.argv[4]
 valid_key = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 environment = {}
 
@@ -162,6 +175,9 @@ for raw_line in source.read_text(encoding="utf-8").splitlines():
         value = value[1:-1]
     environment[key] = value
 
+environment["FIRESTORE_DATABASE"] = firestore_database
+environment["APP_ENV"] = app_env
+
 with destination.open("w", encoding="utf-8") as output:
     for key, value in environment.items():
         output.write(f"{key}: {json.dumps(value, ensure_ascii=False)}\n")
@@ -171,7 +187,20 @@ elif [[ "$REQUIRE_ENV_FILE" == "true" ]]; then
   echo "ERROR: Environment file not found: $ENV_FILE"
   exit 1
 else
-  echo "Environment file not found; deploying without optional runtime variables: $ENV_FILE"
+  echo "Environment file not found; using FIRESTORE_DATABASE=$FIRESTORE_DATABASE: $ENV_FILE"
+  tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_api_env.XXXXXX.yaml")"
+  python3 - "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+destination = Path(sys.argv[1])
+destination.write_text(
+    f"FIRESTORE_DATABASE: {json.dumps(sys.argv[2])}\nAPP_ENV: {json.dumps(sys.argv[3])}\n",
+    encoding="utf-8",
+)
+PY
+  env_args+=(--env-vars-file "$tmp_env_yaml")
 fi
 
 echo "Building '$IMAGE_URI' with Cloud Build..."
@@ -197,6 +226,7 @@ deploy_args=(
   --ingress "$INGRESS"
   --execution-environment gen2
   --labels "application=spa,component=api"
+  --set-secrets "LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET=${LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_ADMIN_MESSAGING_CHANNEL_SECRET=${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_CUSTOMER_LOGIN_CHANNEL_ID=spa-line-customer-login-channel-id:latest,LINE_ADMIN_GROUP_ID=spa-line-admin-group-id:latest"
   --quiet
 )
 deploy_args+=("${env_args[@]}")

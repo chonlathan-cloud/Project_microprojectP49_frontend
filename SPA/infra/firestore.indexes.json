@@ -1,0 +1,31 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "bookings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "startAt", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "bookings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "startAt", "order": "ASCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "bookings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "contact.phoneE164", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"}
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

@@ -10,6 +10,7 @@ import {
   ChevronRight,
   FileUp,
   Home,
+  Sparkles,
   Settings,
   X,
   WalletCards
@@ -27,6 +28,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   { href: "/dashboard/welcome", label: "Welcome", icon: Home },
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
+  { href: "/dashboard/spa", label: "SPA", icon: Sparkles },
   { href: "/transactions", label: "Transactions", icon: ArrowLeftRight },
   { href: "/dashboard/upload-receipt", label: "Upload Receipt", icon: FileUp },
   { href: "/dashboard/pos-import", label: "POS Import", icon: WalletCards },

@@ -1,10 +1,18 @@
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.v1.bookings import router as bookings_router
+from app.api.v1.operations import router as operations_router
 from app.api.v1.public import router as public_router
+from app.api.v1.webhooks import router as webhooks_router
 from app.core.errors import DomainError
+from app.core.settings import get_settings
+from app.infrastructure.firestore import check_firestore_connection
+
+settings = get_settings()
 
 app = FastAPI(
     title="SPA 49 API",
@@ -13,6 +21,16 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 app.include_router(public_router)
+app.include_router(bookings_router)
+app.include_router(operations_router)
+app.include_router(webhooks_router)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Idempotency-Key"],
+)
 
 
 @app.exception_handler(DomainError)
@@ -40,4 +58,18 @@ async def live() -> dict[str, str]:
 
 @app.get("/health/ready", tags=["health"])
 async def ready() -> dict[str, object]:
-    return {"status": "ready", "dependencies": {"catalogSeed": "ready"}}
+    firestore_ready, firestore_error = check_firestore_connection()
+    dependencies: dict[str, object] = {
+        "catalogSeed": "ready",
+        "firestore": {
+            "status": "ready" if firestore_ready else "unavailable",
+            "database": settings.firestore_database,
+        },
+    }
+    if firestore_error:
+        dependencies["firestore"] = {
+            "status": "unavailable",
+            "database": settings.firestore_database,
+            "error": firestore_error,
+        }
+    return {"status": "ready" if firestore_ready else "degraded", "dependencies": dependencies}

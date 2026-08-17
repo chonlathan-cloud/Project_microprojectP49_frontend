@@ -59,6 +59,7 @@ export type PreviewBooking = {
   status: BookingStatus;
   healthAlert: boolean;
   therapistName?: string;
+  version: number;
 };
 
 export { INITIAL_SERVICE_CATALOG } from "./catalog";

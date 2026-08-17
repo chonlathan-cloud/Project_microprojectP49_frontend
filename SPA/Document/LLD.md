@@ -1394,7 +1394,7 @@ Stack traces are never returned. `requestId` is always included.
 APP_ENV
 GCP_PROJECT_ID=the49-487609
 GCP_REGION=asia-southeast1
-FIRESTORE_DATABASE=spa
+FIRESTORE_DATABASE=spa-db
 DEFAULT_BRANCH_ID
 BOOKING_BASE_URL
 ADMIN_BASE_URL
@@ -1432,7 +1432,7 @@ HEALTH_RETENTION_POLICY_APPROVED=false
 APP_ENV
 GCP_PROJECT_ID=the49-487609
 GCP_REGION=asia-southeast1
-FIRESTORE_DATABASE=spa
+FIRESTORE_DATABASE=spa-db
 LINE_CUSTOMER_MESSAGING_CHANNEL_ACCESS_TOKEN_SECRET_NAME=spa-line-customer-messaging-channel-access-token
 LINE_ADMIN_MESSAGING_CHANNEL_ACCESS_TOKEN_SECRET_NAME=spa-line-admin-messaging-channel-access-token
 LINE_ADMIN_GROUP_ID_SECRET_NAME=spa-line-admin-group-id
@@ -1476,7 +1476,7 @@ Terraform targets the existing project `the49-487609`; it does not create or re-
 
 - Required API activation
 - Artifact Registry repositories
-- Named Firestore Native database `spa` in `asia-southeast1` with delete protection, plus indexes/fields/TTL where provider support is available
+- Named Firestore Native database `spa-db` in `asia-southeast1` with delete protection, plus indexes/fields/TTL where provider support is available
 - SPA authorization documents and documented Firebase Auth provider/bootstrap inputs while reusing the existing Firebase project
 - Four Cloud Run v2 services and dedicated service accounts
 - Cloud Tasks queue and Scheduler reconciliation job
@@ -1488,7 +1488,7 @@ Terraform targets the existing project `the49-487609`; it does not create or re-
 - Daily Firestore backup schedule with 30-day retention
 - Workload Identity Pool/provider and deployer bindings
 
-Terraform state uses separate `test` and `prod` state prefixes in a protected, versioned GCS backend in `the49-487609`. Production apply requires protected GitHub Environment approval. Test resources use `spa-*-test` names and never share the `spa` production database or production LINE secrets.
+Terraform state uses separate `test` and `prod` state prefixes in a protected, versioned GCS backend in `the49-487609`. Production apply requires protected GitHub Environment approval. Test resources use `spa-*-test` names and never share the `spa-db` production database or production LINE secrets.
 
 ## 24. Cloud Run Container Contracts
 
@@ -1623,7 +1623,7 @@ The last-capacity test launches at least 20 concurrent create attempts against o
 
 1. Scaffold SPA workspace, linting, containers, and CI checks.
 2. Import existing SPA secret containers into Terraform state and provision scoped test resources in `the49-487609`; do not create secret versions.
-3. Provision the production named Firestore database `spa` and Cloud Run/IAM base only after implementation approval.
+3. Verify and import the production named Firestore database `spa-db`, then provision the Cloud Run/IAM base only after implementation approval.
 4. Implement shared enums, errors, request context, and named-database Firestore repositories.
 5. Implement the 11-item catalog seed, branch hours, pricing modes, resources, buckets, and availability logic.
 6. Implement Guest protection, consent evidence, Customer/Health Profiles, Booking snapshots, idempotency, transaction, and status tokens.
