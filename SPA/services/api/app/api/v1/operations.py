@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -46,7 +46,7 @@ class ResourceUpdate(ApiModel):
 
 
 class TherapistInput(ApiModel):
-    branch_id: str = "branch_001"
+    branch_id: Literal["branch_001"] = "branch_001"
     display_name: str = Field(min_length=1, max_length=100)
 
 
@@ -57,11 +57,25 @@ class AssignmentInput(ApiModel):
 
 class ServiceUpdate(ApiModel):
     active: bool | None = None
+    category: Literal["SIGNATURE", "MASSAGE", "STANDALONE"] | None = None
     name_th: str | None = Field(default=None, min_length=1, max_length=160)
     name_en: str | None = Field(default=None, min_length=1, max_length=160)
     description_th: str | None = Field(default=None, max_length=500)
     description_en: str | None = Field(default=None, max_length=500)
     expected_version: int = Field(ge=1)
+
+
+class ServiceCreate(ApiModel):
+    branch_id: Literal["branch_001"] = "branch_001"
+    category: Literal["SIGNATURE", "MASSAGE", "STANDALONE"]
+    name_th: str = Field(min_length=1, max_length=160)
+    name_en: str = Field(min_length=1, max_length=160)
+    description_th: str = Field(default="", max_length=500)
+    description_en: str = Field(default="", max_length=500)
+    duration_minutes: int = Field(ge=15, le=480, multiple_of=15)
+    price_satang: int = Field(ge=0)
+    pricing_mode: Literal["PER_PARTICIPANT", "PER_BOOKING"] = "PER_PARTICIPANT"
+    required_pax: Literal[1, 2] = 1
 
 
 class VariantUpdate(ApiModel):
@@ -206,12 +220,15 @@ async def create_therapist(
     actor: Annotated[dict[str, object], Depends(require_admin_user)],
     client: Annotated[firestore.Client, Depends(get_firestore_client)],
 ) -> dict[str, object]:
+    display_name = request.display_name.strip()
+    if not display_name:
+        raise ValidationDomainError("Therapist display name is required")
     therapist_id = f"therapist_{uuid4().hex[:12]}"
     client.collection("therapists").document(therapist_id).set(
         {
             "therapistId": therapist_id,
             "branchId": request.branch_id,
-            "displayName": request.display_name,
+            "displayName": display_name,
             "active": True,
             "version": 1,
             "createdAt": datetime.now(UTC),
@@ -221,7 +238,7 @@ async def create_therapist(
     return {"therapistId": therapist_id, "version": 1}
 
 
-@router.post("/bookings/{booking_id}:assign")
+@router.put("/bookings/{booking_id}/assignments")
 async def assign_therapists(
     booking_id: str,
     request: AssignmentInput,
@@ -284,6 +301,59 @@ async def list_admin_services(
     return {
         "items": items,
         "permissions": {"manageServiceImages": actor.get("role") == "ADMIN"},
+    }
+
+
+@router.post("/services", status_code=status.HTTP_201_CREATED)
+async def create_service(
+    request: ServiceCreate,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> dict[str, object]:
+    if not request.name_th.strip() or not request.name_en.strip():
+        raise ValidationDomainError("Thai and English service names are required")
+    if (request.pricing_mode == "PER_BOOKING") != (request.required_pax == 2):
+        raise ValidationDomainError(
+            "Two-person services must use PER_BOOKING pricing; "
+            "other services must use PER_PARTICIPANT"
+        )
+    service_id = f"service-{uuid4().hex}"
+    variant_id = f"{service_id}-{request.duration_minutes}"
+    existing = [snapshot.to_dict() or {} for snapshot in client.collection("services").stream()]
+    display_order = max((int(item.get("displayOrder", 0)) for item in existing), default=0) + 10
+    now = datetime.now(UTC)
+    data = {
+        "serviceId": service_id,
+        "branchId": request.branch_id,
+        "category": request.category,
+        "nameTh": request.name_th.strip(),
+        "nameEn": request.name_en.strip(),
+        "descriptionTh": request.description_th.strip(),
+        "descriptionEn": request.description_en.strip(),
+        "active": True,
+        "displayOrder": display_order,
+        "variants": [
+            {
+                "variantId": variant_id,
+                "durationMinutes": request.duration_minutes,
+                "priceSatang": request.price_satang,
+                "pricingMode": request.pricing_mode,
+                "requiredPax": request.required_pax,
+                "active": True,
+                "resourceRequirements": [],
+            }
+        ],
+        "version": 1,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    client.collection("services").document(service_id).create(data)
+    _audit(client, actor=actor, event_type="SERVICE_CREATED", target_id=service_id)
+    return {
+        "serviceId": service_id,
+        "variantId": variant_id,
+        "version": 1,
+        "active": True,
     }
 
 

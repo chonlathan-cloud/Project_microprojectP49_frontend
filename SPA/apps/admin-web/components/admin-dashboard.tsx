@@ -2,7 +2,7 @@
 
 import type { BookingStatus, Locale, PreviewBooking } from "@spa/shared-types";
 import type { User } from "firebase/auth";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminModulePage, type AdminView } from "@/components/admin-module-pages";
 import { adminApi } from "@/lib/admin-api";
@@ -34,6 +34,16 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
+function formatDate(value: string, locale: Locale) {
+  return new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Asia/Bangkok"
+  }).format(new Date(value));
+}
+
 export function AdminDashboard({ user }: { user: User }) {
   const [activeView, setActiveView] = useState<"bookings" | AdminView>("bookings");
   const [locale, setLocale] = useState<Locale>("th");
@@ -49,6 +59,10 @@ export function AdminDashboard({ user }: { user: User }) {
   const [healthDetails, setHealthDetails] = useState<Array<{ nickname: string; details: string }> | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [bookingRefresh, setBookingRefresh] = useState(0);
+  const [notificationFailures, setNotificationFailures] = useState(0);
+  const detailDrawerRef = useRef<HTMLElement>(null);
+  const closeDrawerButtonRef = useRef<HTMLButtonElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -103,6 +117,50 @@ export function AdminDashboard({ user }: { user: User }) {
     })();
     return () => { active = false; };
   }, [user, bookingRefresh]);
+
+  useEffect(() => {
+    let active = true;
+    adminApi<{ items?: Array<{ state?: string }> }>(user, "/notifications")
+      .then((payload) => {
+        if (active) setNotificationFailures((payload.items ?? []).filter((item) => item.state !== "SENT").length);
+      })
+      .catch(() => {
+        if (active) setNotificationFailures(0);
+      });
+    return () => { active = false; };
+  }, [user, bookingRefresh]);
+
+  useEffect(() => {
+    if (!selectedId || activeView !== "bookings") return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeDrawerButtonRef.current?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedId("");
+        setHealthDetails(null);
+        return;
+      }
+      if (event.key !== "Tab" || !detailDrawerRef.current) return;
+      const focusable = Array.from(detailDrawerRef.current.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]'
+      ));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previousFocusRef.current?.focus();
+    };
+  }, [selectedId, activeView]);
 
   async function transitionBooking(action: "confirm" | "cancel" | "start" | "no_show" | "complete") {
     const booking = liveBookings.find((item) => item.bookingId === selectedId);
@@ -169,17 +227,17 @@ export function AdminDashboard({ user }: { user: User }) {
   }
 
   const bookings = liveBookings;
-  const filtered = useMemo(() => bookings.filter((booking) => {
+  const filtered = useMemo(() => [...bookings.filter((booking) => {
     const haystack = `${booking.bookingId} ${booking.customerName} ${booking.customerPhoneMasked}`.toLowerCase();
     return (filter === "ALL" || booking.status === filter) && haystack.includes(query.trim().toLowerCase());
-  }), [bookings, filter, query]);
+  })].sort((a, b) => new Date(a.startLocal).getTime() - new Date(b.startLocal).getTime()), [bookings, filter, query]);
   const selected = bookings.find((booking) => booking.bookingId === selectedId);
   const pending = bookings.filter((booking) => booking.status === "PENDING").length;
   const unassigned = bookings.filter((booking) => booking.status === "CONFIRMED" && !booking.therapistName).length;
 
   const text = locale === "th" ? {
-    title: "รายการจองวันนี้",
-    subtitle: "ติดตามคำขอที่กัน Capacity แล้วและจัดการงานหน้าร้าน",
+    title: "คิวการจอง",
+    subtitle: "เรียงตามวันและเวลา เพื่อจัดการงานหน้าร้านได้อย่างถูกต้อง",
     search: "ค้นหา Booking ID ชื่อ หรือเบอร์โทร",
     branch: "SPA 49 • สาขาหลัก",
     pending: "รอยืนยัน",
@@ -191,7 +249,7 @@ export function AdminDashboard({ user }: { user: User }) {
         ? `เชื่อมต่อ SPA API และ Firestore แล้ว • ข้อมูลจริง ${liveBookings.length} รายการ`
         : "โหลดข้อมูลการจองจริงไม่สำเร็จ • กรุณาเข้าสู่ระบบใหม่หรือตรวจสอบสิทธิ์",
     all: "ทั้งหมด",
-    time: "เวลา",
+    time: "วันและเวลา",
     customer: "ลูกค้า",
     service: "บริการ",
     pax: "จำนวน",
@@ -203,8 +261,8 @@ export function AdminDashboard({ user }: { user: User }) {
     cancel: "ยกเลิก",
     apiGate: bookingState === "ready" ? "การเปลี่ยนสถานะเชื่อมต่อ Firebase Auth และ API แล้ว" : "การเปลี่ยนสถานะจะเปิดใช้หลังโหลดข้อมูลจริงสำเร็จ"
   } : {
-    title: "Today’s bookings",
-    subtitle: "Track capacity-holding requests and run front-desk operations",
+    title: "Booking queue",
+    subtitle: "Sorted by date and time for accurate front-desk operations",
     search: "Search booking ID, name, or phone",
     branch: "SPA 49 • Main branch",
     pending: "Pending review",
@@ -216,7 +274,7 @@ export function AdminDashboard({ user }: { user: User }) {
         ? `SPA API and Firestore connected • ${liveBookings.length} live records`
         : "Live bookings could not be loaded • Sign in again or check account permissions",
     all: "All",
-    time: "Time",
+    time: "Date and time",
     customer: "Customer",
     service: "Service",
     pax: "Pax",
@@ -235,7 +293,7 @@ export function AdminDashboard({ user }: { user: User }) {
         <div className="admin-brand"><div><strong>SPA 49</strong><small>BRANCH OPERATIONS</small></div></div>
         <div className="branch-chip"><span className="live-dot" />{text.branch}</div>
         <nav aria-label="Main navigation">
-          {navItems.map(([id, icon, th, en]) => <button className={activeView === id ? "nav-item active" : "nav-item"} aria-current={activeView === id ? "page" : undefined} onClick={() => { setActiveView(id); setSelectedId(""); setSidebarOpen(false); }} key={id}><span aria-hidden="true">{icon}</span>{locale === "th" ? th : en}</button>)}
+          {navItems.map(([id, icon, th, en]) => <button className={activeView === id ? "nav-item active" : "nav-item"} aria-current={activeView === id ? "page" : undefined} title={locale === "th" ? th : en} onClick={() => { setActiveView(id); setSelectedId(""); setQuery(""); setSidebarOpen(false); }} key={id}><span aria-hidden="true">{icon}</span>{locale === "th" ? th : en}</button>)}
         </nav>
         <div className="sidebar-footer">
           <div className="avatar">พ</div><div><strong>คุณภา</strong><small>ADMIN</small></div>
@@ -245,20 +303,20 @@ export function AdminDashboard({ user }: { user: User }) {
       <div className="admin-main">
         <header className="topbar">
           <button className="menu-button" aria-label="Toggle navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((value) => !value)}>☰</button>
-          <label className="global-search"><span aria-hidden="true">⌕</span><input aria-label={text.search} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={text.search} /></label>
+          {activeView === "bookings" ? <label className="global-search"><span aria-hidden="true">⌕</span><input aria-label={text.search} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={text.search} /></label> : <div className="topbar-context"><span>{locale === "th" ? "พื้นที่ทำงาน" : "Workspace"}</span><strong>{locale === "th" ? navItems.find(([id]) => id === activeView)?.[2] : navItems.find(([id]) => id === activeView)?.[3]}</strong></div>}
           <div className="admin-language" role="group" aria-label="Language"><button aria-pressed={locale === "th"} onClick={() => setLocale("th")}>TH</button><button aria-pressed={locale === "en"} onClick={() => setLocale("en")}>EN</button></div>
-          <button className="notification-button" aria-label="Notifications" onClick={() => { setActiveView("notifications"); setSelectedId(""); }}>♢<span>!</span></button>
+          <button className="notification-button" aria-label={`${locale === "th" ? "การแจ้งเตือนที่ต้องตรวจสอบ" : "Notifications requiring review"}: ${notificationFailures}`} onClick={() => { setActiveView("notifications"); setSelectedId(""); setQuery(""); }}>♢{notificationFailures > 0 && <span>{notificationFailures > 99 ? "99+" : notificationFailures}</span>}</button>
         </header>
 
         <div className="preview-strip" role="status">{text.preview}</div>
 
         {activeView === "bookings" ? <main className="dashboard-content">
-          <div className="page-heading"><div><p className="eyebrow">FRONT DESK • ASIA/BANGKOK</p><h1>{text.title}</h1><p>{text.subtitle}</p></div><button className="new-booking" disabled>＋ {locale === "th" ? "เพิ่มการจอง" : "New booking"}</button></div>
+          <div className="page-heading"><div><p className="eyebrow">FRONT DESK • ASIA/BANGKOK</p><h1>{text.title}</h1><p>{text.subtitle}</p></div></div>
 
-          <section className="metric-grid" aria-label="Operational queue summary">
-            <article className="metric warning"><span className="metric-icon">!</span><div><small>{text.pending}</small><strong>{pending}</strong><p>{locale === "th" ? "รายการนี้กัน Capacity แล้ว" : "These bookings hold capacity"}</p></div></article>
-            <article className="metric info"><span className="metric-icon">♙</span><div><small>{text.unassigned}</small><strong>{unassigned}</strong><p>{locale === "th" ? "ต้องมอบหมายก่อนเริ่มบริการ" : "Assign before starting service"}</p></div></article>
-            <article className="metric danger"><span className="metric-icon">↻</span><div><small>{text.notification}</small><strong>0</strong><p>{locale === "th" ? "ไม่มีรายการล้มเหลวที่ตรวจพบ" : "No detected delivery failures"}</p></div></article>
+          <section className="queue-summary" aria-label="Operational queue summary">
+            <div className="queue-item warning"><span>{text.pending}</span><strong>{pending}</strong></div>
+            <div className="queue-item info"><span>{text.unassigned}</span><strong>{unassigned}</strong></div>
+            <button className="queue-item danger" onClick={() => setActiveView("notifications")}><span>{text.notification}</span><strong>{notificationFailures}</strong></button>
           </section>
 
           <section className="operations-panel" aria-labelledby="bookings-table-title">
@@ -268,7 +326,7 @@ export function AdminDashboard({ user }: { user: User }) {
                 <thead><tr><th>{text.time}</th><th>{text.customer}</th><th>{text.service}</th><th>{text.pax}</th><th>{text.therapist}</th><th>{text.status}</th><th><span className="sr-only">Actions</span></th></tr></thead>
                 <tbody>
                   {filtered.map((booking) => <tr key={booking.bookingId} className={selectedId === booking.bookingId ? "selected-row" : undefined}>
-                    <td><strong className="time-cell">{formatTime(booking.startLocal)}</strong><small>{booking.bookingId}</small></td>
+                    <td><strong className="date-cell">{formatDate(booking.startLocal, locale)}</strong><span className="time-cell">{formatTime(booking.startLocal)}</span><small>{booking.bookingId}</small></td>
                     <td><strong>{booking.customerName}</strong><small>{booking.customerPhoneMasked}</small>{booking.healthAlert && <span className="health-alert">⚠ {locale === "th" ? "ตรวจสุขภาพ" : "Health review"}</span>}</td>
                     <td>{booking.serviceName}</td><td>{booking.pax}</td><td>{booking.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</td><td><span className={`status status-${booking.status.toLowerCase()}`}>{statusLabel[booking.status][locale]}</span></td><td><button className="row-action" onClick={() => setSelectedId(booking.bookingId)} aria-label={`${text.detail} ${booking.bookingId}`}>→</button></td>
                   </tr>)}
@@ -280,7 +338,7 @@ export function AdminDashboard({ user }: { user: User }) {
         </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} />}
       </div>
 
-      {selected && <aside className="detail-drawer" aria-labelledby="detail-title"><div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button aria-label="Close detail" onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div><div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>{selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดไม่แสดงในรายการหรือ LINE Group" : "Details stay out of lists and the LINE group"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}<dl><div><dt>{text.time}</dt><dd>{formatTime(selected.startLocal)} น.</dd></div><div><dt>{text.service}</dt><dd>{selected.serviceName}</dd></div><div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div><div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div></dl><div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready" || selected.status !== "PENDING"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready" || !["PENDING", "CONFIRMED"].includes(selected.status)} onClick={() => transitionBooking("cancel")}>{text.cancel}</button>{selected.status === "CONFIRMED" && <button className="confirm-button" disabled={!selected.therapistName} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button>}{selected.status === "CONFIRMED" && <button className="cancel-button" disabled={currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button>}{selected.status === "IN_SERVICE" && <button className="confirm-button" onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button>}</div>{selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}{actionMessage && <p className={`action-message ${actionMessage.kind}`} role="status">{actionMessage.text}</p>}<p className="api-gate">{text.apiGate}</p></aside>}
+      {selected && <aside ref={detailDrawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button ref={closeDrawerButtonRef} aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div><div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>{selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดไม่แสดงในรายการหรือ LINE Group" : "Details stay out of lists and the LINE group"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}<dl><div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div><div><dt>{text.service}</dt><dd>{selected.serviceName}</dd></div><div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div><div><dt>{text.therapist}</dt><dd>{selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div><div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div></dl><div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready" || selected.status !== "PENDING"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready" || !["PENDING", "CONFIRMED"].includes(selected.status)} onClick={() => transitionBooking("cancel")}>{text.cancel}</button>{selected.status === "CONFIRMED" && <button className="confirm-button" disabled={!selected.therapistName} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button>}{selected.status === "CONFIRMED" && <button className="cancel-button" disabled={currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button>}{selected.status === "IN_SERVICE" && <button className="confirm-button" onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button>}</div>{selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}{actionMessage && <p className={`action-message ${actionMessage.kind}`} role="status">{actionMessage.text}</p>}<p className="api-gate">{text.apiGate}</p></aside>}
     </div>
   );
 }

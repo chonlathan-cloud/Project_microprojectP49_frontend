@@ -439,6 +439,7 @@ Fields named `createdAt`, `updatedAt`, and audit timestamps use server timestamp
   "nameEn": "Aroma Therapy",
   "descriptionTh": "...",
   "descriptionEn": "...",
+  "category": "MASSAGE",
   "active": true,
   "displayOrder": 10,
   "version": 1,
@@ -448,6 +449,8 @@ Fields named `createdAt`, `updatedAt`, and audit timestamps use server timestamp
 ```
 
 `descriptionTh` และ `descriptionEn` เป็นเนื้อหา Service Catalog ที่ Admin แก้ไขได้ Public API ต้องส่งค่าจาก Active Firestore record ให้ Customer Web โดยใช้ค่าใน versioned seed manifest เฉพาะระหว่าง migration เมื่อ record เดิมยังไม่มีคำอธิบาย ค่า Firestore ที่ Admin บันทึกมีลำดับความสำคัญสูงกว่าเสมอ
+
+Admin สามารถสร้าง Service ใหม่ เปลี่ยน `category` ระหว่าง `SIGNATURE`, `MASSAGE` และ `STANDALONE` และปิด Service แบบย้อนกลับได้ การนำ Service ออกจาก Customer Web ใช้ `active: false` แทนการลบ document เพื่อรักษา Booking history และ Audit Trail
 
 ### 6.3 `service_variants/{variantId}`
 
