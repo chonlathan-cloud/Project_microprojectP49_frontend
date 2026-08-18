@@ -71,6 +71,8 @@ def main() -> None:
                 "category": service["category"],
                 "nameTh": service["nameTh"],
                 "nameEn": service["nameEn"],
+                "descriptionTh": service["descriptionTh"],
+                "descriptionEn": service["descriptionEn"],
                 "displayOrder": service["displayOrder"],
                 "active": service["active"],
                 "variants": [

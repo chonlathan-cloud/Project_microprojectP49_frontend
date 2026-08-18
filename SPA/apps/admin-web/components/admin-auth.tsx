@@ -13,7 +13,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { getFirebaseAuth } from "@/lib/firebase";
 
-type Props = { children: (user: User, idToken: string) => ReactNode };
+type Props = { children: (user: User) => ReactNode };
 
 function authErrorMessage(error: unknown): string {
   const code = (error as Partial<AuthError>)?.code;
@@ -31,7 +31,6 @@ function authErrorMessage(error: unknown): string {
 
 export function AdminAuth({ children }: Props) {
   const [user, setUser] = useState<User | null>(null);
-  const [idToken, setIdToken] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -44,15 +43,11 @@ export function AdminAuth({ children }: Props) {
         if (active) setError(authErrorMessage(caught));
       });
       unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
-        try {
-          const nextToken = nextUser ? await nextUser.getIdToken() : "";
-          if (!active) return;
-          setUser(nextUser);
-          setIdToken(nextToken);
-        } catch (caught) {
-          if (active) setError(authErrorMessage(caught));
-        } finally {
-          if (active) setLoading(false);
+        if (!active) return;
+        setUser(nextUser);
+        setLoading(false);
+        if (!nextUser) {
+          setError("");
         }
       });
     } catch (caught) {
@@ -82,5 +77,5 @@ export function AdminAuth({ children }: Props) {
 
   if (loading) return <div className="auth-gate">Checking Firebase Authentication…</div>;
   if (!user) return <main className="auth-gate"><h1>SPA 49 Admin</h1><p>{error || "Sign in with an invited Google account to continue."}</p><button className="primary-button" onClick={login}>Sign in with Google</button></main>;
-  return <>{children(user, idToken)}<button className="auth-signout" onClick={() => signOut(getFirebaseAuth())}>Sign out</button></>;
+  return <>{children(user)}<button className="auth-signout" onClick={() => signOut(getFirebaseAuth())}>Sign out</button></>;
 }

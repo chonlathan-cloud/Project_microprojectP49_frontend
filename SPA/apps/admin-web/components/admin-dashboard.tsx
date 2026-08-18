@@ -1,9 +1,11 @@
 "use client";
 
 import type { BookingStatus, Locale, PreviewBooking } from "@spa/shared-types";
+import type { User } from "firebase/auth";
 import { useEffect, useMemo, useState } from "react";
 
 import { AdminModulePage, type AdminView } from "@/components/admin-module-pages";
+import { adminApi } from "@/lib/admin-api";
 
 const statusLabel: Record<BookingStatus, { th: string; en: string }> = {
   PENDING: { th: "รอยืนยัน", en: "Pending" },
@@ -32,7 +34,7 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
-export function AdminDashboard({ idToken }: { idToken: string }) {
+export function AdminDashboard({ user }: { user: User }) {
   const [activeView, setActiveView] = useState<"bookings" | AdminView>("bookings");
   const [locale, setLocale] = useState<Locale>("th");
   const [query, setQuery] = useState("");
@@ -86,21 +88,21 @@ export function AdminDashboard({ idToken }: { idToken: string }) {
   }, []);
 
   useEffect(() => {
-    fetch("/api/spa/api/v1/admin/bookings", {
-      headers: { Authorization: `Bearer ${idToken}` },
-      cache: "no-store"
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Admin booking API unavailable");
-        const payload = await response.json() as { items?: PreviewBooking[] };
+    let active = true;
+    (async () => {
+      try {
+        const payload = await adminApi<{ items?: PreviewBooking[] }>(user, "/bookings");
+        if (!active) return;
         setLiveBookings(payload.items ?? []);
         setBookingState("ready");
-      })
-      .catch(() => {
+      } catch {
+        if (!active) return;
         setLiveBookings([]);
         setBookingState("error");
-      });
-  }, [idToken, bookingRefresh]);
+      }
+    })();
+    return () => { active = false; };
+  }, [user, bookingRefresh]);
 
   async function transitionBooking(action: "confirm" | "cancel" | "start" | "no_show" | "complete") {
     const booking = liveBookings.find((item) => item.bookingId === selectedId);
@@ -126,23 +128,15 @@ export function AdminDashboard({ idToken }: { idToken: string }) {
     setActionState("submitting");
     setActionMessage(null);
     try {
-      const response = await fetch(`/api/spa/api/v1/admin/bookings/${encodeURIComponent(booking.bookingId)}:${action}`, {
+      const payload = await adminApi<{ status?: BookingStatus; version?: number; detail?: string }>(user, `/bookings/${encodeURIComponent(booking.bookingId)}:${action}`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${idToken}`,
-          "Content-Type": "application/json"
-        },
         body: JSON.stringify({
           reason,
           expectedVersion: booking.version,
           commandId: crypto.randomUUID()
-        }),
-        cache: "no-store"
+        })
       });
-      const payload = await response.json() as { status?: BookingStatus; version?: number; detail?: string };
-      if (!response.ok || !payload.status) {
-        throw new Error(payload.detail ?? "Booking transition failed");
-      }
+      if (!payload.status) throw new Error(payload.detail ?? "Booking transition failed");
       setLiveBookings((items) => items.map((item) => item.bookingId === booking.bookingId
         ? { ...item, status: payload.status as BookingStatus, version: payload.version ?? item.version + 1 }
         : item));
@@ -164,12 +158,10 @@ export function AdminDashboard({ idToken }: { idToken: string }) {
     if (!selected || !selected.healthAlert) return;
     setActionMessage(null);
     try {
-      const response = await fetch(`/api/spa/api/v1/admin/bookings/${encodeURIComponent(selected.bookingId)}/health`, {
-        headers: { Authorization: `Bearer ${idToken}` },
-        cache: "no-store"
-      });
-      if (!response.ok) throw new Error("Health information unavailable");
-      const payload = await response.json() as { participants?: Array<{ nickname: string; details: string }> };
+      const payload = await adminApi<{ participants?: Array<{ nickname: string; details: string }> }>(
+        user,
+        `/bookings/${encodeURIComponent(selected.bookingId)}/health`
+      );
       setHealthDetails(payload.participants ?? []);
     } catch (caught) {
       setActionMessage({ kind: "error", text: caught instanceof Error ? caught.message : "Health information unavailable" });
@@ -240,7 +232,7 @@ export function AdminDashboard({ idToken }: { idToken: string }) {
   return (
     <div className={selected && activeView === "bookings" ? "admin-layout drawer-open" : "admin-layout"}>
       <aside className={sidebarOpen ? "sidebar open" : "sidebar"}>
-        <div className="admin-brand"><span aria-hidden="true">✦</span><div><strong>SPA 49</strong><small>BRANCH OPERATIONS</small></div></div>
+        <div className="admin-brand"><div><strong>SPA 49</strong><small>BRANCH OPERATIONS</small></div></div>
         <div className="branch-chip"><span className="live-dot" />{text.branch}</div>
         <nav aria-label="Main navigation">
           {navItems.map(([id, icon, th, en]) => <button className={activeView === id ? "nav-item active" : "nav-item"} aria-current={activeView === id ? "page" : undefined} onClick={() => { setActiveView(id); setSelectedId(""); setSidebarOpen(false); }} key={id}><span aria-hidden="true">{icon}</span>{locale === "th" ? th : en}</button>)}
@@ -285,7 +277,7 @@ export function AdminDashboard({ idToken }: { idToken: string }) {
             </div>
             {filtered.length === 0 && <div className="empty-state">{locale === "th" ? "ไม่พบรายการที่ตรงกับตัวกรอง" : "No bookings match these filters"}</div>}
           </section>
-        </main> : <AdminModulePage view={activeView} locale={locale} idToken={idToken} bookings={bookings} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} />}
+        </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} />}
       </div>
 
       {selected && <aside className="detail-drawer" aria-labelledby="detail-title"><div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button aria-label="Close detail" onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div><div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>{selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดไม่แสดงในรายการหรือ LINE Group" : "Details stay out of lists and the LINE group"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}<dl><div><dt>{text.time}</dt><dd>{formatTime(selected.startLocal)} น.</dd></div><div><dt>{text.service}</dt><dd>{selected.serviceName}</dd></div><div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div><div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div></dl><div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready" || selected.status !== "PENDING"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready" || !["PENDING", "CONFIRMED"].includes(selected.status)} onClick={() => transitionBooking("cancel")}>{text.cancel}</button>{selected.status === "CONFIRMED" && <button className="confirm-button" disabled={!selected.therapistName} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button>}{selected.status === "CONFIRMED" && <button className="cancel-button" disabled={currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button>}{selected.status === "IN_SERVICE" && <button className="confirm-button" onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button>}</div>{selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}{actionMessage && <p className={`action-message ${actionMessage.kind}`} role="status">{actionMessage.text}</p>}<p className="api-gate">{text.apiGate}</p></aside>}

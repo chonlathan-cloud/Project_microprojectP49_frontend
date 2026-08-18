@@ -1,30 +1,26 @@
 "use client";
 
 import type { Locale, PreviewBooking } from "@spa/shared-types";
+import type { User } from "firebase/auth";
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
+
+import { adminApi } from "@/lib/admin-api";
 
 export type AdminView = "calendar" | "capacity" | "services" | "therapists" | "notifications";
 
 type Resource = { resourceId: string; name: string; active: boolean; version: number };
 type Closure = { closureId: string; localDate: string; reason: string };
 type Variant = { variantId: string; durationMinutes: number; priceSatang: number; active: boolean };
-type Service = { serviceId: string; nameTh: string; nameEn: string; active: boolean; version?: number; variants: Variant[] };
+type Service = { serviceId: string; nameTh: string; nameEn: string; descriptionTh?: string; descriptionEn?: string; active: boolean; version?: number; imageVersion?: string | null; variants: Variant[] };
 type Therapist = { therapistId: string; displayName: string; active: boolean };
 type NotificationEvent = { eventId: string; publicBookingId?: string; eventType: string; state: string; attemptCount?: number; lastErrorCode?: string; createdAt?: string };
 
-async function api<T>(path: string, idToken: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/spa/api/v1/admin${path}`, {
+async function api<T>(user: User, path: string, init?: RequestInit): Promise<T> {
+  return adminApi<T>(user, path, {
     ...init,
-    cache: "no-store",
-    headers: {
-      Authorization: `Bearer ${idToken}`,
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers
-    }
+    cache: "no-store"
   });
-  const payload = response.status === 204 ? null : await response.json();
-  if (!response.ok) throw new Error(payload?.detail ?? "Admin API request failed");
-  return payload as T;
 }
 
 function PageState({ loading, error, empty, locale }: { loading: boolean; error: string; empty: boolean; locale: Locale }) {
@@ -34,18 +30,18 @@ function PageState({ loading, error, empty, locale }: { loading: boolean; error:
   return null;
 }
 
-export function AdminModulePage({ view, locale, idToken, bookings, onBookingsChanged }: {
+export function AdminModulePage({ view, locale, user, bookings, onBookingsChanged }: {
   view: AdminView;
   locale: Locale;
-  idToken: string;
+  user: User;
   bookings: PreviewBooking[];
   onBookingsChanged: () => void;
 }) {
   if (view === "calendar") return <CalendarPage locale={locale} bookings={bookings} />;
-  if (view === "capacity") return <CapacityPage locale={locale} idToken={idToken} />;
-  if (view === "services") return <ServicesPage locale={locale} idToken={idToken} />;
-  if (view === "therapists") return <TherapistsPage locale={locale} idToken={idToken} bookings={bookings} onBookingsChanged={onBookingsChanged} />;
-  return <NotificationsPage locale={locale} idToken={idToken} />;
+  if (view === "capacity") return <CapacityPage locale={locale} user={user} />;
+  if (view === "services") return <ServicesPage locale={locale} user={user} />;
+  if (view === "therapists") return <TherapistsPage locale={locale} user={user} bookings={bookings} onBookingsChanged={onBookingsChanged} />;
+  return <NotificationsPage locale={locale} user={user} />;
 }
 
 function ModuleHeading({ eyebrow, title, subtitle }: { eyebrow: string; title: string; subtitle: string }) {
@@ -79,7 +75,7 @@ function CalendarPage({ locale, bookings }: { locale: Locale; bookings: PreviewB
   </main>;
 }
 
-function CapacityPage({ locale, idToken }: { locale: Locale; idToken: string }) {
+function CapacityPage({ locale, user }: { locale: Locale; user: User }) {
   const [resources, setResources] = useState<Resource[]>([]);
   const [closures, setClosures] = useState<Closure[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,24 +85,24 @@ function CapacityPage({ locale, idToken }: { locale: Locale; idToken: string }) 
   const load = async () => {
     setLoading(true); setError("");
     try {
-      const [resourceData, closureData] = await Promise.all([api<{ items: Resource[] }>("/resources", idToken), api<{ items: Closure[] }>("/closures", idToken)]);
+      const [resourceData, closureData] = await Promise.all([api<{ items: Resource[] }>(user, "/resources"), api<{ items: Closure[] }>(user, "/closures")]);
       setResources(resourceData.items); setClosures(closureData.items);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Capacity unavailable"); }
     finally { setLoading(false); }
   };
   // Each module remounts when selected; defer the initial remote sync until after render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { queueMicrotask(() => { void load(); }); }, [idToken]);
+  useEffect(() => { queueMicrotask(() => { void load(); }); }, [user]);
   const toggle = async (item: Resource) => {
-    try { await api(`/resources/${item.resourceId}`, idToken, { method: "PATCH", body: JSON.stringify({ active: !item.active, expectedVersion: item.version }) }); await load(); }
+    try { await api(user, `/resources/${item.resourceId}`, { method: "PATCH", body: JSON.stringify({ active: !item.active, expectedVersion: item.version }) }); await load(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Resource update failed"); }
   };
   const createClosure = async () => {
     if (!date || !reason.trim()) return;
-    try { await api("/closures", idToken, { method: "POST", body: JSON.stringify({ branchId: "branch_001", localDate: date, reason: reason.trim() }) }); setDate(""); setReason(""); await load(); }
+    try { await api(user, "/closures", { method: "POST", body: JSON.stringify({ branchId: "branch_001", localDate: date, reason: reason.trim() }) }); setDate(""); setReason(""); await load(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Closure update failed"); }
   };
-  const removeClosure = async (id: string) => { try { await api(`/closures/${id}`, idToken, { method: "DELETE" }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Closure removal failed"); } };
+  const removeClosure = async (id: string) => { try { await api(user, `/closures/${id}`, { method: "DELETE" }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Closure removal failed"); } };
   return <main className="dashboard-content"><ModuleHeading eyebrow="RESOURCE CONTROL" title={locale === "th" ? "สล็อตและความจุ" : "Slots and capacity"} subtitle={locale === "th" ? "เปิดหรือปิดเตียง และกำหนดวันปิดพิเศษ" : "Control beds and special closures"} />
     <PageState loading={loading} error={error} empty={false} locale={locale} />
     {!loading && <><section className="module-panel"><div className="panel-title"><h2>{locale === "th" ? "เตียงให้บริการ" : "Treatment beds"}</h2><strong>{resources.filter((item) => item.active).length}/{resources.length} {locale === "th" ? "เปิดใช้งาน" : "active"}</strong></div><div className="resource-grid">{resources.map((item) => <article key={item.resourceId}><div><strong>{item.name}</strong><small>{item.resourceId}</small></div><button className={item.active ? "toggle active" : "toggle"} aria-pressed={item.active} onClick={() => toggle(item)}>{item.active ? (locale === "th" ? "เปิด" : "Active") : (locale === "th" ? "ปิด" : "Inactive")}</button></article>)}</div></section>
@@ -114,25 +110,53 @@ function CapacityPage({ locale, idToken }: { locale: Locale; idToken: string }) 
   </main>;
 }
 
-function ServicesPage({ locale, idToken }: { locale: Locale; idToken: string }) {
+function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
   const [items, setItems] = useState<Service[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState("");
-  const load = async () => { setLoading(true); setError(""); try { setItems((await api<{ items: Service[] }>("/services", idToken)).items); } catch (caught) { setError(caught instanceof Error ? caught.message : "Services unavailable"); } finally { setLoading(false); } };
+  const [editingId, setEditingId] = useState<string | null>(null); const [descriptionTh, setDescriptionTh] = useState(""); const [descriptionEn, setDescriptionEn] = useState(""); const [saving, setSaving] = useState(false);
+  const [canManageImages, setCanManageImages] = useState(false); const [updatingImageId, setUpdatingImageId] = useState<string | null>(null);
+  const load = async () => { setLoading(true); setError(""); try { const result = await api<{ items: Service[]; permissions?: { manageServiceImages?: boolean } }>(user, "/services"); setItems(result.items); setCanManageImages(result.permissions?.manageServiceImages === true); } catch (caught) { setError(caught instanceof Error ? caught.message : "Services unavailable"); } finally { setLoading(false); } };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { queueMicrotask(() => { void load(); }); }, [idToken]);
-  const toggleService = async (service: Service) => { try { await api(`/services/${service.serviceId}`, idToken, { method: "PATCH", body: JSON.stringify({ active: !service.active, expectedVersion: service.version ?? 1 }) }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Service update failed"); } };
-  const editPrice = async (service: Service, variant: Variant) => { const baht = window.prompt(locale === "th" ? "ราคาใหม่ (บาท รวม VAT)" : "New VAT-inclusive price (THB)", String(variant.priceSatang / 100)); if (baht === null) return; const value = Number(baht); if (!Number.isFinite(value) || value < 0) { setError(locale === "th" ? "ราคาไม่ถูกต้อง" : "Invalid price"); return; } try { await api(`/services/${service.serviceId}/variants/${variant.variantId}`, idToken, { method: "PATCH", body: JSON.stringify({ priceSatang: Math.round(value * 100), expectedVersion: service.version ?? 1 }) }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Price update failed"); } };
+  useEffect(() => { queueMicrotask(() => { void load(); }); }, [user]);
+  const toggleService = async (service: Service) => { try { await api(user, `/services/${service.serviceId}`, { method: "PATCH", body: JSON.stringify({ active: !service.active, expectedVersion: service.version ?? 1 }) }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Service update failed"); } };
+  const editPrice = async (service: Service, variant: Variant) => { const baht = window.prompt(locale === "th" ? "ราคาใหม่ (บาท รวม VAT)" : "New VAT-inclusive price (THB)", String(variant.priceSatang / 100)); if (baht === null) return; const value = Number(baht); if (!Number.isFinite(value) || value < 0) { setError(locale === "th" ? "ราคาไม่ถูกต้อง" : "Invalid price"); return; } try { await api(user, `/services/${service.serviceId}/variants/${variant.variantId}`, { method: "PATCH", body: JSON.stringify({ priceSatang: Math.round(value * 100), expectedVersion: service.version ?? 1 }) }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Price update failed"); } };
+  const beginEdit = (service: Service) => { setEditingId(service.serviceId); setDescriptionTh(service.descriptionTh ?? ""); setDescriptionEn(service.descriptionEn ?? ""); setError(""); };
+  const saveDescription = async (service: Service) => { setSaving(true); setError(""); try { await api(user, `/services/${service.serviceId}`, { method: "PATCH", body: JSON.stringify({ descriptionTh: descriptionTh.trim(), descriptionEn: descriptionEn.trim(), expectedVersion: service.version ?? 1 }) }); setEditingId(null); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Description update failed"); } finally { setSaving(false); } };
+  const uploadImage = async (service: Service, file?: File) => {
+    if (!file) return;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) { setError(locale === "th" ? "รองรับ JPG, PNG หรือ WebP ขนาดไม่เกิน 5 MB" : "Use a JPG, PNG, or WebP file up to 5 MB"); return; }
+    setUpdatingImageId(service.serviceId); setError("");
+    const form = new FormData(); form.set("image", file); form.set("expectedVersion", String(service.version ?? 1));
+    try { await api(user, `/services/${service.serviceId}/image`, { method: "PUT", body: form }); await load(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Image update failed"); }
+    finally { setUpdatingImageId(null); }
+  };
+  const removeImage = async (service: Service) => {
+    if (!window.confirm(locale === "th" ? "ลบรูปปกของบริการนี้ใช่หรือไม่" : "Remove this service cover image?")) return;
+    setUpdatingImageId(service.serviceId); setError("");
+    try { await api(user, `/services/${service.serviceId}/image`, { method: "DELETE", body: JSON.stringify({ expectedVersion: service.version ?? 1 }) }); await load(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Image removal failed"); }
+    finally { setUpdatingImageId(null); }
+  };
   return <main className="dashboard-content"><ModuleHeading eyebrow="SERVICE CATALOG" title={locale === "th" ? "บริการและราคา" : "Services and prices"} subtitle={locale === "th" ? "ราคาที่แสดงรวม VAT แล้ว การแก้มีผลกับ Booking ใหม่" : "Prices include VAT; changes apply to new bookings"} /><PageState loading={loading} error={error} empty={!items.length} locale={locale} />
-    <div className="service-admin-grid">{items.map((service) => <article className="module-panel" key={service.serviceId}><div className="panel-title"><div><h2>{locale === "th" ? service.nameTh : service.nameEn}</h2><small>{service.serviceId}</small></div><button className={service.active ? "toggle active" : "toggle"} onClick={() => toggleService(service)}>{service.active ? (locale === "th" ? "เปิดขาย" : "Active") : (locale === "th" ? "ปิดขาย" : "Inactive")}</button></div><div className="record-list">{service.variants.map((variant) => <article key={variant.variantId}><div><strong>{variant.durationMinutes} min</strong><span>{new Intl.NumberFormat(locale === "th" ? "th-TH" : "en-US", { style: "currency", currency: "THB" }).format(variant.priceSatang / 100)}</span></div><button onClick={() => editPrice(service, variant)}>{locale === "th" ? "แก้ราคา" : "Edit price"}</button></article>)}</div></article>)}</div>
+    <div className="service-admin-grid">{items.map((service) => <article className="module-panel service-admin-card" key={service.serviceId}><div className="panel-title"><div><h2>{locale === "th" ? service.nameTh : service.nameEn}</h2><small>{service.serviceId}</small></div><button className={service.active ? "toggle active" : "toggle"} aria-pressed={service.active} onClick={() => toggleService(service)}>{service.active ? (locale === "th" ? "เปิดขาย" : "Active") : (locale === "th" ? "ปิดขาย" : "Inactive")}</button></div>
+      <div className="service-image-editor">
+        <div className={service.imageVersion ? "service-image-preview" : "service-image-preview empty"}>
+          {service.imageVersion ? <Image src={`/api/spa/api/v1/public/services/${encodeURIComponent(service.serviceId)}/image?v=${encodeURIComponent(service.imageVersion)}`} alt={locale === "th" ? `รูปปก ${service.nameTh}` : `${service.nameEn} cover`} fill unoptimized sizes="(max-width: 900px) 100vw, 50vw" /> : <span>{locale === "th" ? "ยังไม่มีรูปปก" : "No cover image"}</span>}
+        </div>
+        {canManageImages && <div className="service-image-actions"><label className="image-upload-button"><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" disabled={updatingImageId === service.serviceId} onChange={(event) => { void uploadImage(service, event.target.files?.[0]); event.currentTarget.value = ""; }} /><span>{updatingImageId === service.serviceId ? (locale === "th" ? "กำลังอัปเดต…" : "Updating…") : service.imageVersion ? (locale === "th" ? "เปลี่ยนรูป" : "Replace image") : (locale === "th" ? "เพิ่มรูป" : "Add image")}</span></label>{service.imageVersion && <button type="button" className="danger-link" disabled={updatingImageId === service.serviceId} onClick={() => { void removeImage(service); }}>{locale === "th" ? "ลบรูป" : "Remove"}</button>}<small>{locale === "th" ? "JPG, PNG หรือ WebP · ไม่เกิน 5 MB · ระบบจัดเป็น 4:3" : "JPG, PNG, or WebP · max 5 MB · cropped to 4:3"}</small></div>}
+      </div>
+      {editingId === service.serviceId ? <div className="service-copy-form"><label>{locale === "th" ? "คำอธิบายภาษาไทย" : "Thai description"}<textarea value={descriptionTh} onChange={(event) => setDescriptionTh(event.target.value)} maxLength={500} rows={4} /><small>{descriptionTh.length}/500</small></label><label>{locale === "th" ? "คำอธิบายภาษาอังกฤษ" : "English description"}<textarea value={descriptionEn} onChange={(event) => setDescriptionEn(event.target.value)} maxLength={500} rows={4} /><small>{descriptionEn.length}/500</small></label><div className="service-copy-actions"><button type="button" onClick={() => setEditingId(null)} disabled={saving}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button type="button" className="save-button" onClick={() => saveDescription(service)} disabled={saving || !descriptionTh.trim() || !descriptionEn.trim()}>{saving ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "บันทึกรายละเอียด" : "Save descriptions")}</button></div></div> : <div className="service-copy"><p>{(locale === "th" ? service.descriptionTh : service.descriptionEn) || (locale === "th" ? "ยังไม่มีคำอธิบายบริการ" : "No service description yet")}</p><button type="button" onClick={() => beginEdit(service)}>{locale === "th" ? "แก้ไขรายละเอียด" : "Edit descriptions"}</button></div>}
+      <div className="record-list">{service.variants.map((variant) => <article key={variant.variantId}><div><strong>{variant.durationMinutes} min</strong><span>{new Intl.NumberFormat(locale === "th" ? "th-TH" : "en-US", { style: "currency", currency: "THB" }).format(variant.priceSatang / 100)}</span></div><button onClick={() => editPrice(service, variant)}>{locale === "th" ? "แก้ราคา" : "Edit price"}</button></article>)}</div></article>)}</div>
   </main>;
 }
 
-function TherapistsPage({ locale, idToken, bookings, onBookingsChanged }: { locale: Locale; idToken: string; bookings: PreviewBooking[]; onBookingsChanged: () => void }) {
+function TherapistsPage({ locale, user, bookings, onBookingsChanged }: { locale: Locale; user: User; bookings: PreviewBooking[]; onBookingsChanged: () => void }) {
   const [items, setItems] = useState<Therapist[]>([]); const [name, setName] = useState(""); const [error, setError] = useState(""); const [loading, setLoading] = useState(true); const [selected, setSelected] = useState<Record<string, string>>({});
-  const load = async () => { setLoading(true); try { setItems((await api<{ items: Therapist[] }>("/therapists", idToken)).items); } catch (caught) { setError(caught instanceof Error ? caught.message : "Therapists unavailable"); } finally { setLoading(false); } };
+  const load = async () => { setLoading(true); try { setItems((await api<{ items: Therapist[] }>(user, "/therapists")).items); } catch (caught) { setError(caught instanceof Error ? caught.message : "Therapists unavailable"); } finally { setLoading(false); } };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { queueMicrotask(() => { void load(); }); }, [idToken]);
-  const add = async () => { if (!name.trim()) return; try { await api("/therapists", idToken, { method: "POST", body: JSON.stringify({ branchId: "branch_001", displayName: name.trim() }) }); setName(""); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Therapist creation failed"); } };
-  const assign = async (booking: PreviewBooking) => { const therapistId = selected[booking.bookingId]; if (!therapistId) return; try { await api(`/bookings/${booking.bookingId}:assign`, idToken, { method: "POST", body: JSON.stringify({ therapistIds: Array.from({ length: booking.pax }, () => therapistId), expectedVersion: booking.version }) }); onBookingsChanged(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Assignment failed"); } };
+  useEffect(() => { queueMicrotask(() => { void load(); }); }, [user]);
+  const add = async () => { if (!name.trim()) return; try { await api(user, "/therapists", { method: "POST", body: JSON.stringify({ branchId: "branch_001", displayName: name.trim() }) }); setName(""); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Therapist creation failed"); } };
+  const assign = async (booking: PreviewBooking) => { const therapistId = selected[booking.bookingId]; if (!therapistId) return; try { await api(user, `/bookings/${booking.bookingId}:assign`, { method: "POST", body: JSON.stringify({ therapistIds: Array.from({ length: booking.pax }, () => therapistId), expectedVersion: booking.version }) }); onBookingsChanged(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Assignment failed"); } };
   const unassigned = bookings.filter((item) => item.status === "CONFIRMED" && !item.therapistName);
   return <main className="dashboard-content"><ModuleHeading eyebrow="THERAPIST ROSTER" title={locale === "th" ? "หมอนวดและการมอบหมาย" : "Therapists and assignment"} subtitle={locale === "th" ? "ต้องมอบหมายครบก่อนเริ่มให้บริการ" : "Every guest must be assigned before service starts"} /><PageState loading={loading} error={error} empty={false} locale={locale} />
     <section className="module-panel"><div className="panel-title"><h2>{locale === "th" ? "รายชื่อหมอนวด" : "Roster"}</h2><strong>{items.filter((item) => item.active).length} {locale === "th" ? "คนพร้อมใช้งาน" : "active"}</strong></div><div className="inline-form"><label>{locale === "th" ? "ชื่อแสดง" : "Display name"}<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} /></label><button onClick={add} disabled={!name.trim()}>{locale === "th" ? "เพิ่มหมอนวด" : "Add therapist"}</button></div><div className="resource-grid">{items.map((item) => <article key={item.therapistId}><div><strong>{item.displayName}</strong><small>{item.therapistId}</small></div><span className="state-chip success">{item.active ? (locale === "th" ? "พร้อม" : "Active") : (locale === "th" ? "ปิด" : "Inactive")}</span></article>)}</div></section>
@@ -140,12 +164,12 @@ function TherapistsPage({ locale, idToken, bookings, onBookingsChanged }: { loca
   </main>;
 }
 
-function NotificationsPage({ locale, idToken }: { locale: Locale; idToken: string }) {
+function NotificationsPage({ locale, user }: { locale: Locale; user: User }) {
   const [items, setItems] = useState<NotificationEvent[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState("");
-  const load = async () => { setLoading(true); setError(""); try { setItems((await api<{ items: NotificationEvent[] }>("/notifications", idToken)).items); } catch (caught) { setError(caught instanceof Error ? caught.message : "Notifications unavailable"); } finally { setLoading(false); } };
+  const load = async () => { setLoading(true); setError(""); try { setItems((await api<{ items: NotificationEvent[] }>(user, "/notifications")).items); } catch (caught) { setError(caught instanceof Error ? caught.message : "Notifications unavailable"); } finally { setLoading(false); } };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { queueMicrotask(() => { void load(); }); }, [idToken]);
-  const retry = async (id: string) => { try { await api(`/notifications/${id}:retry`, idToken, { method: "POST" }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Retry failed"); } };
+  useEffect(() => { queueMicrotask(() => { void load(); }); }, [user]);
+  const retry = async (id: string) => { try { await api(user, `/notifications/${id}:retry`, { method: "POST" }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Retry failed"); } };
   return <main className="dashboard-content"><ModuleHeading eyebrow="DELIVERY OPERATIONS" title={locale === "th" ? "การแจ้งเตือน" : "Notifications"} subtitle={locale === "th" ? "ติดตาม LINE delivery และส่งเข้าคิวใหม่เมื่อจำเป็น" : "Monitor LINE delivery and request safe retries"} /><PageState loading={loading} error={error} empty={!items.length} locale={locale} />
     <section className="module-panel"><div className="record-list notification-list">{items.map((item) => <article key={item.eventId}><div><strong>{item.eventType}</strong><span>{item.publicBookingId ?? item.eventId}</span><small>{locale === "th" ? "พยายามส่ง" : "Attempts"}: {item.attemptCount ?? 0}{item.lastErrorCode ? ` • ${item.lastErrorCode}` : ""}</small></div><div className="row-form"><span className={`state-chip ${item.state === "SENT" ? "success" : item.state === "ENQUEUED" ? "warning" : "danger"}`}>{item.state}</span>{item.state !== "SENT" && <button onClick={() => retry(item.eventId)}>{locale === "th" ? "ส่งเข้าคิวใหม่" : "Retry"}</button>}</div></article>)}</div></section>
   </main>;

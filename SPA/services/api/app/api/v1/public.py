@@ -4,14 +4,16 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.errors import DependencyUnavailable, NotFoundDomainError
 from app.domains.bookings.service import _bucket_id, _variant
 from app.domains.capacity.buckets import required_bucket_starts
 from app.domains.catalog.seed import load_catalog_manifest
 from app.infrastructure.firestore import get_firestore_client
+from app.infrastructure.storage import get_service_assets_bucket
 
 router = APIRouter(prefix="/api/v1/public", tags=["public"])
 TZ = ZoneInfo("Asia/Bangkok")
@@ -68,17 +70,29 @@ async def get_branch(
 async def get_services(
     client: Annotated[firestore.Client, Depends(get_firestore_client)],
 ) -> dict[str, object]:
+    manifest = load_catalog_manifest()
+    seed_by_id = {service.id: service for service in manifest.services}
     try:
         snapshots = client.collection("services").where("active", "==", True).stream()
         items = []
         for snapshot in snapshots:
             service = snapshot.to_dict() or {}
+            service_id = str(service.get("serviceId", snapshot.id))
+            seed = seed_by_id.get(service_id)
+            image = service.get("image") if isinstance(service.get("image"), dict) else {}
             items.append(
                 {
-                    "id": service.get("serviceId", snapshot.id),
+                    "id": service_id,
                     "category": service.get("category"),
                     "nameTh": service.get("nameTh"),
                     "nameEn": service.get("nameEn"),
+                    "descriptionTh": service.get("descriptionTh")
+                    or (seed.description_th if seed else ""),
+                    "descriptionEn": service.get("descriptionEn")
+                    or (seed.description_en if seed else ""),
+                    "active": True,
+                    "displayOrder": int(service.get("displayOrder", 0)),
+                    "imageVersion": image.get("version"),
                     "variants": [
                         {
                             "id": variant.get("variantId"),
@@ -93,10 +107,10 @@ async def get_services(
                 }
             )
         if items:
+            items.sort(key=lambda item: int(item["displayOrder"]))
             return {"catalogVersion": "firestore", "items": items}
     except Exception:
         pass
-    manifest = load_catalog_manifest()
     return {
         "catalogVersion": manifest.catalog_version,
         "items": [
@@ -105,6 +119,11 @@ async def get_services(
                 "category": service.category,
                 "nameTh": service.name_th,
                 "nameEn": service.name_en,
+                "descriptionTh": service.description_th,
+                "descriptionEn": service.description_en,
+                "active": service.active,
+                "displayOrder": service.display_order,
+                "imageVersion": None,
                 "variants": [
                     {
                         "id": variant.id,
@@ -121,6 +140,31 @@ async def get_services(
             if service.active
         ],
     }
+
+
+@router.get("/services/{service_id}/image")
+async def get_service_image(
+    service_id: str,
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+    v: str | None = None,
+) -> Response:
+    snapshot = client.collection("services").document(service_id).get()
+    data = snapshot.to_dict() or {} if snapshot.exists else {}
+    image = data.get("image") if isinstance(data.get("image"), dict) else {}
+    object_path = str(image.get("objectPath", ""))
+    if not object_path:
+        raise NotFoundDomainError("Service image not found")
+    if v and v != image.get("version"):
+        raise NotFoundDomainError("Service image version not found")
+    try:
+        content = get_service_assets_bucket().blob(object_path).download_as_bytes()
+    except Exception as error:
+        raise DependencyUnavailable("Service image is temporarily unavailable") from error
+    return Response(
+        content=content,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 @router.post("/availability/search")

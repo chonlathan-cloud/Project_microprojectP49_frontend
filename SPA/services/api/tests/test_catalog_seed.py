@@ -9,6 +9,12 @@ def test_catalog_has_approved_inventory() -> None:
     assert len(variants) == 17
 
 
+def test_catalog_has_bilingual_customer_descriptions() -> None:
+    manifest = load_catalog_manifest()
+    assert all(service.description_th.strip() for service in manifest.services)
+    assert all(service.description_en.strip() for service in manifest.services)
+
+
 def test_catalog_preserves_known_lamenatt_source_spelling() -> None:
     manifest = load_catalog_manifest()
     service = next(item for item in manifest.services if item.id == "lamenatt-oil")

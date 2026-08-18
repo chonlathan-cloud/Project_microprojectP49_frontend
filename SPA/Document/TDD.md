@@ -84,7 +84,7 @@ The service names are `spa-customer-web`, `spa-admin-web`, `spa-api`, and `spa-n
 
 The implementation supplies a version-controlled seed manifest for the 11 services in Business Logic 7.1. Each variant includes:
 
-- bilingual names and category
+- bilingual names, short customer descriptions, and category
 - duration and integer `priceSatang`
 - `pricingMode`: `PER_PARTICIPANT` or `PER_BOOKING`
 - `requiredPax`: `1` or `2`

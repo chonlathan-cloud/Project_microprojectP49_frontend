@@ -51,6 +51,10 @@ SPA_API_URL=https://spa-api-<hash>-<region>.run.app
 
 The Admin Web uses an internal `/api/spa/*` server proxy, so the API URL is not exposed to browser code. The API runtime identity must have Firestore read access to `spa-db`, and `FIRESTORE_DATABASE=spa-db` must remain set on the API service.
 
+Service cover images are stored in a private Cloud Storage bucket and streamed through the API. Review/provision it with `infra/iam/service-assets-bucket.sh` and `infra/iam/service-assets-bucket.sh --apply`, set `SERVICE_ASSETS_BUCKET` on the API, then dry-run/import the legacy covers from `services/api` with `uv run python scripts/import_service_images.py` and `uv run python scripts/import_service_images.py --apply`. Only users with the `ADMIN` application role can upload, replace, or remove a cover; `STAFF` remains read-only.
+
+Production Admin and Customer deployments require an explicit production `SPA_API_URL`; the deploy scripts reject an omitted URL or a `spa-api-test` target to prevent cross-environment routing.
+
 The notification worker has its own lockfile and environment under `services/notification-worker`
 and defaults to port `8081` locally. Test messages are prefixed `[TEST]` whenever
 `APP_ENV` is not `production`.

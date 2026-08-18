@@ -50,6 +50,8 @@ class ServiceSeed(BaseModel):
     category: str
     name_th: str
     name_en: str
+    description_th: str = Field(min_length=1, max_length=500)
+    description_en: str = Field(min_length=1, max_length=500)
     display_order: int
     active: bool
     variants: list[VariantSeed]
@@ -76,8 +78,14 @@ class CatalogManifest(BaseModel):
 @lru_cache(maxsize=1)
 def load_catalog_manifest() -> CatalogManifest:
     packaged_path = Path(__file__).resolve().parent / "service-catalog.v1.json"
-    workspace_path = (
-        Path(__file__).resolve().parents[5] / "infra" / "seed" / "service-catalog.v1.json"
-    )  # noqa: E501
-    path = packaged_path if packaged_path.exists() else workspace_path
+    fallback_paths = [packaged_path]
+    base_path = Path(__file__).resolve()
+    for parent in [base_path.parent, *base_path.parents]:
+        candidate = parent / "infra" / "seed" / "service-catalog.v1.json"
+        if candidate not in fallback_paths:
+            fallback_paths.append(candidate)
+
+    path = next((item for item in fallback_paths if item.exists()), None)
+    if path is None:
+        raise FileNotFoundError("Catalog manifest file not found")
     return CatalogManifest.model_validate(json.loads(path.read_text(encoding="utf-8")))

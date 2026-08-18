@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI/UX Review"
+  short_description: "Review product UI for intentional design"
+  default_prompt: "Use $ui-ux-review to critique this page and identify changes that improve task clarity, hierarchy, and product-specific character."

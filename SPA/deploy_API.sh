@@ -13,6 +13,7 @@ ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/services/api/.env}"
 REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-false}"
 FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-spa-db}"
 APP_ENV="${APP_ENV:-production}"
+SERVICE_ASSETS_BUCKET="${SERVICE_ASSETS_BUCKET:-${PROJECT_ID}-spa-service-assets-${APP_ENV}}"
 LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME="${LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME:-spa-line-customer-messaging-channel-secret}"
 LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME="${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME:-spa-line-admin-messaging-channel-secret}"
 
@@ -145,7 +146,7 @@ YAML
 env_args=()
 if [[ -f "$ENV_FILE" ]]; then
   tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_api_env.XXXXXX.yaml")"
-  python3 - "$ENV_FILE" "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" <<'PY'
+  python3 - "$ENV_FILE" "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" "$SERVICE_ASSETS_BUCKET" <<'PY'
 import json
 import re
 import sys
@@ -155,6 +156,7 @@ source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
 firestore_database = sys.argv[3]
 app_env = sys.argv[4]
+service_assets_bucket = sys.argv[5]
 valid_key = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 environment = {}
 
@@ -177,6 +179,7 @@ for raw_line in source.read_text(encoding="utf-8").splitlines():
 
 environment["FIRESTORE_DATABASE"] = firestore_database
 environment["APP_ENV"] = app_env
+environment["SERVICE_ASSETS_BUCKET"] = service_assets_bucket
 
 with destination.open("w", encoding="utf-8") as output:
     for key, value in environment.items():
@@ -189,14 +192,21 @@ elif [[ "$REQUIRE_ENV_FILE" == "true" ]]; then
 else
   echo "Environment file not found; using FIRESTORE_DATABASE=$FIRESTORE_DATABASE: $ENV_FILE"
   tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_api_env.XXXXXX.yaml")"
-  python3 - "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" <<'PY'
+  python3 - "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" "$SERVICE_ASSETS_BUCKET" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 destination = Path(sys.argv[1])
 destination.write_text(
-    f"FIRESTORE_DATABASE: {json.dumps(sys.argv[2])}\nAPP_ENV: {json.dumps(sys.argv[3])}\n",
+    "\n".join(
+        [
+            f"FIRESTORE_DATABASE: {json.dumps(sys.argv[2])}",
+            f"APP_ENV: {json.dumps(sys.argv[3])}",
+            f"SERVICE_ASSETS_BUCKET: {json.dumps(sys.argv[4])}",
+            "",
+        ]
+    ),
     encoding="utf-8",
 )
 PY

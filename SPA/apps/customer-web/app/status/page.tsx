@@ -84,7 +84,6 @@ export default function StatusPage() {
   }
 
   return <main className="status-page"><section className="status-card" aria-labelledby="status-title">
-    <span className="lotus-mark" aria-hidden="true">✦</span>
     <p className="eyebrow">SPA 49 • SECURE STATUS</p>
     <h1 id="status-title">ตรวจสอบสถานะการจอง</h1>
     <p className="english-subtitle">Check your booking status</p>
@@ -95,7 +94,7 @@ export default function StatusPage() {
       <p><strong>{result.bookingId}</strong></p>
       <p>สถานะ: <strong>{result.status}</strong></p>
       <p>{result.localDate} • {result.localStartTime}</p>
-      <p>ราคารวม VAT แล้ว: {(result.estimatedAmountSatang / 100).toLocaleString("th-TH")} บาท</p>
+      <p>ราคาประเมินรวม: {(result.estimatedAmountSatang / 100).toLocaleString("th-TH")} บาท</p>
     </div>}
     {state === "ready" && linkState !== "linked" && <div className="line-link-panel">
       <h2>รับการแจ้งเตือนผ่าน LINE</h2>

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date as calendar_date, datetime, timedelta
 from secrets import token_urlsafe
 from types import SimpleNamespace
 from uuid import uuid4
@@ -13,6 +13,7 @@ from google.cloud import firestore
 
 from app.core.errors import (
     ActivePendingLimit,
+    AdvanceWindowViolation,
     CapacityUnavailable,
     DuplicateBooking,
     IdempotencyConflict,
@@ -23,6 +24,25 @@ from app.domains.capacity.buckets import required_bucket_starts
 from app.domains.catalog.seed import load_catalog_manifest
 
 BRANCH_TIMEZONE = ZoneInfo("Asia/Bangkok")
+
+
+def _validate_advance_window(
+    start_at: datetime,
+    branch: dict[str, object],
+    *,
+    today: calendar_date | None = None,
+) -> None:
+    booking_window = branch.get("bookingWindow") or {}
+    if not isinstance(booking_window, dict):
+        booking_window = {}
+    min_days = max(0, int(booking_window.get("minDays", 1)))
+    max_days = max(min_days, int(booking_window.get("maxDays", 30)))
+    branch_today = today or datetime.now(BRANCH_TIMEZONE).date()
+    days_ahead = (start_at.astimezone(BRANCH_TIMEZONE).date() - branch_today).days
+    if days_ahead < min_days or days_ahead > max_days:
+        raise AdvanceWindowViolation(
+            f"Bookings must be made {min_days} to {max_days} local calendar days in advance"
+        )
 
 
 def normalize_thai_phone(value: str) -> str:
@@ -91,8 +111,6 @@ def create_booking(
         start_at = datetime.fromisoformat(f"{date}T{time}:00").replace(tzinfo=BRANCH_TIMEZONE)
     except ValueError as error:
         raise ValidationDomainError("Invalid booking date or time") from error
-    if start_at <= datetime.now(BRANCH_TIMEZONE) + timedelta(days=1):
-        raise ValidationDomainError("Bookings must be made at least one day in advance")
     if start_at.minute % settings.capacity_bucket_minutes:
         raise ValidationDomainError("Booking time must align to a 15-minute interval")
 
@@ -166,6 +184,7 @@ def create_booking(
         if not branch_snapshot.exists:
             raise ValidationDomainError("Branch is not configured")
         branch = branch_snapshot.to_dict() or {}
+        _validate_advance_window(start_at, branch)
         capacity = int(branch.get("activeCapacityUnits", branch.get("capacityUnits", 0)))
         if capacity <= 0:
             raise ValidationDomainError("Branch resource configuration is incomplete")

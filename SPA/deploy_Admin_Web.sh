@@ -13,6 +13,17 @@ ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/apps/admin-web/.env}"
 REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-false}"
 SPA_API_URL="${SPA_API_URL:-}"
 
+if [[ "$SERVICE_NAME" != *-test ]]; then
+  if [[ -z "$SPA_API_URL" ]]; then
+    echo "ERROR: SPA_API_URL must be set explicitly for a production deployment." >&2
+    exit 1
+  fi
+  if [[ "$SPA_API_URL" == *"spa-api-test"* ]]; then
+    echo "ERROR: Production Admin Web cannot target spa-api-test." >&2
+    exit 1
+  fi
+fi
+
 ARTIFACT_REPOSITORY="${ARTIFACT_REPOSITORY:-spa}"
 IMAGE_NAME="${IMAGE_NAME:-spa-admin-web}"
 IMAGE_TAG="${IMAGE_TAG:-}"

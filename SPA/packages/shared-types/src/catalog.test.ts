@@ -19,4 +19,11 @@ describe("initial service catalog", () => {
       })
     ]);
   });
+
+  it("provides customer decision copy in both supported languages", () => {
+    for (const service of INITIAL_SERVICE_CATALOG) {
+      expect(service.descriptionTh.trim()).not.toBe("");
+      expect(service.descriptionEn.trim()).not.toBe("");
+    }
+  });
 });

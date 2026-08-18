@@ -447,6 +447,8 @@ Fields named `createdAt`, `updatedAt`, and audit timestamps use server timestamp
 }
 ```
 
+`descriptionTh` และ `descriptionEn` เป็นเนื้อหา Service Catalog ที่ Admin แก้ไขได้ Public API ต้องส่งค่าจาก Active Firestore record ให้ Customer Web โดยใช้ค่าใน versioned seed manifest เฉพาะระหว่าง migration เมื่อ record เดิมยังไม่มีคำอธิบาย ค่า Firestore ที่ Admin บันทึกมีลำดับความสำคัญสูงกว่าเสมอ
+
 ### 6.3 `service_variants/{variantId}`
 
 ```json

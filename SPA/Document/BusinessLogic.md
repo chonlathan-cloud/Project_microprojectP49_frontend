@@ -149,6 +149,7 @@ Analytics, loyalty, birthday automation, therapist commission และ CRM camp
 7. Service ที่เป็น `INACTIVE` ต้องไม่แสดงในการจองใหม่ แต่ไม่เปลี่ยนข้อมูลย้อนหลังของ Booking เดิม
 8. ราคาและระยะเวลาที่ลูกค้าเห็นต้องมาจาก Initial Service Catalog ที่ยืนยันแล้วหรือค่าที่ Admin แก้ไขและเปิดใช้งานภายหลัง
 9. Service ทั่วไปคิดราคาแบบ `PER_PARTICIPANT`; Package สำหรับสองคนคิดราคาแบบ `PER_BOOKING` ครั้งเดียวและต้องกัน Resource ให้ครบสองคนตลอดระยะเวลา
+10. ชื่อและคำอธิบายบริการแบบสั้นทั้งภาษาไทยและอังกฤษต้องเก็บใน Service Catalog/Firestore แก้ไขผ่าน Admin และแสดงจาก Active Service record เดียวกันบน Customer Web ห้าม hardcode แยกใน frontend
 
 ### 7.1 Initial Service Catalog
 
@@ -168,7 +169,7 @@ Analytics, loyalty, birthday automation, therapist commission และ CRM camp
 | Massage | อบสมุนไพร / Herbal Steam | 30 นาที | 300 บาท | `PER_PARTICIPANT` |
 | Standalone Service | ประคบร้อน คอ บ่า ไหล่ / Hot Compress — Neck, Shoulder & Back | 20 นาที | 190 บาท | `PER_PARTICIPANT`; Phase 1 จองเดี่ยวเท่านั้น |
 
-Initial catalog เป็นข้อมูล seed ที่ Admin แก้ไขราคา ระยะเวลา Active State และ Resource Compatibility ได้ โดย Booking เก่าต้องเก็บ snapshot เดิมไว้ ชื่อ `Lamenatt Oil Massage` คงตาม source ชั่วคราวและ Admin แก้คำสะกดได้ก่อน Production
+Initial catalog เป็นข้อมูล seed ที่ Admin แก้ไขชื่อ คำอธิบายสองภาษา ราคา ระยะเวลา Active State และ Resource Compatibility ได้ โดย Booking เก่าต้องเก็บ snapshot เดิมไว้ ชื่อ `Lamenatt Oil Massage` คงตาม source ชั่วคราวและ Admin แก้คำสะกดได้ก่อน Production
 
 ข้อความ “Prices include 7% VAT” ที่อยู่ใน mockup ยังไม่เป็นกฎทางธุรกิจจนกว่านโยบาย VAT จะได้รับการยืนยัน
 

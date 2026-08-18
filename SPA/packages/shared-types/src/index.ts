@@ -23,8 +23,11 @@ export type Service = {
   category: "SIGNATURE" | "MASSAGE" | "STANDALONE";
   nameTh: string;
   nameEn: string;
+  descriptionTh: string;
+  descriptionEn: string;
   active: boolean;
   displayOrder: number;
+  imageVersion?: string | null;
   variants: ServiceVariant[];
 };
 

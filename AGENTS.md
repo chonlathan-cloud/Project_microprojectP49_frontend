@@ -6,6 +6,10 @@ This repository is split into a FastAPI backend and a Next.js frontend. Backend 
 
 Frontend code lives in `frontend/src`. App Router pages are in `frontend/src/app`, reusable UI is in `frontend/src/components`, shared utilities are in `frontend/src/lib`, and TypeScript types are in `frontend/src/types`. Design docs are in `Document/`. Sample receipts and POS files support testing.
 
+## UI/UX Review
+
+For frontend critique, UI implementation planning, or post-implementation review under `frontend/` or `SPA/`, consult `.agents/skills/ui-ux-review/SKILL.md`. For work under `SPA/`, also follow `.agents/skills/spa-branch-ux-ui/SKILL.md`. Do not apply these skills to unrelated backend, infrastructure, database, or DevOps work.
+
 ## Build, Test, and Development Commands
 
 - `cd frontend && npm install`: install frontend dependencies from `package-lock.json`.

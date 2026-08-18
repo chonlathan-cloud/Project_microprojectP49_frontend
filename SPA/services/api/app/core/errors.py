@@ -16,6 +16,16 @@ class ValidationDomainError(DomainError):
     status_code = 422
 
 
+class AdvanceWindowViolation(DomainError):
+    code = "ADVANCE_WINDOW_VIOLATION"
+    status_code = 422
+
+
+class DependencyUnavailable(DomainError):
+    code = "DEPENDENCY_UNAVAILABLE"
+    status_code = 503
+
+
 class CapacityUnavailable(DomainError):
     code = "CAPACITY_UNAVAILABLE"
 

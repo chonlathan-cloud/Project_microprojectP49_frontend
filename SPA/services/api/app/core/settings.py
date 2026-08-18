@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     gcp_project_id: str = "the49-487609"
     firestore_database: str = "spa-db"
+    service_assets_bucket: str = ""
     cors_origins: str = "http://localhost:3001,http://localhost:3000"
     app_env: str = "local"
     default_branch_id: str = "branch_001"
