@@ -5,6 +5,7 @@ import type { User } from "firebase/auth";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useAdminFeedback } from "@/components/admin-feedback";
 import { adminApi } from "@/lib/admin-api";
 import { countNotificationsRequiringAction, isNotificationState, notificationRequiresAction, type NotificationState } from "@/lib/notification-state";
 
@@ -126,6 +127,7 @@ function CalendarPage({ locale, bookings, onSelectBooking }: { locale: Locale; b
 }
 
 function CapacityPage({ locale, user }: { locale: Locale; user: User }) {
+  const { notify, requestConfirmation } = useAdminFeedback();
   const [resources, setResources] = useState<Resource[]>([]);
   const [closures, setClosures] = useState<Closure[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,27 +146,33 @@ function CapacityPage({ locale, user }: { locale: Locale; user: User }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { queueMicrotask(() => { void load(); }); }, [user]);
   const toggle = async (item: Resource) => {
-    try { await api(user, `/resources/${item.resourceId}`, { method: "PATCH", body: JSON.stringify({ active: !item.active, expectedVersion: item.version }) }); await load(); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Resource update failed"); }
+    try { await api(user, `/resources/${item.resourceId}`, { method: "PATCH", body: JSON.stringify({ active: !item.active, expectedVersion: item.version }) }); notify({ tone: "success", title: locale === "th" ? "อัปเดตสถานะเตียงแล้ว" : "Bed status updated", message: item.name }); await load(); }
+    catch (caught) { notify({ tone: "error", title: locale === "th" ? "อัปเดตเตียงไม่สำเร็จ" : "Bed update failed", message: caught instanceof Error ? caught.message : undefined }); }
   };
   const createClosure = async () => {
     if (!date || !reason.trim()) return;
-    try { await api(user, "/closures", { method: "POST", body: JSON.stringify({ branchId: "branch_001", localDate: date, reason: reason.trim() }) }); setDate(""); setReason(""); await load(); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Closure update failed"); }
+    try { await api(user, "/closures", { method: "POST", body: JSON.stringify({ branchId: "branch_001", localDate: date, reason: reason.trim() }) }); notify({ tone: "success", title: locale === "th" ? "เพิ่มวันปิดแล้ว" : "Closure added", message: date }); setDate(""); setReason(""); await load(); }
+    catch (caught) { notify({ tone: "error", title: locale === "th" ? "เพิ่มวันปิดไม่สำเร็จ" : "Closure update failed", message: caught instanceof Error ? caught.message : undefined }); }
   };
-  const removeClosure = async (id: string) => { try { await api(user, `/closures/${id}`, { method: "DELETE" }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Closure removal failed"); } };
+  const removeClosure = async (item: Closure) => {
+    const result = await requestConfirmation({ title: locale === "th" ? "ลบวันปิดนี้?" : "Remove this closure?", message: `${item.localDate} · ${item.reason}`, confirmLabel: locale === "th" ? "ยืนยันลบ" : "Remove", cancelLabel: locale === "th" ? "ยกเลิก" : "Cancel", tone: "danger" });
+    if (!result.confirmed) return;
+    try { await api(user, `/closures/${item.closureId}`, { method: "DELETE" }); notify({ tone: "success", title: locale === "th" ? "ลบวันปิดแล้ว" : "Closure removed", message: item.localDate }); await load(); }
+    catch (caught) { notify({ tone: "error", title: locale === "th" ? "ลบวันปิดไม่สำเร็จ" : "Closure removal failed", message: caught instanceof Error ? caught.message : undefined }); }
+  };
   return <main className="dashboard-content"><ModuleHeading eyebrow="RESOURCE CONTROL" title={locale === "th" ? "สล็อตและความจุ" : "Slots and capacity"} subtitle={locale === "th" ? "เปิดหรือปิดเตียง และกำหนดวันปิดพิเศษ" : "Control beds and special closures"} />
     <PageState loading={loading} error={error} empty={false} locale={locale} />
     {!loading && <><section className="module-panel"><div className="panel-title"><h2>{locale === "th" ? "เตียงให้บริการ" : "Treatment beds"}</h2><strong>{resources.filter((item) => item.active).length}/{resources.length} {locale === "th" ? "เปิดใช้งาน" : "active"}</strong></div><div className="resource-grid">{resources.map((item) => <article key={item.resourceId}><div><strong>{item.name}</strong><small>{item.resourceId}</small></div><button className={item.active ? "toggle active" : "toggle"} aria-pressed={item.active} onClick={() => toggle(item)}>{item.active ? (locale === "th" ? "เปิด" : "Active") : (locale === "th" ? "ปิด" : "Inactive")}</button></article>)}</div></section>
-    <section className="module-panel"><div className="panel-title"><h2>{locale === "th" ? "วันปิดพิเศษ" : "Special closures"}</h2></div><div className="inline-form"><label>{locale === "th" ? "วันที่" : "Date"}<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><label>{locale === "th" ? "เหตุผล" : "Reason"}<input value={reason} onChange={(event) => setReason(event.target.value)} maxLength={300} /></label><button onClick={createClosure} disabled={!date || !reason.trim()}>{locale === "th" ? "เพิ่มวันปิด" : "Add closure"}</button></div><div className="record-list">{closures.map((item) => <article key={item.closureId}><div><strong>{item.localDate}</strong><span>{item.reason}</span></div><button className="danger-link" onClick={() => removeClosure(item.closureId)}>{locale === "th" ? "ลบ" : "Remove"}</button></article>)}</div></section></>}
+    <section className="module-panel"><div className="panel-title"><h2>{locale === "th" ? "วันปิดพิเศษ" : "Special closures"}</h2></div><div className="inline-form"><label>{locale === "th" ? "วันที่" : "Date"}<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><label>{locale === "th" ? "เหตุผล" : "Reason"}<input value={reason} onChange={(event) => setReason(event.target.value)} maxLength={300} /></label><button onClick={createClosure} disabled={!date || !reason.trim()}>{locale === "th" ? "เพิ่มวันปิด" : "Add closure"}</button></div><div className="record-list">{closures.map((item) => <article key={item.closureId}><div><strong>{item.localDate}</strong><span>{item.reason}</span></div><button className="danger-link" onClick={() => { void removeClosure(item); }}>{locale === "th" ? "ลบ" : "Remove"}</button></article>)}</div></section></>}
   </main>;
 }
 
 function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
+  const { notify, requestConfirmation } = useAdminFeedback();
   const [items, setItems] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [formError, setFormError] = useState("");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<"ALL" | ServiceCategory>("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -178,8 +186,6 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
   const [canManageImages, setCanManageImages] = useState(false);
   const [pendingImage, setPendingImage] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState("");
-  const [confirmRemoveImage, setConfirmRemoveImage] = useState(false);
-  const [confirmRemoveService, setConfirmRemoveService] = useState(false);
   const serviceDrawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const createDrawerRef = useRef<HTMLElement>(null);
@@ -188,13 +194,13 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
 
   const load = async () => {
     setLoading(true);
-    setError("");
+    setLoadError("");
     try {
       const result = await api<{ items: Service[]; permissions?: { manageServiceImages?: boolean } }>(user, "/services");
       setItems(result.items);
       setCanManageImages(result.permissions?.manageServiceImages === true);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Services unavailable");
+      setLoadError(caught instanceof Error ? caught.message : "Services unavailable");
     } finally {
       setLoading(false);
     }
@@ -282,17 +288,13 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
     setPriceDrafts(Object.fromEntries(service.variants.map((variant) => [variant.variantId, String(variant.priceSatang / 100)])));
     setPendingImage(null);
     setImagePreviewUrl("");
-    setConfirmRemoveImage(false);
-    setConfirmRemoveService(false);
-    setError("");
-    setNotice("");
+    setFormError("");
   };
 
   const openCreator = () => {
     setSelectedId(null);
     setNewService({ nameTh: "", nameEn: "", descriptionTh: "", descriptionEn: "", category: "MASSAGE", durationMinutes: "60", priceBaht: "", packageType: "SINGLE" });
-    setError("");
-    setNotice("");
+    setFormError("");
     setIsCreating(true);
   };
 
@@ -301,16 +303,15 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
     const priceBaht = Number(newService.priceBaht);
     if (!newService.nameTh.trim() || !newService.nameEn.trim()) return;
     if (!Number.isInteger(durationMinutes) || durationMinutes < 15 || durationMinutes > 480 || durationMinutes % 15 !== 0) {
-      setError(locale === "th" ? "ระยะเวลาต้องเป็นช่วงละ 15 นาที ระหว่าง 15–480 นาที" : "Duration must be a 15-minute increment between 15 and 480 minutes.");
+      setFormError(locale === "th" ? "ระยะเวลาต้องเป็นช่วงละ 15 นาที ระหว่าง 15–480 นาที" : "Duration must be a 15-minute increment between 15 and 480 minutes.");
       return;
     }
     if (!Number.isFinite(priceBaht) || priceBaht < 0) {
-      setError(locale === "th" ? "กรุณาระบุราคาเป็นตัวเลขตั้งแต่ 0 บาทขึ้นไป" : "Enter a valid price of THB 0 or more.");
+      setFormError(locale === "th" ? "กรุณาระบุราคาเป็นตัวเลขตั้งแต่ 0 บาทขึ้นไป" : "Enter a valid price of THB 0 or more.");
       return;
     }
     setSaving(true);
-    setError("");
-    setNotice("");
+    setFormError("");
     try {
       await api(user, "/services", {
         method: "POST",
@@ -328,38 +329,35 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
         })
       });
       setIsCreating(false);
-      setNotice(locale === "th" ? "เพิ่มบริการใหม่และเปิดขายแล้ว" : "New service created and published.");
+      notify({ tone: "success", title: locale === "th" ? "เพิ่มบริการและเปิดขายแล้ว" : "Service created and published", message: locale === "th" ? newService.nameTh.trim() : newService.nameEn.trim() });
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Service creation failed");
+      notify({ tone: "error", title: locale === "th" ? "เพิ่มบริการไม่สำเร็จ" : "Service creation failed", message: caught instanceof Error ? caught.message : undefined });
     } finally {
       setSaving(false);
     }
   };
 
   const toggleService = async (service: Service) => {
-    setError("");
-    setNotice("");
     try {
       await api(user, `/services/${service.serviceId}`, { method: "PATCH", body: JSON.stringify({ active: !service.active, expectedVersion: service.version ?? 1 }) });
-      setNotice(locale === "th" ? "อัปเดตสถานะขายแล้ว" : "Sales status updated.");
+      notify({ tone: "success", title: locale === "th" ? "อัปเดตสถานะขายแล้ว" : "Sales status updated", message: locale === "th" ? service.nameTh : service.nameEn });
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Service update failed");
+      notify({ tone: "error", title: locale === "th" ? "อัปเดตสถานะขายไม่สำเร็จ" : "Service update failed", message: caught instanceof Error ? caught.message : undefined });
     }
   };
 
   const saveDescriptions = async (service: Service) => {
     if (!descriptionTh.trim() || !descriptionEn.trim()) return;
     setSaving(true);
-    setError("");
-    setNotice("");
+    setFormError("");
     try {
       await api(user, `/services/${service.serviceId}`, { method: "PATCH", body: JSON.stringify({ descriptionTh: descriptionTh.trim(), descriptionEn: descriptionEn.trim(), expectedVersion: service.version ?? 1 }) });
-      setNotice(locale === "th" ? "บันทึกรายละเอียดบริการแล้ว" : "Service descriptions saved.");
+      notify({ tone: "success", title: locale === "th" ? "บันทึกรายละเอียดบริการแล้ว" : "Service descriptions saved", message: locale === "th" ? service.nameTh : service.nameEn });
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Description update failed");
+      notify({ tone: "error", title: locale === "th" ? "บันทึกรายละเอียดไม่สำเร็จ" : "Description update failed", message: caught instanceof Error ? caught.message : undefined });
     } finally {
       setSaving(false);
     }
@@ -367,31 +365,36 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
 
   const saveCategory = async (service: Service) => {
     setSaving(true);
-    setError("");
-    setNotice("");
+    setFormError("");
     try {
       await api(user, `/services/${service.serviceId}`, { method: "PATCH", body: JSON.stringify({ category: categoryDraft, expectedVersion: service.version ?? 1 }) });
-      setNotice(locale === "th" ? "เปลี่ยนหมวดหมู่บริการแล้ว" : "Service category updated.");
+      notify({ tone: "success", title: locale === "th" ? "เปลี่ยนหมวดหมู่บริการแล้ว" : "Service category updated", message: categoryLabel(categoryDraft) });
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Category update failed");
+      notify({ tone: "error", title: locale === "th" ? "เปลี่ยนหมวดหมู่ไม่สำเร็จ" : "Category update failed", message: caught instanceof Error ? caught.message : undefined });
     } finally {
       setSaving(false);
     }
   };
 
   const removeService = async (service: Service) => {
+    const result = await requestConfirmation({
+      title: locale === "th" ? `นำ “${service.nameTh}” ออกจากหน้าจอง?` : `Remove “${service.nameEn}” from booking?`,
+      message: locale === "th" ? "ลูกค้าจะเลือกบริการนี้ไม่ได้ แต่สามารถเปิดขายใหม่ได้ภายหลัง" : "Customers cannot select it, but it can be reactivated later.",
+      confirmLabel: locale === "th" ? "ยืนยันนำออก" : "Remove service",
+      cancelLabel: locale === "th" ? "ยกเลิก" : "Cancel",
+      tone: "danger"
+    });
+    if (!result.confirmed) return;
     setSaving(true);
-    setError("");
-    setNotice("");
+    setFormError("");
     try {
       await api(user, `/services/${service.serviceId}`, { method: "PATCH", body: JSON.stringify({ active: false, expectedVersion: service.version ?? 1 }) });
-      setConfirmRemoveService(false);
       setSelectedId(null);
-      setNotice(locale === "th" ? "นำบริการออกจากหน้าจองแล้ว สามารถเปิดขายใหม่ได้ภายหลัง" : "Service removed from booking and can be reactivated later.");
+      notify({ tone: "success", title: locale === "th" ? "นำบริการออกจากหน้าจองแล้ว" : "Service removed from booking", message: locale === "th" ? service.nameTh : service.nameEn });
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Service removal failed");
+      notify({ tone: "error", title: locale === "th" ? "นำบริการออกไม่สำเร็จ" : "Service removal failed", message: caught instanceof Error ? caught.message : undefined });
     } finally {
       setSaving(false);
     }
@@ -400,18 +403,17 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
   const savePrice = async (service: Service, variant: Variant) => {
     const value = Number(priceDrafts[variant.variantId]);
     if (!Number.isFinite(value) || value < 0) {
-      setError(locale === "th" ? "กรุณาระบุราคาเป็นตัวเลขตั้งแต่ 0 บาทขึ้นไป" : "Enter a valid price of THB 0 or more.");
+      setFormError(locale === "th" ? "กรุณาระบุราคาเป็นตัวเลขตั้งแต่ 0 บาทขึ้นไป" : "Enter a valid price of THB 0 or more.");
       return;
     }
     setSaving(true);
-    setError("");
-    setNotice("");
+    setFormError("");
     try {
       await api(user, `/services/${service.serviceId}/variants/${variant.variantId}`, { method: "PATCH", body: JSON.stringify({ priceSatang: Math.round(value * 100), expectedVersion: service.version ?? 1 }) });
-      setNotice(locale === "th" ? `บันทึกราคา ${variant.durationMinutes} นาทีแล้ว` : `${variant.durationMinutes}-minute price saved.`);
+      notify({ tone: "success", title: locale === "th" ? `บันทึกราคา ${variant.durationMinutes} นาทีแล้ว` : `${variant.durationMinutes}-minute price saved`, message: money(Math.round(value * 100)) });
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Price update failed");
+      notify({ tone: "error", title: locale === "th" ? "บันทึกราคาไม่สำเร็จ" : "Price update failed", message: caught instanceof Error ? caught.message : undefined });
     } finally {
       setSaving(false);
     }
@@ -420,10 +422,10 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
   const selectImage = (file?: File) => {
     if (!file) return;
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
-      setError(locale === "th" ? "รองรับ JPG, PNG หรือ WebP ขนาดไม่เกิน 5 MB" : "Use a JPG, PNG, or WebP file up to 5 MB.");
+      notify({ tone: "error", title: locale === "th" ? "เลือกรูปนี้ไม่ได้" : "Image not accepted", message: locale === "th" ? "รองรับ JPG, PNG หรือ WebP ขนาดไม่เกิน 5 MB" : "Use a JPG, PNG, or WebP file up to 5 MB." });
       return;
     }
-    setError("");
+    setFormError("");
     setPendingImage(file);
     setImagePreviewUrl(URL.createObjectURL(file));
   };
@@ -431,8 +433,7 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
   const uploadImage = async (service: Service) => {
     if (!pendingImage) return;
     setSaving(true);
-    setError("");
-    setNotice("");
+    setFormError("");
     const form = new FormData();
     form.set("image", pendingImage);
     form.set("expected_version", String(service.version ?? 1));
@@ -440,26 +441,32 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
       await api(user, `/services/${service.serviceId}/image`, { method: "PUT", body: form });
       setPendingImage(null);
       setImagePreviewUrl("");
-      setNotice(locale === "th" ? "อัปเดตรูปปกแล้ว รูปใหม่จะแสดงบน Customer Web" : "Cover updated for Customer Web.");
+      notify({ tone: "success", title: locale === "th" ? "อัปเดตรูปปกแล้ว" : "Cover image updated", message: locale === "th" ? "รูปใหม่จะแสดงบน Customer Web" : "The new image will appear on Customer Web." });
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Image update failed");
+      notify({ tone: "error", title: locale === "th" ? "อัปเดตรูปปกไม่สำเร็จ" : "Image update failed", message: caught instanceof Error ? caught.message : undefined });
     } finally {
       setSaving(false);
     }
   };
 
   const removeImage = async (service: Service) => {
+    const result = await requestConfirmation({
+      title: locale === "th" ? "ลบรูปปกนี้?" : "Remove this cover?",
+      message: locale === "th" ? "Customer Web จะไม่มีรูปปกสำหรับบริการนี้" : "Customer Web will no longer show a cover for this service.",
+      confirmLabel: locale === "th" ? "ยืนยันลบรูป" : "Remove image",
+      cancelLabel: locale === "th" ? "ยกเลิก" : "Cancel",
+      tone: "danger"
+    });
+    if (!result.confirmed) return;
     setSaving(true);
-    setError("");
-    setNotice("");
+    setFormError("");
     try {
       await api(user, `/services/${service.serviceId}/image`, { method: "DELETE", body: JSON.stringify({ expectedVersion: service.version ?? 1 }) });
-      setConfirmRemoveImage(false);
-      setNotice(locale === "th" ? "ลบรูปปกแล้ว" : "Cover image removed.");
+      notify({ tone: "success", title: locale === "th" ? "ลบรูปปกแล้ว" : "Cover image removed", message: locale === "th" ? service.nameTh : service.nameEn });
       await load();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Image removal failed");
+      notify({ tone: "error", title: locale === "th" ? "ลบรูปปกไม่สำเร็จ" : "Image removal failed", message: caught instanceof Error ? caught.message : undefined });
     } finally {
       setSaving(false);
     }
@@ -470,8 +477,7 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
 
   return <main className="dashboard-content service-workspace">
     <ModuleHeading eyebrow="SERVICE CATALOG" title={locale === "th" ? "บริการและราคา" : "Services and prices"} subtitle={locale === "th" ? "จัดการข้อมูลที่แสดงบน Customer Web ราคาทั้งหมดรวม VAT" : "Manage Customer Web content; all prices include VAT"} />
-    <PageState loading={loading} error={error} empty={false} locale={locale} />
-    {notice && <div className="action-message success service-notice" role="status">{notice}</div>}
+    <PageState loading={loading} error={loadError} empty={false} locale={locale} />
     {!loading && <section className="service-list-panel" aria-labelledby="service-list-title">
       <div className="service-list-toolbar">
         <div><h2 id="service-list-title">{locale === "th" ? "รายการบริการ" : "Service catalog"}</h2><p>{filteredItems.length} / {items.length} {locale === "th" ? "บริการ" : "services"}</p></div>
@@ -503,7 +509,7 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
           <section className="service-editor-section"><div className="service-section-heading"><div><h3>{locale === "th" ? "รายละเอียดสองภาษา" : "Bilingual descriptions"}</h3><p>{locale === "th" ? "เพิ่มภายหลังก็ได้ แต่ควรกรอกก่อนเผยแพร่" : "Optional now, recommended before publishing"}</p></div></div><div className="service-copy-form"><label>{locale === "th" ? "คำอธิบายภาษาไทย" : "Thai description"}<textarea maxLength={500} rows={4} value={newService.descriptionTh} onChange={(event) => setNewService((current) => ({ ...current, descriptionTh: event.target.value }))} /></label><label>{locale === "th" ? "คำอธิบายภาษาอังกฤษ" : "English description"}<textarea maxLength={500} rows={4} value={newService.descriptionEn} onChange={(event) => setNewService((current) => ({ ...current, descriptionEn: event.target.value }))} /></label></div></section>
           <section className="service-editor-section"><div className="service-section-heading"><div><h3>{locale === "th" ? "ราคาเริ่มต้น" : "Initial price"}</h3><p>{locale === "th" ? "สร้างพร้อมหนึ่งระยะเวลา ราคาเป็นบาทรวม VAT" : "Create with one duration; THB, VAT inclusive"}</p></div></div><div className="service-field-grid two-columns"><label>{locale === "th" ? "ระยะเวลา (นาที)" : "Duration (minutes)"}<input required type="number" min="15" max="480" step="15" value={newService.durationMinutes} onChange={(event) => setNewService((current) => ({ ...current, durationMinutes: event.target.value }))} /></label><label>{locale === "th" ? "ราคา (บาท)" : "Price (THB)"}<input required type="number" min="0" step="1" value={newService.priceBaht} onChange={(event) => setNewService((current) => ({ ...current, priceBaht: event.target.value }))} /></label><label>{locale === "th" ? "รูปแบบบริการ" : "Service type"}<select value={newService.packageType} onChange={(event) => setNewService((current) => ({ ...current, packageType: event.target.value as NewServiceDraft["packageType"] }))}><option value="SINGLE">{locale === "th" ? "ต่อผู้รับบริการ 1 คน" : "Per participant (1 guest)"}</option><option value="COUPLE">{locale === "th" ? "แพ็กเกจคู่ 2 คน" : "Couple package (2 guests)"}</option></select></label></div></section>
         </div>
-        {(error || notice) && <div className={`drawer-feedback ${error ? "error" : "success"}`} role={error ? "alert" : "status"}>{error || notice}</div>}
+        {formError && <div className="drawer-feedback error" role="alert">{formError}</div>}
         <div className="service-create-actions"><button type="button" onClick={() => setIsCreating(false)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button type="submit" className="save-button" disabled={saving || !newService.nameTh.trim() || !newService.nameEn.trim() || !newService.priceBaht}>{saving ? (locale === "th" ? "กำลังเพิ่ม…" : "Creating…") : (locale === "th" ? "เพิ่มและเปิดขาย" : "Create and publish")}</button></div>
       </form>
     </aside>}
@@ -515,26 +521,24 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
         <section className="service-editor-section" aria-labelledby="category-title"><div className="service-section-heading"><div><h3 id="category-title">{locale === "th" ? "หมวดหมู่" : "Category"}</h3><p>{locale === "th" ? "มีผลกับการจัดกลุ่มบน Customer Web" : "Controls grouping on Customer Web"}</p></div></div><div className="service-category-editor"><select aria-label={locale === "th" ? "หมวดหมู่บริการ" : "Service category"} value={categoryDraft} onChange={(event) => setCategoryDraft(event.target.value as ServiceCategory)}>{(["SIGNATURE", "MASSAGE", "STANDALONE"] as const).map((value) => <option value={value} key={value}>{categoryLabel(value)}</option>)}</select><button type="button" disabled={saving || categoryDraft === (selected.category ?? "MASSAGE")} onClick={() => { void saveCategory(selected); }}>{locale === "th" ? "บันทึกหมวดหมู่" : "Save category"}</button></div></section>
         <section className="service-editor-section" aria-labelledby="cover-title"><div className="service-section-heading"><div><h3 id="cover-title">{locale === "th" ? "รูปปก" : "Cover image"}</h3><p>{locale === "th" ? "ตัวอย่างก่อนแสดงบน Customer Web" : "Preview before publishing to Customer Web"}</p></div></div>
           <div className={imagePreviewUrl || selected.imageVersion ? "service-image-preview" : "service-image-preview empty"}>{imagePreviewUrl ? <Image src={imagePreviewUrl} alt={locale === "th" ? "ตัวอย่างรูปปกใหม่" : "New cover preview"} fill unoptimized sizes="420px" /> : selected.imageVersion ? <Image src={`/api/spa/api/v1/public/services/${encodeURIComponent(selected.serviceId)}/image?v=${encodeURIComponent(selected.imageVersion)}`} alt={locale === "th" ? `รูปปก ${selected.nameTh}` : `${selected.nameEn} cover`} fill unoptimized sizes="420px" /> : <span>{locale === "th" ? "ยังไม่มีรูปปก" : "No cover image"}</span>}</div>
-          {canManageImages && <div className="service-image-actions"><label className="image-upload-button"><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" disabled={saving} onChange={(event) => { selectImage(event.target.files?.[0]); event.currentTarget.value = ""; }} /><span>{selected.imageVersion ? (locale === "th" ? "เลือกรูปใหม่" : "Choose replacement") : (locale === "th" ? "เลือกรูป" : "Choose image")}</span></label>{pendingImage && <><button type="button" className="save-button" disabled={saving} onClick={() => { void uploadImage(selected); }}>{saving ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "บันทึกรูป" : "Save image")}</button><button type="button" disabled={saving} onClick={() => { setPendingImage(null); setImagePreviewUrl(""); }}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button></>}{selected.imageVersion && !pendingImage && <button type="button" className="danger-link" disabled={saving} onClick={() => setConfirmRemoveImage(true)}>{locale === "th" ? "ลบรูป" : "Remove"}</button>}<small>{locale === "th" ? "JPG, PNG หรือ WebP · ไม่เกิน 5 MB · ระบบจัดเป็น 4:3" : "JPG, PNG, or WebP · max 5 MB · cropped to 4:3"}</small></div>}
-          {confirmRemoveImage && <div className="inline-confirm" role="alertdialog" aria-labelledby="remove-image-title"><strong id="remove-image-title">{locale === "th" ? "ลบรูปปกนี้?" : "Remove this cover?"}</strong><p>{locale === "th" ? "Customer Web จะไม่มีรูปปกสำหรับบริการนี้" : "Customer Web will no longer show a cover for this service."}</p><div><button onClick={() => setConfirmRemoveImage(false)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button className="danger-button" disabled={saving} onClick={() => { void removeImage(selected); }}>{locale === "th" ? "ยืนยันลบรูป" : "Remove image"}</button></div></div>}
+          {canManageImages && <div className="service-image-actions"><label className="image-upload-button"><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" disabled={saving} onChange={(event) => { selectImage(event.target.files?.[0]); event.currentTarget.value = ""; }} /><span>{selected.imageVersion ? (locale === "th" ? "เลือกรูปใหม่" : "Choose replacement") : (locale === "th" ? "เลือกรูป" : "Choose image")}</span></label>{pendingImage && <><button type="button" className="save-button" disabled={saving} onClick={() => { void uploadImage(selected); }}>{saving ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "บันทึกรูป" : "Save image")}</button><button type="button" disabled={saving} onClick={() => { setPendingImage(null); setImagePreviewUrl(""); }}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button></>}{selected.imageVersion && !pendingImage && <button type="button" className="danger-link" disabled={saving} onClick={() => { void removeImage(selected); }}>{locale === "th" ? "ลบรูป" : "Remove"}</button>}<small>{locale === "th" ? "JPG, PNG หรือ WebP · ไม่เกิน 5 MB · ระบบจัดเป็น 4:3" : "JPG, PNG, or WebP · max 5 MB · cropped to 4:3"}</small></div>}
         </section>
 
         <section className="service-editor-section" aria-labelledby="copy-title"><div className="service-section-heading"><div><h3 id="copy-title">{locale === "th" ? "รายละเอียดสองภาษา" : "Bilingual descriptions"}</h3><p>{locale === "th" ? "ตรวจข้อความก่อนเผยแพร่ทุกครั้ง" : "Review customer-facing copy before saving"}</p></div></div><div className="service-copy-form"><label>{locale === "th" ? "คำอธิบายภาษาไทย" : "Thai description"}<textarea value={descriptionTh} onChange={(event) => setDescriptionTh(event.target.value)} maxLength={500} rows={4} /><small>{descriptionTh.length}/500</small></label><label>{locale === "th" ? "คำอธิบายภาษาอังกฤษ" : "English description"}<textarea value={descriptionEn} onChange={(event) => setDescriptionEn(event.target.value)} maxLength={500} rows={4} /><small>{descriptionEn.length}/500</small></label><div className="service-copy-actions"><button type="button" className="save-button" onClick={() => { void saveDescriptions(selected); }} disabled={saving || !descriptionTh.trim() || !descriptionEn.trim()}>{saving ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "บันทึกรายละเอียด" : "Save descriptions")}</button></div></div></section>
 
         <section className="service-editor-section" aria-labelledby="price-title"><div className="service-section-heading"><div><h3 id="price-title">{locale === "th" ? "ระยะเวลาและราคา" : "Duration and prices"}</h3><p>{locale === "th" ? "ราคาเป็นบาท รวม VAT และมีผลกับ Booking ใหม่" : "THB, VAT inclusive; applies to new bookings"}</p></div></div><div className="variant-editor-list">{selected.variants.map((variant) => <div className="variant-editor-row" key={variant.variantId}><div><strong>{variant.durationMinutes} {locale === "th" ? "นาที" : "minutes"}</strong><small>{variant.variantId}</small></div><label><span>{locale === "th" ? "ราคา (บาท)" : "Price (THB)"}</span><input type="number" min="0" step="1" inputMode="decimal" value={priceDrafts[variant.variantId] ?? ""} onChange={(event) => setPriceDrafts((current) => ({ ...current, [variant.variantId]: event.target.value }))} /></label><button disabled={saving || Number(priceDrafts[variant.variantId]) === variant.priceSatang / 100} onClick={() => { void savePrice(selected, variant); }}>{locale === "th" ? "บันทึกราคา" : "Save price"}</button></div>)}</div></section>
-        <section className="service-editor-section service-danger-zone" aria-labelledby="remove-service-title"><div className="service-section-heading"><div><h3 id="remove-service-title">{locale === "th" ? "นำบริการออก" : "Remove service"}</h3><p>{locale === "th" ? "ปิดบริการแบบย้อนกลับได้ ประวัติ Booking เดิมยังคงอยู่" : "Reversible deactivation; existing booking history is preserved"}</p></div></div>{!confirmRemoveService ? <button type="button" className="danger-link service-remove-button" disabled={saving || !selected.active} onClick={() => setConfirmRemoveService(true)}>{selected.active ? (locale === "th" ? "นำออกจากหน้าจอง" : "Remove from booking") : (locale === "th" ? "บริการนี้ปิดอยู่แล้ว" : "Service already inactive")}</button> : <div className="inline-confirm" role="alertdialog" aria-labelledby="confirm-remove-service-title"><strong id="confirm-remove-service-title">{locale === "th" ? `นำ “${selected.nameTh}” ออกจากหน้าจอง?` : `Remove “${selected.nameEn}” from booking?`}</strong><p>{locale === "th" ? "ลูกค้าจะเลือกบริการนี้ไม่ได้ แต่ Admin สามารถเปิดขายใหม่จากตารางได้" : "Customers cannot select it, but Admin can reactivate it from the table."}</p><div><button type="button" onClick={() => setConfirmRemoveService(false)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button type="button" className="danger-button" disabled={saving} onClick={() => { void removeService(selected); }}>{locale === "th" ? "ยืนยันนำออก" : "Confirm removal"}</button></div></div>}</section>
+        <section className="service-editor-section service-danger-zone" aria-labelledby="remove-service-title"><div className="service-section-heading"><div><h3 id="remove-service-title">{locale === "th" ? "นำบริการออก" : "Remove service"}</h3><p>{locale === "th" ? "ปิดบริการแบบย้อนกลับได้ ประวัติ Booking เดิมยังคงอยู่" : "Reversible deactivation; existing booking history is preserved"}</p></div></div><button type="button" className="danger-link service-remove-button" disabled={saving || !selected.active} onClick={() => { void removeService(selected); }}>{selected.active ? (locale === "th" ? "นำออกจากหน้าจอง" : "Remove from booking") : (locale === "th" ? "บริการนี้ปิดอยู่แล้ว" : "Service already inactive")}</button></section>
       </div>
-      {(error || notice) && <div className={`drawer-feedback ${error ? "error" : "success"}`} role={error ? "alert" : "status"}>{error || notice}</div>}
+      {formError && <div className="drawer-feedback error" role="alert">{formError}</div>}
     </aside>}
   </main>;
 }
 
 function TherapistsPage({ locale, user, bookings, onBookingsChanged }: { locale: Locale; user: User; bookings: PreviewBooking[]; onBookingsChanged: () => void }) {
+  const { notify } = useAdminFeedback();
   const [items, setItems] = useState<Therapist[]>([]);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
-  const [dialogError, setDialogError] = useState("");
-  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [registrationOpen, setRegistrationOpen] = useState(false);
@@ -590,22 +594,20 @@ function TherapistsPage({ locale, user, bookings, onBookingsChanged }: { locale:
 
   const openRegistration = () => {
     setName("");
-    setDialogError("");
     setRegistrationOpen(true);
   };
 
   const add = async () => {
     if (!name.trim()) return;
     setSaving(true);
-    setDialogError("");
     try {
       await api(user, "/therapists", { method: "POST", body: JSON.stringify({ branchId: "branch_001", displayName: name.trim() }) });
       setRegistrationOpen(false);
-      setNotice(locale === "th" ? `ลงทะเบียน ${name.trim()} แล้ว พร้อมรับการมอบหมาย` : `${name.trim()} registered and available for assignment.`);
+      notify({ tone: "success", title: locale === "th" ? "ลงทะเบียนหมอนวดแล้ว" : "Therapist registered", message: locale === "th" ? `${name.trim()} พร้อมรับการมอบหมาย` : `${name.trim()} is available for assignment.` });
       setName("");
       await load();
     } catch (caught) {
-      setDialogError(caught instanceof Error ? caught.message : "Therapist creation failed");
+      notify({ tone: "error", title: locale === "th" ? "ลงทะเบียนหมอนวดไม่สำเร็จ" : "Therapist creation failed", message: caught instanceof Error ? caught.message : undefined });
     } finally {
       setSaving(false);
     }
@@ -623,8 +625,6 @@ function TherapistsPage({ locale, user, bookings, onBookingsChanged }: { locale:
     const therapistIds = assignmentDrafts[booking.bookingId] ?? [];
     if (therapistIds.length !== booking.pax || therapistIds.some((item) => !item)) return;
     setSaving(true);
-    setError("");
-    setNotice("");
     try {
       await api(user, `/bookings/${booking.bookingId}/assignments`, { method: "PUT", body: JSON.stringify({ therapistIds, expectedVersion: booking.version }) });
       setAssignmentDrafts((current) => {
@@ -632,10 +632,10 @@ function TherapistsPage({ locale, user, bookings, onBookingsChanged }: { locale:
         delete next[booking.bookingId];
         return next;
       });
-      setNotice(locale === "th" ? `มอบหมายหมอนวดให้ ${booking.bookingId} แล้ว รายการจองกำลังอัปเดต` : `Therapists assigned to ${booking.bookingId}; the booking list is updating.`);
+      notify({ tone: "success", title: locale === "th" ? "มอบหมายหมอนวดแล้ว" : "Therapists assigned", message: booking.bookingId });
       onBookingsChanged();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Assignment failed");
+      notify({ tone: "error", title: locale === "th" ? "มอบหมายหมอนวดไม่สำเร็จ" : "Assignment failed", message: caught instanceof Error ? caught.message : undefined });
     } finally {
       setSaving(false);
     }
@@ -648,7 +648,6 @@ function TherapistsPage({ locale, user, bookings, onBookingsChanged }: { locale:
   return <main className="dashboard-content therapist-workspace">
     <ModuleHeading eyebrow="THERAPIST ROSTER" title={locale === "th" ? "หมอนวดและการมอบหมาย" : "Therapists and assignment"} subtitle={locale === "th" ? "ลงทะเบียนหมอนวดและมอบหมายให้ครบก่อนเริ่มบริการ" : "Register therapists and assign every guest before service starts"} />
     <PageState loading={loading} error={error} empty={false} locale={locale} />
-    {notice && <div className="action-message success therapist-notice" role="status">{notice}</div>}
     {!loading && <div className="therapist-dispatch-grid">
       <section className="module-panel therapist-roster-panel" aria-labelledby="therapist-roster-title">
         <div className="panel-title"><div><h2 id="therapist-roster-title">{locale === "th" ? "รายชื่อหมอนวด" : "Roster"}</h2><small>{activeTherapists.length}/{items.length} {locale === "th" ? "คนพร้อมรับงาน" : "available"}</small></div><button ref={addButtonRef} type="button" className="primary-compact-button" onClick={openRegistration}>+ {locale === "th" ? "เพิ่มหมอนวด" : "Add therapist"}</button></div>
@@ -668,7 +667,7 @@ function TherapistsPage({ locale, user, bookings, onBookingsChanged }: { locale:
       </section>
     </div>}
 
-    {registrationOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRegistrationOpen(false); }}><div ref={dialogRef} className="registration-dialog" role="dialog" aria-modal="true" aria-labelledby="therapist-dialog-title" aria-describedby="therapist-dialog-description"><div className="drawer-header"><div><p className="eyebrow">NEW THERAPIST</p><h2 id="therapist-dialog-title">{locale === "th" ? "ลงทะเบียนหมอนวดใหม่" : "Register new therapist"}</h2></div><button ref={closeDialogButtonRef} type="button" aria-label={locale === "th" ? "ปิดหน้าต่าง" : "Close dialog"} onClick={() => setRegistrationOpen(false)}>×</button></div><form onSubmit={(event) => { event.preventDefault(); void add(); }}><p id="therapist-dialog-description">{locale === "th" ? "หมอนวดใหม่จะเปิดใช้งานทันทีและเลือกมอบหมายให้ Booking ได้" : "The new therapist becomes active immediately and can be assigned to bookings."}</p><label htmlFor="therapist-display-name">{locale === "th" ? "ชื่อที่ใช้แสดงในระบบ" : "Display name"}</label><input ref={nameInputRef} id="therapist-display-name" required maxLength={100} autoComplete="off" value={name} onChange={(event) => setName(event.target.value)} placeholder={locale === "th" ? "เช่น คุณนิด" : "e.g. Nid"} />{dialogError && <div className="action-message error" role="alert">{dialogError}</div>}<div className="dialog-actions"><button type="button" onClick={() => setRegistrationOpen(false)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button type="submit" className="confirm-button" disabled={saving || !name.trim()}>{saving ? (locale === "th" ? "กำลังลงทะเบียน…" : "Registering…") : (locale === "th" ? "ลงทะเบียนหมอนวด" : "Register therapist")}</button></div></form></div></div>}
+    {registrationOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRegistrationOpen(false); }}><div ref={dialogRef} className="registration-dialog" role="dialog" aria-modal="true" aria-labelledby="therapist-dialog-title" aria-describedby="therapist-dialog-description"><div className="drawer-header"><div><p className="eyebrow">NEW THERAPIST</p><h2 id="therapist-dialog-title">{locale === "th" ? "ลงทะเบียนหมอนวดใหม่" : "Register new therapist"}</h2></div><button ref={closeDialogButtonRef} type="button" aria-label={locale === "th" ? "ปิดหน้าต่าง" : "Close dialog"} onClick={() => setRegistrationOpen(false)}>×</button></div><form onSubmit={(event) => { event.preventDefault(); void add(); }}><p id="therapist-dialog-description">{locale === "th" ? "หมอนวดใหม่จะเปิดใช้งานทันทีและเลือกมอบหมายให้ Booking ได้" : "The new therapist becomes active immediately and can be assigned to bookings."}</p><label htmlFor="therapist-display-name">{locale === "th" ? "ชื่อที่ใช้แสดงในระบบ" : "Display name"}</label><input ref={nameInputRef} id="therapist-display-name" required maxLength={100} autoComplete="off" value={name} onChange={(event) => setName(event.target.value)} placeholder={locale === "th" ? "เช่น คุณนิด" : "e.g. Nid"} /><div className="dialog-actions"><button type="button" onClick={() => setRegistrationOpen(false)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button type="submit" className="confirm-button" disabled={saving || !name.trim()}>{saving ? (locale === "th" ? "กำลังลงทะเบียน…" : "Registering…") : (locale === "th" ? "ลงทะเบียนหมอนวด" : "Register therapist")}</button></div></form></div></div>}
   </main>;
 }
 
@@ -693,11 +692,12 @@ function formatNotificationState(state: string, locale: Locale): string {
 }
 
 function NotificationsPage({ locale, user, filter, onFilterChange, onActionRequiredCountChange }: { locale: Locale; user: User; filter: "ALL" | "ACTION_REQUIRED"; onFilterChange: (filter: "ALL" | "ACTION_REQUIRED") => void; onActionRequiredCountChange: (count: number) => void }) {
+  const { notify } = useAdminFeedback();
   const [items, setItems] = useState<NotificationEvent[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState("");
   const load = async () => { setLoading(true); setError(""); try { const nextItems = (await api<{ items: NotificationEvent[] }>(user, "/notifications")).items; setItems(nextItems); onActionRequiredCountChange(countNotificationsRequiringAction(nextItems)); } catch (caught) { setError(caught instanceof Error ? caught.message : "Notifications unavailable"); } finally { setLoading(false); } };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { queueMicrotask(() => { void load(); }); }, [user]);
-  const retry = async (id: string) => { try { await api(user, `/notifications/${id}:retry`, { method: "POST" }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Retry failed"); } };
+  const retry = async (id: string) => { try { await api(user, `/notifications/${id}:retry`, { method: "POST" }); notify({ tone: "success", title: locale === "th" ? "ส่งเข้าคิวใหม่แล้ว" : "Notification queued again", message: id }); await load(); } catch (caught) { notify({ tone: "error", title: locale === "th" ? "ส่งเข้าคิวใหม่ไม่สำเร็จ" : "Retry failed", message: caught instanceof Error ? caught.message : undefined }); } };
   const actionRequiredCount = countNotificationsRequiringAction(items);
   const visibleItems = filter === "ACTION_REQUIRED" ? items.filter((item) => notificationRequiresAction(item.state)) : items;
   return <main className="dashboard-content"><ModuleHeading eyebrow="DELIVERY OPERATIONS" title={locale === "th" ? "การแจ้งเตือน" : "Notifications"} subtitle={locale === "th" ? "ติดตามการส่ง LINE และจัดการเฉพาะรายการที่ต้องตรวจสอบ" : "Monitor LINE delivery and act only on items requiring review"} /><PageState loading={loading} error={error} empty={!items.length} locale={locale} />
