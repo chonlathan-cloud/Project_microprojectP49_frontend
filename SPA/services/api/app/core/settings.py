@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     health_retention_years: int = 3
     health_retention_policy_version: str = "health-3y-approved-v1"
     health_retention_policy_approved: bool = True
-    privacy_notice_version: str = "privacy-draft-v1"
+    health_consent_version: str = "health-consent-admin-line-th-2026-08-v2"
+    privacy_notice_version: str = "privacy-draft-v2"
     booking_terms_version: str = "terms-draft-v1"
     no_show_grace_minutes: int = 15
     line_customer_login_channel_id: str = ""

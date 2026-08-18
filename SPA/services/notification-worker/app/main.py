@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from app.templates.booking import (
     AdminNotificationBookingView,
+    AdminNotificationParticipantView,
     NotificationBookingView,
     NotificationParticipantView,
     flex_message,
@@ -105,7 +106,11 @@ def _test_prefix() -> str:
 
 
 def _render_admin_message(event: dict[str, object], booking: dict[str, object]) -> str:
-    health = "\n⚠ มีข้อมูลสุขภาพ กรุณาตรวจสอบใน Admin Web" if booking.get("healthAlert") else ""
+    health = (
+        "\n⚠ รายละเอียดสุขภาพแสดงใน Flex Summary รายการจองใหม่"
+        if booking.get("healthAlert")
+        else ""
+    )
     return (
         f"{_test_prefix()}SPA49 Booking\n"
         f"{event.get('eventType', 'BOOKING_UPDATE')}\n"
@@ -135,20 +140,58 @@ def _booking_view(
     booking_doc_id: str,
     booking: dict[str, object],
     admin: bool,
+    include_health_details: bool = False,
 ) -> NotificationBookingView:
     participant_snapshots = list(
         client.collection("booking_participants")
         .where("bookingDocId", "==", booking_doc_id)
         .stream()
     )
-    participant_names = {
-        snapshot.id: str((snapshot.to_dict() or {}).get("nickname", "ลูกค้า"))
-        for snapshot in participant_snapshots
-    }
+    participant_data = {snapshot.id: snapshot.to_dict() or {} for snapshot in participant_snapshots}
     line_snapshots = list(
         client.collection("booking_line_items").where("bookingDocId", "==", booking_doc_id).stream()
     )
+    def participant_view(
+        *, participant_id: str, service_name: str, duration_minutes: int
+    ) -> NotificationParticipantView:
+        participant = participant_data.get(participant_id, {})
+        values: dict[str, object] = {
+            "nickname": str(participant.get("nickname") or booking.get("customerName", "ลูกค้า")),
+            "service_name": service_name,
+            "duration_minutes": duration_minutes,
+        }
+        if not admin:
+            return NotificationParticipantView(**values)
+        health_data: dict[str, object] = {}
+        health_profile_id = participant.get("healthProfileId")
+        if include_health_details and health_profile_id:
+            health_snapshot = client.collection("health_profiles").document(
+                str(health_profile_id)
+            ).get()
+            if health_snapshot.exists:
+                health_data = health_snapshot.to_dict() or {}
+        has_health_information = bool(
+            health_data.get("hasInformation", participant.get("healthAlert", False))
+        )
+        return AdminNotificationParticipantView(
+            **values,
+            has_health_information=has_health_information,
+            health_details=(
+                str(health_data.get("details", "")).strip() or None
+                if has_health_information
+                else None
+            ),
+        )
+
+    def line_sequence(snapshot: object) -> int:
+        data = snapshot.to_dict() or {}  # type: ignore[attr-defined]
+        participant_ids = data.get("participantIds")
+        participant_ids = participant_ids if isinstance(participant_ids, list) else []
+        participant = participant_data.get(str(participant_ids[0]), {}) if participant_ids else {}
+        return int(participant.get("sequence", 999))
+
     participants: list[NotificationParticipantView] = []
+    line_snapshots.sort(key=line_sequence)
     for line in line_snapshots:
         data = line.to_dict() or {}
         service = data.get("serviceSnapshot")
@@ -157,11 +200,8 @@ def _booking_view(
         participant_ids = participant_ids if isinstance(participant_ids, list) else []
         participant_id = str(participant_ids[0]) if participant_ids else ""
         participants.append(
-            NotificationParticipantView(
-                nickname=participant_names.get(
-                    participant_id,
-                    str(booking.get("customerName", "ลูกค้า")),
-                ),
+            participant_view(
+                participant_id=participant_id,
                 service_name=str(
                     service.get("nameTh")
                     or service.get("nameEn")
@@ -171,9 +211,10 @@ def _booking_view(
             )
         )
     if not participants:
+        fallback_id = next(iter(participant_data), "")
         participants.append(
-            NotificationParticipantView(
-                nickname=str(booking.get("customerName", "ลูกค้า")),
+            participant_view(
+                participant_id=fallback_id,
                 service_name=str(booking.get("serviceName", "บริการสปา")),
                 duration_minutes=60,
             )
@@ -273,6 +314,7 @@ async def dispatch_notification(
                 booking_doc_id=booking_snapshot.id,
                 booking=booking,
                 admin=True,
+                include_health_details=True,
             )
             await _push_line(
                 token=token,
@@ -282,6 +324,22 @@ async def dispatch_notification(
                     bubble=render_admin_new_booking(view),
                 ),
             )
+            if any(participant.has_health_information for participant in view.participants):
+                client.collection("audit_events").document(
+                    f"health-disclosure-{event_snapshot.id}"
+                ).set(
+                    {
+                        "eventType": "HEALTH_DATA_DISCLOSED_TO_ADMIN_LINE_GROUP",
+                        "bookingDocId": booking_snapshot.id,
+                        "publicBookingId": view.public_booking_id,
+                        "notificationEventId": event_snapshot.id,
+                        "actorType": "SYSTEM",
+                        "targetType": "REGISTERED_ADMIN_LINE_GROUP",
+                        "targetGroupId": destination,
+                        "createdAt": datetime.now(UTC),
+                    },
+                    merge=True,
+                )
             delivery["admin"] = "SENT"
         elif event_type in {"BOOKING_CONFIRMED", "BOOKING_PENDING_ACKNOWLEDGEMENT"}:
             existing_delivery = event.get("delivery")

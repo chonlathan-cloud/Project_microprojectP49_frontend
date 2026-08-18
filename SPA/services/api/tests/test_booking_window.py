@@ -6,7 +6,6 @@ import pytest
 from app.core.errors import AdvanceWindowViolation
 from app.domains.bookings.service import _validate_advance_window
 
-
 TZ = ZoneInfo("Asia/Bangkok")
 BRANCH = {"bookingWindow": {"minDays": 1, "maxDays": 30}}
 

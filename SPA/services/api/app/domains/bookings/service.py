@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import UTC, date as calendar_date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from datetime import date as calendar_date
 from secrets import token_urlsafe
 from types import SimpleNamespace
 from uuid import uuid4
@@ -234,6 +235,9 @@ def create_booking(
             "contact": {"phoneMasked": mask_phone(e164), "phoneE164": e164},
             "customerName": str(selections[0][0].get("nickname", "Guest")),
             "serviceName": selections[0][1].name_en,
+            "serviceId": selections[0][1].id,
+            "serviceNameTh": selections[0][1].name_th,
+            "serviceNameEn": selections[0][1].name_en,
             "startAt": start_at,
             "endAt": start_at + timedelta(minutes=max_duration),
             "localDate": date,
@@ -357,7 +361,7 @@ def create_booking(
                     "participantId": participant_ref.id,
                     "purpose": "HEALTH_DATA_EXPLICIT",
                     "accepted": True,
-                    "version": settings.health_retention_policy_version,
+                    "version": settings.health_consent_version,
                     "acceptedAt": now,
                 },
             )

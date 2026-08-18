@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Low-Level Design (LLD) |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Implementation baseline |
-| Last updated | 14 August 2026 |
-| Business baseline | [Business Logic v1.2](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.1](./HLD.md) |
-| Technical baseline | [TDD v1.1](./TDD.md) |
+| Last updated | 18 August 2026 |
+| Business baseline | [Business Logic v1.3](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.2](./HLD.md) |
+| Technical baseline | [TDD v1.2](./TDD.md) |
 
 ## 1. Purpose
 
@@ -304,7 +304,7 @@ Request:
       },
       "healthConsent": {
         "accepted": true,
-        "version": "health-consent-th-2026-08"
+        "version": "health-consent-admin-line-th-2026-08-v2"
       }
     }
   ],
@@ -654,7 +654,7 @@ For `PER_BOOKING`, `quantity` is always `1`; `participantIds` contains exactly `
 }
 ```
 
-This collection is never joined into public or notification projections. `ADMIN`/`STAFF` may correct it while the Booking is active; transition to `COMPLETED` sets `snapshotState=FINAL`, after which the historical snapshot is immutable. Audit changes store only `hasInformation` and `healthChanged`, not `details`.
+This collection is never joined into public, Customer LINE, outbox, task, log, URL, metric, or operational-alert projections. It is joined into authenticated Admin Web reads and the registered Admin Group Booking Flex projection. `ADMIN`/`STAFF` may correct it while the Booking is active; transition to `COMPLETED` sets `snapshotState=FINAL`, after which the historical snapshot is immutable. Audit changes and Group-disclosure audits store only safe metadata, not `details`.
 
 ### 6.11 Customer Profile, Health Profile, Consent, and Merge Documents
 
@@ -703,7 +703,7 @@ This collection is never joined into public or notification projections. `ADMIN`
 ```json
 {
   "purpose": "HEALTH_DATA_EXPLICIT",
-  "wordingVersion": "health-consent-th-2026-08",
+  "wordingVersion": "health-consent-admin-line-th-2026-08-v2",
   "wordingSha256": "hex",
   "bookingDocId": "internal-booking-id",
   "participantId": "participant-id",
@@ -1323,11 +1323,20 @@ class NotificationBookingView(BaseModel):
     participants: list[NotificationParticipantView]
     pax: int
     estimated_amount_satang: int
-    health_alert: bool
     map_url: str | None
 ```
 
-Customer template builders do not accept `health_alert` or health detail fields. Admin group builder accepts only the boolean `health_alert`. Template snapshot tests validate LINE Flex limits and prohibit protected keys recursively.
+```python
+class AdminNotificationParticipantView(NotificationParticipantView):
+    has_health_information: bool
+    health_details: str | None
+
+class AdminNotificationBookingView(NotificationBookingView):
+    participants: list[AdminNotificationParticipantView]
+    health_alert: bool
+```
+
+Customer template builders do not accept `health_alert` or health-detail fields. The Admin Group Booking builder accepts participant health detail only after the Worker resolves the destination to `LINE_ADMIN_GROUP_ID`. The Worker reads the restricted snapshot at render time; outbox/task payloads remain reference-only. Template tests validate LINE Flex limits, assert Admin detail visibility, and recursively prohibit health detail from every customer and operational-alert template.
 
 ## 20. Frontend State and API Use
 
@@ -1429,6 +1438,7 @@ ACTIVE_PENDING_PER_PHONE=2
 HEALTH_RETENTION_YEARS=3
 HEALTH_RETENTION_POLICY_VERSION=health-3y-proposed-v1
 HEALTH_RETENTION_POLICY_APPROVED=false
+HEALTH_CONSENT_VERSION=health-consent-admin-line-th-2026-08-v2
 ```
 
 ### 22.2 Worker Settings
@@ -1582,7 +1592,8 @@ The last-capacity test launches at least 20 concurrent create attempts against o
 - OpenAPI response snapshot and generated-client drift
 - Public schemas recursively reject health/internal fields
 - Customer templates cannot receive health fields
-- Admin Group Flex contains only health boolean/indicator
+- Registered Admin Group Booking Flex contains participant health details and no Admin-Web detour copy
+- Customer LINE, non-Admin Group, task, URL, log, metric, audit-detail, and operational-alert projections reject health details
 - Webhook invalid signature produces no persistent business change
 - Unregistered Group and missing User ID cannot confirm
 - `STAFF` cannot access users, roles, security, LINE group config, or global audit
@@ -1648,7 +1659,7 @@ The last-capacity test launches at least 20 concurrent create attempts against o
 - Registered LINE group confirmation is atomic and audited.
 - Initial catalog contains exactly the approved 11 services; Couple Package charge-once and required-pax behavior pass.
 - Health Profile edits, immutable final snapshots, verified/provisional identity rules, Profile merge, consent evidence, and withdrawal workflow pass.
-- Health details are absent from public responses, LINE payloads, tasks, URLs, logs, and metrics.
+- Health details are absent from public responses, Customer LINE and operational-alert payloads, non-Admin groups, tasks, URLs, logs, metrics, and audit bodies; they are present only in authenticated Admin Web responses and the registered Admin Group Booking Flex.
 - Notification enqueue gaps and retries recover without Booking rollback or duplicate state changes.
 - Production configuration contains no plaintext credentials outside approved secret stores.
 - Daily backup and a timed restore drill meet the documented RPO/RTO procedure.

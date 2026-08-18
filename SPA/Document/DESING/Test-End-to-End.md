@@ -544,7 +544,8 @@ Admin status actions, Cloud Tasks/Scheduler และ LINE sender เชื่�
   6. Worker ส่ง pending message ให้ Customer
   7. Worker ส่ง new-booking message เข้า Admin Group
   8. ตรวจว่า Customer message ไม่มี health information
-  9. Admin Group เห็นได้เพียง health boolean indicator
+  9. Registered Admin Group เห็นรายละเอียดสุขภาพแยกตามผู้รับบริการ และข้อความตรงกับ Health Snapshot
+  10. ตรวจว่า outbox, Cloud Task, log และ audit event ไม่มี plaintext health detail
 
   ### Admin Group confirmation
 

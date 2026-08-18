@@ -1,4 +1,5 @@
 from app.templates.booking import (
+    AdminNotificationParticipantView,
     NotificationBookingView,
     NotificationParticipantView,
     flex_message,
@@ -7,6 +8,7 @@ from app.templates.booking import (
 )
 
 __all__ = [
+    "AdminNotificationParticipantView",
     "NotificationBookingView",
     "NotificationParticipantView",
     "flex_message",

@@ -1,11 +1,12 @@
 "use client";
 
-import type { Locale, PreviewBooking } from "@spa/shared-types";
+import { INITIAL_SERVICE_CATALOG, type BookingStatus, type Locale, type PreviewBooking } from "@spa/shared-types";
 import type { User } from "firebase/auth";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { adminApi } from "@/lib/admin-api";
+import { countNotificationsRequiringAction, isNotificationState, notificationRequiresAction, type NotificationState } from "@/lib/notification-state";
 
 export type AdminView = "calendar" | "capacity" | "services" | "therapists" | "notifications";
 
@@ -32,18 +33,22 @@ function PageState({ loading, error, empty, locale }: { loading: boolean; error:
   return null;
 }
 
-export function AdminModulePage({ view, locale, user, bookings, onBookingsChanged }: {
+export function AdminModulePage({ view, locale, user, bookings, notificationFilter, onNotificationFilterChange, onNotificationCountChange, onBookingsChanged, onSelectBooking }: {
   view: AdminView;
   locale: Locale;
   user: User;
   bookings: PreviewBooking[];
+  notificationFilter: "ALL" | "ACTION_REQUIRED";
+  onNotificationFilterChange: (filter: "ALL" | "ACTION_REQUIRED") => void;
+  onNotificationCountChange: (count: number) => void;
   onBookingsChanged: () => void;
+  onSelectBooking: (bookingId: string) => void;
 }) {
-  if (view === "calendar") return <CalendarPage locale={locale} bookings={bookings} />;
+  if (view === "calendar") return <CalendarPage locale={locale} bookings={bookings} onSelectBooking={onSelectBooking} />;
   if (view === "capacity") return <CapacityPage locale={locale} user={user} />;
   if (view === "services") return <ServicesPage locale={locale} user={user} />;
   if (view === "therapists") return <TherapistsPage locale={locale} user={user} bookings={bookings} onBookingsChanged={onBookingsChanged} />;
-  return <NotificationsPage locale={locale} user={user} />;
+  return <NotificationsPage locale={locale} user={user} filter={notificationFilter} onFilterChange={onNotificationFilterChange} onActionRequiredCountChange={onNotificationCountChange} />;
 }
 
 function ModuleHeading({ eyebrow, title, subtitle }: { eyebrow: string; title: string; subtitle: string }) {
@@ -62,7 +67,38 @@ function bangkokHour(value: string): string {
   }).format(new Date(value)).slice(0, 2);
 }
 
-function CalendarPage({ locale, bookings }: { locale: Locale; bookings: PreviewBooking[] }) {
+const calendarStatusLabel: Record<BookingStatus, { th: string; en: string }> = {
+  PENDING: { th: "รอยืนยัน", en: "Pending" },
+  CONFIRMED: { th: "ยืนยันแล้ว", en: "Confirmed" },
+  IN_SERVICE: { th: "กำลังให้บริการ", en: "In service" },
+  COMPLETED: { th: "เสร็จสิ้น", en: "Completed" },
+  CANCELLED: { th: "ยกเลิก", en: "Cancelled" },
+  NO_SHOW: { th: "ไม่มาตามนัด", en: "No show" }
+};
+
+function bangkokTime(value: string, locale: Locale): string {
+  return new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Bangkok"
+  }).format(new Date(value));
+}
+
+function bookingTimeRange(booking: PreviewBooking, locale: Locale): string {
+  const endAt = new Date(new Date(booking.startLocal).getTime() + booking.durationMinutes * 60_000).toISOString();
+  return `${bangkokTime(booking.startLocal, locale)}–${bangkokTime(endAt, locale)}`;
+}
+
+function localizedServiceName(booking: PreviewBooking, locale: Locale): string {
+  const localizedSnapshot = locale === "th" ? booking.serviceNameTh : booking.serviceNameEn;
+  if (localizedSnapshot) return localizedSnapshot;
+  const service = INITIAL_SERVICE_CATALOG.find((item) => booking.serviceName.includes(item.nameEn) || booking.serviceName.includes(item.nameTh));
+  if (!service) return booking.serviceName;
+  return locale === "th" ? service.nameTh : service.nameEn;
+}
+
+function CalendarPage({ locale, bookings, onSelectBooking }: { locale: Locale; bookings: PreviewBooking[]; onSelectBooking: (bookingId: string) => void }) {
   const firstDate = bookings[0] ? bangkokDate(bookings[0].startLocal) : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date());
   const [date, setDate] = useState(firstDate);
   const dayBookings = useMemo(() => bookings.filter((item) => bangkokDate(item.startLocal) === date), [bookings, date]);
@@ -71,7 +107,19 @@ function CalendarPage({ locale, bookings }: { locale: Locale; bookings: PreviewB
     <section className="module-panel"><div className="module-toolbar"><label>{locale === "th" ? "วันที่" : "Date"}<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><strong>{dayBookings.length} {locale === "th" ? "รายการ" : "bookings"}</strong></div>
       <div className="calendar-grid">{Array.from({ length: 13 }, (_, index) => `${String(index + 10).padStart(2, "0")}:00`).map((time) => {
         const items = dayBookings.filter((item) => bangkokHour(item.startLocal) === time.slice(0, 2));
-        return <div className="calendar-row" key={time}><time>{time}</time><div>{items.length ? items.map((item) => <article key={item.bookingId}><strong>{item.customerName}</strong><span>{item.serviceName} • {item.pax} pax</span><small>{item.bookingId} • {item.status}</small></article>) : <span className="calendar-empty">—</span>}</div></div>;
+        return <div className="calendar-row" key={time}><time>{time}</time><div>{items.length ? items.map((item) => {
+          const timeRange = bookingTimeRange(item, locale);
+          const serviceName = localizedServiceName(item, locale);
+          const status = calendarStatusLabel[item.status][locale];
+          const therapist = item.therapistName ?? (locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned");
+          return <button type="button" className={`calendar-booking status-${item.status.toLowerCase()}`} key={item.bookingId} onClick={() => onSelectBooking(item.bookingId)} aria-label={`${timeRange} ${item.customerName} ${serviceName} ${status}`}>
+            <span className="calendar-booking-top"><time dateTime={item.startLocal}>{timeRange}</time><span className={`status status-${item.status.toLowerCase()}`}>{status}</span></span>
+            <strong>{item.customerName}</strong>
+            <span className="calendar-service">{serviceName} · {item.durationMinutes} {locale === "th" ? "นาที" : "min"} · {item.pax} {locale === "th" ? "ท่าน" : "pax"}</span>
+            <span className={item.therapistName ? "calendar-therapist" : "calendar-therapist unassigned"}>{locale === "th" ? "หมอนวด" : "Therapist"}: {therapist}</span>
+            <span className="calendar-booking-footer"><small>{item.bookingId}</small>{item.healthAlert && <span className="calendar-health-alert">⚠ {locale === "th" ? "ตรวจข้อมูลสุขภาพ" : "Health review"}</span>}</span>
+          </button>;
+        }) : <span className="calendar-empty">—</span>}</div></div>;
       })}</div>
     </section>
   </main>;
@@ -387,7 +435,7 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
     setNotice("");
     const form = new FormData();
     form.set("image", pendingImage);
-    form.set("expectedVersion", String(service.version ?? 1));
+    form.set("expected_version", String(service.version ?? 1));
     try {
       await api(user, `/services/${service.serviceId}/image`, { method: "PUT", body: form });
       setPendingImage(null);
@@ -624,13 +672,36 @@ function TherapistsPage({ locale, user, bookings, onBookingsChanged }: { locale:
   </main>;
 }
 
-function NotificationsPage({ locale, user }: { locale: Locale; user: User }) {
+const notificationStateLabel: Record<NotificationState, { th: string; en: string }> = {
+  PENDING: { th: "รอสร้างคิว", en: "Pending" },
+  ENQUEUED: { th: "เข้าคิวแล้ว", en: "Queued" },
+  PROCESSING: { th: "กำลังส่ง", en: "Sending" },
+  RETRYABLE: { th: "รอส่งซ้ำ", en: "Awaiting retry" },
+  SENT: { th: "ส่งสำเร็จ", en: "Sent" },
+  FAILED: { th: "ส่งไม่สำเร็จ", en: "Failed" }
+};
+
+function notificationStateTone(state: string): "success" | "warning" | "danger" | "" {
+  if (state === "SENT") return "success";
+  if (state === "FAILED" || state === "RETRYABLE") return "danger";
+  if (state === "PENDING" || state === "ENQUEUED" || state === "PROCESSING") return "warning";
+  return "";
+}
+
+function formatNotificationState(state: string, locale: Locale): string {
+  return isNotificationState(state) ? notificationStateLabel[state][locale] : state;
+}
+
+function NotificationsPage({ locale, user, filter, onFilterChange, onActionRequiredCountChange }: { locale: Locale; user: User; filter: "ALL" | "ACTION_REQUIRED"; onFilterChange: (filter: "ALL" | "ACTION_REQUIRED") => void; onActionRequiredCountChange: (count: number) => void }) {
   const [items, setItems] = useState<NotificationEvent[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState("");
-  const load = async () => { setLoading(true); setError(""); try { setItems((await api<{ items: NotificationEvent[] }>(user, "/notifications")).items); } catch (caught) { setError(caught instanceof Error ? caught.message : "Notifications unavailable"); } finally { setLoading(false); } };
+  const load = async () => { setLoading(true); setError(""); try { const nextItems = (await api<{ items: NotificationEvent[] }>(user, "/notifications")).items; setItems(nextItems); onActionRequiredCountChange(countNotificationsRequiringAction(nextItems)); } catch (caught) { setError(caught instanceof Error ? caught.message : "Notifications unavailable"); } finally { setLoading(false); } };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { queueMicrotask(() => { void load(); }); }, [user]);
   const retry = async (id: string) => { try { await api(user, `/notifications/${id}:retry`, { method: "POST" }); await load(); } catch (caught) { setError(caught instanceof Error ? caught.message : "Retry failed"); } };
-  return <main className="dashboard-content"><ModuleHeading eyebrow="DELIVERY OPERATIONS" title={locale === "th" ? "การแจ้งเตือน" : "Notifications"} subtitle={locale === "th" ? "ติดตาม LINE delivery และส่งเข้าคิวใหม่เมื่อจำเป็น" : "Monitor LINE delivery and request safe retries"} /><PageState loading={loading} error={error} empty={!items.length} locale={locale} />
-    <section className="module-panel"><div className="record-list notification-list">{items.map((item) => <article key={item.eventId}><div><strong>{item.eventType}</strong><span>{item.publicBookingId ?? item.eventId}</span><small>{locale === "th" ? "พยายามส่ง" : "Attempts"}: {item.attemptCount ?? 0}{item.lastErrorCode ? ` • ${item.lastErrorCode}` : ""}</small></div><div className="row-form"><span className={`state-chip ${item.state === "SENT" ? "success" : item.state === "ENQUEUED" ? "warning" : "danger"}`}>{item.state}</span>{item.state !== "SENT" && <button onClick={() => retry(item.eventId)}>{locale === "th" ? "ส่งเข้าคิวใหม่" : "Retry"}</button>}</div></article>)}</div></section>
+  const actionRequiredCount = countNotificationsRequiringAction(items);
+  const visibleItems = filter === "ACTION_REQUIRED" ? items.filter((item) => notificationRequiresAction(item.state)) : items;
+  return <main className="dashboard-content"><ModuleHeading eyebrow="DELIVERY OPERATIONS" title={locale === "th" ? "การแจ้งเตือน" : "Notifications"} subtitle={locale === "th" ? "ติดตามการส่ง LINE และจัดการเฉพาะรายการที่ต้องตรวจสอบ" : "Monitor LINE delivery and act only on items requiring review"} /><PageState loading={loading} error={error} empty={!items.length} locale={locale} />
+    {!loading && items.length > 0 && <div className="notification-filter" role="group" aria-label={locale === "th" ? "ตัวกรองการแจ้งเตือน" : "Notification filter"}><button type="button" aria-pressed={filter === "ALL"} onClick={() => onFilterChange("ALL")}>{locale === "th" ? "ทั้งหมด" : "All"} <span>{items.length}</span></button><button type="button" aria-pressed={filter === "ACTION_REQUIRED"} onClick={() => onFilterChange("ACTION_REQUIRED")}>{locale === "th" ? "ต้องตรวจสอบ" : "Requires review"} <span>{actionRequiredCount}</span></button></div>}
+    <section className="module-panel"><div className="record-list notification-list">{visibleItems.map((item) => <article key={item.eventId}><div><strong>{item.eventType}</strong><span>{item.publicBookingId ?? item.eventId}</span><small>{locale === "th" ? "พยายามส่ง" : "Attempts"}: {item.attemptCount ?? 0}{item.lastErrorCode ? ` • ${item.lastErrorCode}` : ""}</small></div><div className="row-form"><span className={`state-chip ${notificationStateTone(item.state)}`}>{formatNotificationState(item.state, locale)}</span>{item.state === "FAILED" && <button onClick={() => retry(item.eventId)}>{locale === "th" ? "ส่งเข้าคิวใหม่" : "Retry"}</button>}</div></article>)}</div>{!loading && items.length > 0 && visibleItems.length === 0 && <div className="module-state">{locale === "th" ? "ไม่มีรายการที่ต้องตรวจสอบ" : "No notifications require review"}</div>}</section>
   </main>;
 }

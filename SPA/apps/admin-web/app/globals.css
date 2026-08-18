@@ -26,7 +26,8 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #6ed68a; box-shadow: 0 0 0 3px rgb(110 214 138 / 14%); }
 .sidebar nav { display: grid; gap: 4px; }
 .nav-item { min-height: 44px; padding: 0 12px; display: flex; align-items: center; gap: 12px; border: 0; border-radius: 8px; background: transparent; color: #d8dfd5; text-align: left; cursor: pointer; }
-.nav-item > span { width: 22px; color: #bfc9bb; font-size: 20px; text-align: center; }
+.nav-item > .nav-icon { width: 22px; color: #bfc9bb; font-size: 20px; text-align: center; }
+.nav-badge { min-width: 20px; height: 20px; margin-left: auto; padding: 0 6px; display: grid; place-items: center; border: 1px solid rgb(255 255 255 / 24%); border-radius: 999px; background: #b91c1c; color: white; font-size: 10px; font-weight: 800; line-height: 1; }
 .nav-item.active, .nav-item:hover { background: rgb(255 255 255 / 12%); color: white; }
 .nav-item.active { box-shadow: inset 3px 0 #d6bd89; }
 .sidebar-footer { margin-top: auto; padding: 18px 8px 0; display: flex; align-items: center; gap: 10px; border-top: 1px solid rgb(255 255 255 / 12%); }
@@ -40,7 +41,8 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .drawer-open .admin-brand > div, .drawer-open .branch-chip { display: none; }
 .drawer-open .nav-item { font-size: 0; }
 .drawer-open .nav-item { justify-content: center; padding: 0; }
-.drawer-open .nav-item > span { font-size: 20px; }
+.drawer-open .nav-item > .nav-icon { font-size: 20px; }
+.drawer-open .nav-badge { width: 9px; min-width: 9px; height: 9px; padding: 0; position: absolute; transform: translate(12px, -12px); border-width: 2px; font-size: 0; }
 .drawer-open .sidebar-footer { justify-content: center; padding-inline: 0; }
 .drawer-open .sidebar-footer > div:not(.avatar) { display: none; }
 .topbar { height: 64px; padding: 0 24px; display: flex; align-items: center; gap: 14px; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--line); background: rgb(255 255 255 / 94%); backdrop-filter: blur(12px); }
@@ -55,8 +57,8 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .admin-language { margin-left: auto; display: flex; padding: 2px; border: 1px solid #cfd4cc; border-radius: 999px; }
 .admin-language button { min-width: 42px; min-height: 36px; border: 0; border-radius: 999px; background: transparent; cursor: pointer; color: var(--muted); font-weight: 700; }
 .admin-language button[aria-pressed="true"] { background: var(--forest); color: white; }
-.notification-button { width: 42px; height: 42px; position: relative; border: 1px solid #cfd4cc; border-radius: 10px; background: white; cursor: pointer; font-size: 20px; }
-.notification-button span { min-width: 18px; height: 18px; display: grid; place-items: center; position: absolute; top: -5px; right: -5px; border-radius: 999px; background: #b91c1c; color: white; font-size: 10px; }
+.notification-button { width: 42px; height: 42px; display: grid; place-items: center; position: relative; border: 1px solid #cfd4cc; border-radius: 10px; background: white; color: var(--forest-dark); cursor: pointer; }
+.topbar-notification-badge { min-width: 18px; height: 18px; padding: 0 4px; display: grid; place-items: center; position: absolute; top: -5px; right: -5px; border: 2px solid white; border-radius: 999px; background: #b91c1c; color: white; font-size: 9px; font-weight: 800; line-height: 1; }
 .preview-strip { min-height: 30px; padding: 6px 16px; background: #fff3cc; color: #674600; text-align: center; font-size: 12px; font-weight: 700; }
 .dashboard-content { padding: 28px; }
 .page-heading { display: flex; justify-content: space-between; align-items: end; gap: 24px; }
@@ -144,12 +146,25 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .panel-title h2, .panel-title small { margin: 0; display: block; }
 .panel-title h2 { font-size: 17px; }
 .panel-title small { margin-top: 4px; color: var(--muted); }
-.calendar-row { min-height: 62px; display: grid; grid-template-columns: 86px 1fr; border-top: 1px solid #edf0eb; }
-.calendar-row > time { padding: 16px; color: var(--muted); font-weight: 800; }
-.calendar-row > div { padding: 8px; display: flex; flex-wrap: wrap; gap: 8px; border-left: 1px solid #edf0eb; }
-.calendar-row article { min-width: 220px; padding: 9px 12px; border-left: 4px solid var(--forest); border-radius: 7px; background: #edf3ea; }
-.calendar-row article strong, .calendar-row article span, .calendar-row article small { display: block; }
-.calendar-row article span, .calendar-row article small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.calendar-row { min-height: 68px; display: grid; grid-template-columns: 86px 1fr; border-top: 1px solid #edf0eb; }
+.calendar-row > time { padding: 18px 16px; color: var(--muted); font-weight: 800; }
+.calendar-row > div { min-width: 0; padding: 10px; display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px; border-left: 1px solid #edf0eb; }
+.calendar-booking { width: min(400px, 100%); min-height: 142px; padding: 12px 14px; display: block; border: 1px solid #d6ded2; border-left: 5px solid var(--forest); border-radius: 8px; background: #edf3ea; color: var(--text); text-align: left; cursor: pointer; }
+.calendar-booking:hover { border-color: #9ead98; background: #e7efe3; }
+.calendar-booking.status-pending { border-left-color: #d97706; background: #fff8e5; }
+.calendar-booking.status-pending:hover { background: #fff3cc; }
+.calendar-booking.status-in_service { border-left-color: #2563eb; background: #eef5ff; }
+.calendar-booking.status-completed { border-left-color: #16a34a; background: #eff8f1; }
+.calendar-booking.status-cancelled, .calendar-booking.status-no_show { border-left-color: #dc2626; background: #fff5f5; }
+.calendar-booking-top { margin-bottom: 7px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.calendar-booking-top > time { color: var(--forest-dark); font-size: 14px; font-weight: 900; }
+.calendar-booking > strong { display: block; font-size: 16px; line-height: 1.35; }
+.calendar-service, .calendar-therapist { margin-top: 5px; display: block; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.calendar-therapist { color: var(--forest-dark); font-weight: 700; }
+.calendar-therapist.unassigned { color: #9a5a00; }
+.calendar-booking-footer { margin-top: 9px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.calendar-booking-footer small { min-width: 0; overflow: hidden; color: #7b8278; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.calendar-health-alert { width: max-content; padding: 3px 6px; border-radius: 5px; background: #fee2e2; color: #991b1b; font-size: 10px; font-weight: 800; white-space: nowrap; }
 .calendar-empty { padding: 10px; color: #a6aca4; }
 .module-state { margin: 16px 0; padding: 22px; border: 1px dashed #cfd4cc; border-radius: 9px; color: var(--muted); text-align: center; }
 .module-state.error { border-color: #e5a2a2; background: #fff0f0; color: #991b1b; }
@@ -290,6 +305,11 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .state-chip.success { background: #e3f5e8; color: #166534; }
 .state-chip.warning { background: #fff3cc; color: #754500; }
 .state-chip.danger { background: #feeaea; color: #9f1717; }
+.notification-filter { margin: 0 0 12px; display: flex; gap: 6px; }
+.notification-filter button { min-height: 40px; padding: 0 13px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid #cfd4cc; border-radius: 999px; background: white; color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 800; }
+.notification-filter button[aria-pressed="true"] { border-color: var(--forest); background: #e9eee6; color: var(--forest-dark); }
+.notification-filter button span { min-width: 20px; height: 20px; padding: 0 6px; display: grid; place-items: center; border-radius: 999px; background: #eceff3; color: #394150; font-size: 10px; }
+.notification-filter button[aria-pressed="true"] span { background: var(--forest); color: white; }
 
 @media (max-width: 1279px) {
   .admin-layout { grid-template-columns: 76px minmax(0, 1fr); }
@@ -298,7 +318,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .nav-item:not(.active) > span + *, .nav-item { font-size: 0; }
   .admin-brand { justify-content: center; padding-inline: 0; }
   .nav-item { justify-content: center; padding: 0; }
-  .nav-item > span { font-size: 20px; }
+  .nav-item > .nav-icon { font-size: 20px; }
+  .nav-badge { width: 9px; min-width: 9px; height: 9px; padding: 0; position: absolute; transform: translate(12px, -12px); border-width: 2px; font-size: 0; }
   .sidebar-footer > div:not(.avatar) { display: none; }
   .sidebar-footer { justify-content: center; padding-inline: 0; }
   .detail-drawer { width: 350px; }
@@ -314,6 +335,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .sidebar.open .admin-brand > div { display: block; }
   .sidebar.open .nav-item { font-size: inherit; }
   .sidebar.open .nav-item { justify-content: flex-start; padding: 0 12px; }
+  .sidebar.open .nav-badge { width: auto; min-width: 20px; height: 20px; margin-left: auto; padding: 0 6px; position: static; transform: none; border-width: 1px; font-size: 10px; }
   .menu-button { width: 42px; height: 42px; display: block; border: 1px solid var(--line); border-radius: 8px; background: white; }
   .metric-grid, .queue-summary { grid-template-columns: 1fr; }
   .queue-item { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -336,6 +358,10 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .dashboard-content { padding: 18px 14px; }
   .topbar { padding-inline: 12px; }
   .topbar-context { min-width: 0; flex: 1; }
+  .calendar-row { grid-template-columns: 64px minmax(0, 1fr); }
+  .calendar-row > time { padding-inline: 10px; font-size: 13px; }
+  .calendar-booking { min-height: 150px; }
+  .calendar-booking-top { align-items: flex-start; }
   .service-editor-section { padding: 15px; }
   .service-toolbar-actions, .service-field-grid.two-columns, .service-category-editor { grid-template-columns: 1fr; flex-direction: column; }
   .service-add-button { width: 100%; }

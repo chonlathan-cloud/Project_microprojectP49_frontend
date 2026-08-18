@@ -15,6 +15,11 @@ class NotificationParticipantView(BaseModel):
     duration_minutes: int = Field(gt=0)
 
 
+class AdminNotificationParticipantView(NotificationParticipantView):
+    has_health_information: bool
+    health_details: str | None = Field(default=None, max_length=1000)
+
+
 class NotificationBookingView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -33,6 +38,7 @@ class NotificationBookingView(BaseModel):
 
 
 class AdminNotificationBookingView(NotificationBookingView):
+    participants: list[AdminNotificationParticipantView] = Field(min_length=1, max_length=2)
     health_alert: bool
 
 
@@ -94,6 +100,51 @@ def _service_lines(view: NotificationBookingView, *, size: str = "sm") -> list[d
         }
         for participant in view.participants
     ]
+
+
+def _admin_health_contents(view: AdminNotificationBookingView) -> list[dict[str, object]]:
+    contents: list[dict[str, object]] = [
+        {
+            "type": "text",
+            "text": "🩺 ข้อมูลสุขภาพสำหรับเตรียมบริการ",
+            "size": "sm",
+            "color": "#991B1B",
+            "weight": "bold",
+            "wrap": True,
+        }
+    ]
+    disclosed = False
+    for participant in view.participants:
+        if not participant.has_health_information:
+            continue
+        disclosed = True
+        details = (participant.health_details or "").strip()
+        contents.append(
+            {
+                "type": "text",
+                "text": (
+                    f"• {participant.nickname}: {details}"
+                    if details
+                    else f"• {participant.nickname}: แจ้งข้อมูลสุขภาพ แต่ไม่ได้ระบุรายละเอียด"
+                ),
+                "size": "xs",
+                "color": "#7F1D1D",
+                "margin": "sm",
+                "wrap": True,
+            }
+        )
+    if not disclosed:
+        contents.append(
+            {
+                "type": "text",
+                "text": "มีข้อมูลสุขภาพที่ต้องตรวจสอบ แต่ไม่พบรายละเอียด",
+                "size": "xs",
+                "color": "#7F1D1D",
+                "margin": "sm",
+                "wrap": True,
+            }
+        )
+    return contents
 
 
 def render_admin_new_booking(view: AdminNotificationBookingView) -> dict[str, object]:
@@ -189,23 +240,7 @@ def render_admin_new_booking(view: AdminNotificationBookingView) -> dict[str, ob
                 "paddingAll": "md",
                 "backgroundColor": "#FEF2F2",
                 "cornerRadius": "md",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": "🚨 มีข้อมูลสุขภาพที่ต้องตรวจสอบ",
-                        "size": "xs",
-                        "color": "#DC2626",
-                        "weight": "bold",
-                    },
-                    {
-                        "type": "text",
-                        "text": "กรุณาเปิดรายละเอียดในระบบ Admin",
-                        "size": "xs",
-                        "color": "#991B1B",
-                        "margin": "xs",
-                        "wrap": True,
-                    },
-                ],
+                "contents": _admin_health_contents(view),
             }
         )
     return {

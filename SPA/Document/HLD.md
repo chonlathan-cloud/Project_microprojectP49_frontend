@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | High-Level Design (HLD) |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Approved architecture baseline |
-| Last updated | 14 August 2026 |
+| Last updated | 18 August 2026 |
 | Initial branch scope | One branch |
 | Timezone / currency | Asia/Bangkok / THB |
-| Business baseline | [Business Logic v1.2](./BusinessLogic.md) |
+| Business baseline | [Business Logic v1.3](./BusinessLogic.md) |
 
 ## 1. Purpose
 
@@ -44,7 +44,7 @@ This HLD intentionally does not define exact API payloads, Firestore document sc
 - Customer LINE acknowledgements and status messages when LINE is linked
 - Secure status tracking for Website Guests
 - Pay-at-store workflow with no online payment
-- Health-data masking in LINE and customer status views
+- Health-detail delivery to the access-controlled registered Admin LINE Group, while retaining masking in Customer LINE and customer status views
 - Persistent customer health profiles with immutable visit-time snapshots and versioned consent evidence
 - Audit trails, operational monitoring, backup, and recovery
 
@@ -71,7 +71,7 @@ This HLD intentionally does not define exact API payloads, Firestore document sc
 | HLD-005 | Use a Firestore Native-mode named database `spa-db` as the Phase 1 operational database. Keep the existing Receipt `(default)` database separate and do not add BigQuery in Phase 1. |
 | HLD-006 | Support two customer access modes: verified LINE-linked access and anonymous Website Guest access. |
 | HLD-007 | Use Firebase Authentication for invite-only Admin Web identities and enforce exactly two application roles: `ADMIN` and `STAFF`. |
-| HLD-008 | Treat LINE Admin Group approval as a separate authorization boundary from Admin Web RBAC. |
+| HLD-008 | Treat the registered Admin LINE Group as a separate authorization boundary from Admin Web RBAC. Membership is restricted operationally to authorized Admin/Staff bound by confidentiality obligations; the group may receive participant health details and confirm Bookings but grants no Admin Web access. |
 | HLD-009 | Use a Customer LINE OA and a separate Admin LINE OA. Production values are held in Secret Manager; pre-production tests use separate test channels/groups even though they are hosted in the same GCP project. |
 | HLD-010 | Use a Firestore transaction for Booking creation, Booking changes that affect capacity, and confirmation state transitions. |
 | HLD-011 | Use a transactional outbox plus Cloud Tasks and a private Notification Worker for LINE delivery and retry. |
@@ -122,7 +122,7 @@ flowchart LR
 | LINE-linked Customer | Uses LIFF/LINE Login or links LINE after booking and can receive Customer LINE OA messages. |
 | `ADMIN` | Has all operational rights plus user, role, security, and system configuration rights. |
 | `STAFF` | Manages bookings, customers, capacity, services, therapists, assignments, and branch operations, but not users, roles, or security configuration. |
-| LINE Admin Group Approver | Any identifiable member of an active registered group can confirm a `PENDING` Booking from the group. An Admin Web account is not required. |
+| LINE Admin Group Approver | An authorized Admin/Staff operator in the active registered group can receive Booking and participant health details for service preparation and confirm a `PENDING` Booking. An Admin Web account is not required; employment confidentiality and group offboarding controls are mandatory. |
 | LINE Platform | Provides LIFF/LINE Login, Messaging API delivery, group events, and webhook delivery. |
 | Google Cloud | Hosts runtime, database, identity, task queue, secrets, observability, and protection services. |
 
@@ -327,13 +327,14 @@ SPA roles may use the same names as the Receipt product, but identities and perm
 | --- | :---: | :---: | :---: |
 | View and operate Bookings | Yes | Yes | No |
 | View customer and health details in Admin Web | Yes | Yes | No |
+| Receive current Booking and participant health details in registered Admin Group | If a current authorized group member | If a current authorized group member | Yes |
 | Confirm or cancel in Admin Web | Yes | Yes | No |
 | Manage capacity, services, therapists, assignments, and branch operations | Yes | Yes | No |
 | Manage users and roles | Yes | No | No |
 | Manage security and integration configuration | Yes | No | No |
 | Confirm a `PENDING` Booking from a registered LINE Group | If an identifiable group member | If an identifiable group member | Yes |
 
-Group approval does not grant access to Admin Web or health details.
+Registered Admin Group membership grants access only to the Booking summary and participant health details delivered into that group. It does not grant Admin Web access, historical health-profile access, configuration rights, or access to any other Booking outside delivered messages.
 
 ### 9.5 LINE Admin Group Authorization
 
@@ -461,9 +462,9 @@ Test and production channels, secrets, OAs, LIFF endpoints, and Group IDs must r
 
 ### 13.2 Admin Group Booking Summary
 
-After Booking commit, the Notification Worker sends a Flex summary containing Booking ID, `PENDING` state, nickname, phone, appointment, service/duration per participant, pax, health-alert indicator, call action, and confirmation message action.
+After Booking commit, the Notification Worker sends a Flex summary containing Booking ID, `PENDING` state, nickname, phone, appointment, service/duration per participant, pax, participant health details supplied by the customer, call action, and confirmation message action.
 
-The summary must never contain a diagnosis, condition, allergy, or other health detail. The allowed health content is only an indicator directing authorized staff to Admin Web.
+Health detail is rendered only for the registered Admin Group destination loaded from protected configuration. The Worker reads the restricted health snapshot at render time; the outbox event and Cloud Task contain references only. Customer messages, other groups, operational alerts, URLs, logs, metrics, and audit summaries must not contain the detail.
 
 ### 13.3 Customer Messages
 
@@ -540,7 +541,7 @@ Firestore is the system of record for Phase 1 operational data. Clients access i
 - Booking and participant service names, durations, and prices are snapshots; later catalog edits do not rewrite history.
 - `PER_BOOKING` Couple Package is charged once while capacity and participant safety data are represented for both participants.
 - Current Health Profile is stored separately from Booking Health Snapshots. Profile edits never rewrite historical snapshots.
-- Health detail is stored separately from customer-safe summaries and is not copied into notification payloads.
+- Health detail is stored separately from customer-safe summaries. The Admin Group Worker joins it only at render time and does not copy it into outbox or task payloads.
 - Verified LINE User ID may link a profile automatically; phone-only Guest records require staff verification before profile merge.
 - Public Booking numbers are not Firestore document IDs and do not grant access.
 - Secure-link tokens, LINE channel secrets, and Firebase credentials are never stored in a client-readable document.
@@ -567,11 +568,11 @@ Firestore is the system of record for Phase 1 operational data. Clients access i
 
 - A health declaration is required for each participant; selecting “none” is a valid response.
 - Booking/privacy acknowledgement and explicit health consent are separate, versioned, unchecked-by-default controls recorded per participant.
-- Health details are available only to authorized `ADMIN` and `STAFF` users in Admin Web.
-- LINE groups see only a health-alert indicator.
+- Health details are available to authorized `ADMIN` and `STAFF` users in Admin Web and to authorized operators in the registered Admin LINE Group.
+- The registered Admin LINE Group receives participant health details for service preparation. Group membership is an operational access-control list and leavers must be removed immediately.
 - Customer LINE messages and Guest status views do not expose health details.
 - Logs, URLs, metrics labels, error traces, and task names must not contain health details.
-- Read and update access to health detail is audited.
+- Admin Web reads/updates and Admin Group disclosures are audited without copying health detail into audit records.
 - `ADMIN` and `STAFF` may update the current Health Profile; each Booking preserves an immutable visit-time Health Snapshot.
 - The proposed retention policy is three years after the customer's most recent `COMPLETED` visit or, if none exists, the latest authorized health collection/update. The anchor is renewed by a later completed visit or authorized update, followed by deletion or anonymization. It remains a production release gate pending Product Owner approval and privacy-notice review.
 - Consent withdrawal, access restriction, deletion/anonymization, and legal-hold exceptions are explicit audited workflows rather than direct silent deletion.
@@ -690,7 +691,7 @@ The baseline is RPO 24 hours and RTO 4 hours. A future requirement for lower RPO
 | `BL-CAP-001`–`BL-CAP-003` | Firestore resource-time transactions, complete-duration validation, block handling |
 | `BL-ADM-001`–`BL-ADM-003` | Registered group verification, identifiable approver, atomic confirmation, audit |
 | `BL-ADM-004`–`BL-ADM-005` | Two Admin Web roles and separate LINE Group authorization boundary |
-| `BL-LINE-001` | Masked Admin Group Flex produced asynchronously |
+| `BL-LINE-001` | Registered Admin Group Flex joins participant health snapshots at render time while customer/task/log projections remain masked |
 | `BL-LINE-002`–`BL-LINE-003` | Conditional Customer LINE acknowledgement and confirmation Flex |
 | `BL-LINE-004` | Transactional outbox and notification failures that do not roll back state |
 | `BL-LINE-005` | Optional post-booking LINE account linking |

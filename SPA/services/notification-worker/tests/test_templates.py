@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.templates.booking import (
     AdminNotificationBookingView,
+    AdminNotificationParticipantView,
     NotificationBookingView,
     NotificationParticipantView,
     flex_message,
@@ -37,6 +38,20 @@ def base_values() -> dict[str, object]:
     }
 
 
+def admin_values(*, health_details: str | None = None) -> dict[str, object]:
+    values = base_values()
+    values["participants"] = [
+        AdminNotificationParticipantView(
+            nickname="Som",
+            service_name="Aroma Therapy",
+            duration_minutes=60,
+            has_health_information=health_details is not None,
+            health_details=health_details,
+        )
+    ]
+    return values
+
+
 def test_customer_projection_rejects_health_fields() -> None:
     with pytest.raises(ValidationError):
         NotificationBookingView(**base_values(), health_alert=True)
@@ -51,18 +66,57 @@ def test_customer_template_contains_no_health_key() -> None:
     assert "allergy" not in serialized
 
 
-def test_admin_template_has_indicator_but_not_detail() -> None:
+def test_admin_template_displays_health_detail_for_registered_group() -> None:
     payload = render_admin_new_booking(
-        AdminNotificationBookingView(**base_values(), health_alert=True)
+        AdminNotificationBookingView(
+            **admin_values(health_details="แพ้น้ำมันลาเวนเดอร์"), health_alert=True
+        )
     )
     serialized = json.dumps(payload, ensure_ascii=False).lower()
-    assert "กรุณาเปิดรายละเอียดในระบบ admin" in serialized
-    assert "allergy" not in serialized
+    assert "ข้อมูลสุขภาพสำหรับเตรียมบริการ" in serialized
+    assert "som: แพ้น้ำมันลาเวนเดอร์" in serialized
+    assert "เปิดรายละเอียดในระบบ admin" not in serialized
+
+
+def test_admin_template_marks_missing_declared_detail() -> None:
+    values = admin_values()
+    values["participants"] = [
+        AdminNotificationParticipantView(
+            nickname="Som",
+            service_name="Aroma Therapy",
+            duration_minutes=60,
+            has_health_information=True,
+            health_details=None,
+        )
+    ]
+    payload = render_admin_new_booking(
+        AdminNotificationBookingView(**values, health_alert=True)
+    )
+    assert "ไม่ได้ระบุรายละเอียด" in json.dumps(payload, ensure_ascii=False)
+
+
+def test_admin_template_stays_within_flex_payload_budget_at_input_limits() -> None:
+    values = admin_values()
+    values["pax"] = 2
+    values["participants"] = [
+        AdminNotificationParticipantView(
+            nickname=f"Guest {index}",
+            service_name="Aroma Therapy",
+            duration_minutes=120,
+            has_health_information=True,
+            health_details="x" * 1000,
+        )
+        for index in (1, 2)
+    ]
+    payload = render_admin_new_booking(
+        AdminNotificationBookingView(**values, health_alert=True)
+    )
+    assert len(json.dumps(payload, ensure_ascii=False).encode()) < 30_000
 
 
 def test_admin_flex_uses_line_message_action() -> None:
     bubble = render_admin_new_booking(
-        AdminNotificationBookingView(**base_values(), health_alert=False)
+        AdminNotificationBookingView(**admin_values(), health_alert=False)
     )
     confirm = bubble["footer"]["contents"][1]
     assert confirm["action"] == {
@@ -106,7 +160,10 @@ def test_customer_flex_replaces_unsafe_map_uri() -> None:
 def test_pending_and_admin_confirmed_templates_are_privacy_safe() -> None:
     customer = render_customer_pending(NotificationBookingView(**base_values()))
     admin = render_admin_booking_confirmed(
-        AdminNotificationBookingView(**{**base_values(), "status": "CONFIRMED"}, health_alert=True)
+        AdminNotificationBookingView(
+            **{**admin_values(health_details="allergy"), "status": "CONFIRMED"},
+            health_alert=True,
+        )
     )
     serialized = json.dumps([customer, admin], ensure_ascii=False).lower()
     assert "health_details" not in serialized

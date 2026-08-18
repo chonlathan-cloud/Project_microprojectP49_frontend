@@ -4,9 +4,9 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Business Logic |
-| Version | 1.2 |
+| Version | 1.3 |
 | Status | Approved business baseline |
-| Last updated | 14 สิงหาคม 2026 |
+| Last updated | 18 สิงหาคม 2026 |
 | Initial branch scope | 1 สาขา |
 | Timezone / Currency | Asia/Bangkok / THB |
 
@@ -47,7 +47,7 @@ Google Stitch ที่อนุญาตให้ใช้อ้างอิง
 - ป้องกันการจองเกิน Capacity ของห้อง/เตียง
 - ให้ผู้ใช้ `ADMIN`/`STAFF` หรือสมาชิกใน LINE Admin Group ตรวจสอบและยืนยันคำขอได้รวดเร็ว
 - ให้ร้านเป็นผู้จัดสรรหมอนวด โดยลูกค้าไม่ต้องเลือกหมอนวด
-- ปกป้องข้อมูลสุขภาพและไม่เปิดเผยรายละเอียดใน LINE Group
+- ส่งรายละเอียดสุขภาพที่ลูกค้าแจ้งให้ Registered Admin LINE Group เพื่อเตรียมบริการ โดยจำกัดสมาชิกกลุ่มเฉพาะผู้ปฏิบัติงานที่มีหน้าที่และข้อผูกพันด้านการรักษาความลับ
 - วางโครงสร้างให้รองรับหลายสาขาในอนาคต โดย Phase 1 เปิดใช้งานเพียงหนึ่งสาขา
 
 ## 4. Actors และขอบเขตสิทธิ์
@@ -56,13 +56,13 @@ Google Stitch ที่อนุญาตให้ใช้อ้างอิง
 | --- | --- |
 | Website Guest Customer | จองผ่าน Public Website โดยใช้ชื่อเล่นและเบอร์โทรศัพท์ และติดตามสถานะผ่าน Booking ID กับ Secure Status Link |
 | LINE-linked Customer | จองผ่าน LIFF/LINE Login หรือเชื่อม LINE ภายหลัง เพื่อรับการแจ้งเตือนผ่าน Customer LINE OA |
-| LINE Admin Group Approver | สมาชิกทุกคนใน LINE Group ที่ร้านลงทะเบียนไว้ สามารถกดยืนยัน Booking ที่เป็น `PENDING` ได้ |
+| LINE Admin Group Approver | ผู้ปฏิบัติงาน Admin/Staff ทุกคนใน LINE Group ที่ร้านลงทะเบียนไว้ สามารถดูสรุปการจองและรายละเอียดสุขภาพเพื่อเตรียมบริการ และยืนยัน Booking ที่เป็น `PENDING` ได้ โดยอยู่ภายใต้ข้อผูกพันด้านการรักษาความลับตามสัญญางาน |
 | `ADMIN` | ใช้งาน Admin Web ได้ทั้งหมด รวมการจัดการผู้ใช้ บทบาท Security Configuration และการตั้งค่าระบบ |
 | `STAFF` | จัดการ Booking, Customer Detail, Capacity, Slot, Service, ราคา, Therapist, Branch และการมอบหมายหมอนวด แต่ไม่มีสิทธิ์จัดการผู้ใช้ บทบาท หรือ Security Configuration |
 | Therapist | ให้บริการตาม Booking ที่ได้รับมอบหมาย ไม่มีสิทธิ์เปลี่ยนกฎการจองใน Phase 1 |
 | System | ตรวจ Availability, กัน Capacity, จัดการสถานะ, ส่ง Notification และเก็บ Audit Trail |
 
-สิทธิ์ `ADMIN`/`STAFF` ของ Admin Web และสิทธิ์ LINE Admin Group Approval เป็นคนละขอบเขตกัน การเป็นสมาชิก LINE Admin Group ให้สิทธิ์เฉพาะการยืนยัน Booking ผ่านกลุ่ม ไม่ได้ทำให้ได้รับสิทธิ์ Admin Web โดยอัตโนมัติ และผู้ใช้ `ADMIN`/`STAFF` ที่เข้าสู่ระบบ Admin Web สามารถยืนยัน Booking ใน Admin Web ได้
+สิทธิ์ `ADMIN`/`STAFF` ของ Admin Web และสิทธิ์ LINE Admin Group เป็นคนละขอบเขตกัน การเป็นสมาชิก Registered Admin LINE Group ให้สิทธิ์รับสรุป Booking รวมรายละเอียดสุขภาพและยืนยัน Booking ผ่านกลุ่ม แต่ไม่ได้ให้สิทธิ์ Admin Web โดยอัตโนมัติ การเพิ่ม/ถอดสมาชิกกลุ่มเป็นกระบวนการควบคุมสิทธิ์ของร้าน และต้องถอดผู้พ้นหน้าที่ออกทันที
 
 คำว่า “Admin” ที่ใช้ในกฎทั่วไปของเอกสารนี้หมายถึงผู้ใช้ Admin Web ที่ได้รับสิทธิ์ต่อการกระทำนั้น ซึ่งอาจเป็น `ADMIN` หรือ `STAFF`; เมื่อกฎต้องเป็น `ADMIN` เท่านั้นจะระบุ Role อย่างชัดเจน
 
@@ -309,6 +309,8 @@ PENDING ───────→ CONFIRMED ───────→ IN_SERVICE �
 - Admin LINE OA ต้องถูกเชิญเข้า Group ที่ร้านลงทะเบียนไว้
 - ใน Admin Group ให้มีเฉพาะ Admin LINE OA; Customer LINE OA ไม่ถูกเชิญเข้ากลุ่มดังกล่าว
 - ระบบรับเฉพาะ Approval Event จาก Group ID ที่ลงทะเบียนและเปิดใช้งาน
+- สมาชิกทุกคนใน Group ต้องเป็นผู้ปฏิบัติงานที่ร้านอนุญาตและมีข้อผูกพันด้านการรักษาความลับ
+- ผู้ดูแลร้านต้องทบทวนสมาชิกกลุ่มเป็นระยะและถอดผู้พ้นหน้าที่ออกทันที
 - สมาชิกทุกคนใน Group ที่ระบุตัวตนได้มีสิทธิ์ Confirm Booking
 
 ### 13.2 New Booking Flex Summary
@@ -321,13 +323,11 @@ Flex Summary ที่ส่งเข้ากลุ่มต้องมีอ�
 - วันและเวลา
 - Service และ Duration ของผู้รับบริการแต่ละคน
 - จำนวนลูกค้า
-- ข้อความแจ้งว่ามีข้อมูลสุขภาพที่ต้องตรวจสอบหรือไม่
+- รายละเอียด Health Declaration ที่ลูกค้าแจ้ง แยกตามผู้รับบริการ
 - ปุ่มโทรหาลูกค้า
 - ปุ่มยืนยัน Booking
 
-ห้ามแสดงโรคประจำตัว อาการแพ้ หรือรายละเอียดสุขภาพจริงใน LINE Group ข้อความที่อนุญาตคือ:
-
-> ⚠️ มีข้อมูลสุขภาพที่ต้องตรวจสอบ — กรุณาเปิดรายละเอียดในระบบ Admin
+เมื่อผู้รับบริการแจ้งข้อมูลสุขภาพ Flex Summary ต้องแสดงชื่อเล่นและข้อความที่ลูกค้ากรอก เพื่อให้ Admin/Staff เตรียมบริการได้โดยไม่ต้องเปิด Admin Web ข้อมูลนี้ส่งได้เฉพาะ Registered Admin LINE Group เท่านั้น ห้ามส่งไป Customer Group, Group อื่น, log, URL, task payload หรือ operational alert และระบบต้อง Audit การเปิดเผยโดยไม่คัดลอกรายละเอียดสุขภาพลง Audit
 
 ### 13.3 Approval Action
 
@@ -417,9 +417,9 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 
 - ก่อนส่ง Booking ลูกค้าต้องรับทราบวัตถุประสงค์การเก็บและใช้ข้อมูล
 - เก็บเฉพาะข้อมูลสุขภาพที่จำเป็นต่อความปลอดภัยในการให้บริการ
-- รายละเอียดสุขภาพดูได้เฉพาะผู้มีสิทธิ์ใน Admin System
-- LINE Admin Group เห็นเพียง Health Alert Indicator ไม่เห็นรายละเอียด
-- ห้ามใส่รายละเอียดสุขภาพใน Customer Flex, Group Flex, log ทั่วไป หรือ URL
+- รายละเอียดสุขภาพดูได้โดยผู้มีสิทธิ์ใน Admin System และสมาชิก Registered Admin LINE Group ที่ร้านควบคุมสมาชิกตามหน้าที่งาน
+- Admin Booking Flex แสดงรายละเอียดที่ลูกค้าแจ้งแยกตามผู้รับบริการ เพื่อเตรียมบริการและยืนยัน Booking ให้จบใน LINE
+- ห้ามใส่รายละเอียดสุขภาพใน Customer Flex, LINE Group อื่น, log ทั่วไป, operational alert, task payload หรือ URL
 - Secure Status Page ต้องไม่แสดงรายละเอียดสุขภาพ และต้องเข้าถึงด้วย Token ที่คาดเดาไม่ได้
 - การเปิดดูและแก้ไขข้อมูลสุขภาพต้องมี Audit Trail ตามระดับที่กำหนดใน HLD/TDD
 - ระบบสร้าง Customer Profile เพื่อใช้ข้อมูลติดต่อและ Health Profile ที่เป็นปัจจุบันซ้ำในครั้งถัดไป โดย `ADMIN` และ `STAFF` แก้ไขได้
@@ -440,7 +440,7 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 
 **B. Explicit Health Data Consent — required per participant when health data is collected or retained**
 
-> ฉันยินยอมโดยชัดแจ้งให้ SPA 49 เก็บรวบรวม ใช้ และปรับปรุงข้อมูลสุขภาพ อาการ โรคประจำตัว และการแพ้ที่ฉันแจ้ง เพื่อประเมินความเหมาะสมและความปลอดภัยในการให้บริการนวด/สปา จัดเตรียมบริการ และเก็บเป็นประวัติลูกค้าสำหรับการรับบริการครั้งถัดไป โดยจำกัดการเข้าถึงเฉพาะพนักงานและผู้ดูแลระบบที่ได้รับอนุญาต ทั้งนี้ ฉันสามารถถอนความยินยอมหรือขอใช้สิทธิตามนโยบายความเป็นส่วนตัวได้
+> ฉันยินยอมโดยชัดแจ้งให้ SPA 49 เก็บรวบรวม ใช้ และปรับปรุงข้อมูลสุขภาพ อาการ โรคประจำตัว และการแพ้ที่ฉันแจ้ง เพื่อประเมินความเหมาะสมและความปลอดภัยในการให้บริการนวด/สปา จัดเตรียมบริการ และเก็บเป็นประวัติลูกค้าสำหรับการรับบริการครั้งถัดไป รวมถึงส่งรายละเอียดดังกล่าวไปยัง Registered Admin LINE Group ซึ่งจำกัดสมาชิกเฉพาะผู้ปฏิบัติงานที่ได้รับอนุญาตและมีหน้าที่รักษาความลับ ทั้งนี้ ฉันสามารถถอนความยินยอมหรือขอใช้สิทธิตามนโยบายความเป็นส่วนตัวได้
 
 เมื่อผู้ติดต่อหลักกรอกข้อมูลให้ผู้รับบริการคนที่สอง ต้องมี checkbox เพิ่มเติม:
 
@@ -510,7 +510,7 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 | BL-ADM-003 | ระบบบันทึก Approver และ Audit Trail ของการ Confirm |
 | BL-ADM-004 | Admin Web มี App Role เพียง `ADMIN` และ `STAFF`; ทั้งสอง Role ทำงาน Operational ได้ แต่เฉพาะ `ADMIN` จัดการผู้ใช้ Role และ Security Configuration ได้ |
 | BL-ADM-005 | สิทธิ์ LINE Group Approval แยกจาก Admin Web Role และไม่ให้สิทธิ์ Admin Web โดยอัตโนมัติ |
-| BL-LINE-001 | Admin Group ได้รับ New Booking Flex โดยไม่มีรายละเอียดสุขภาพ |
+| BL-LINE-001 | Registered Admin LINE Group ได้รับ New Booking Flex พร้อมรายละเอียดสุขภาพที่ลูกค้าแจ้งแยกตามผู้รับบริการ โดย Customer Flex, Group อื่น, task, URL และ log ต้องไม่มีรายละเอียดดังกล่าว |
 | BL-LINE-002 | LINE-linked Customer ได้รับข้อความ `PENDING` หลังส่งคำขอสำเร็จ |
 | BL-LINE-003 | LINE-linked Customer ได้รับ Confirmation Flex หลัง Booking เป็น `CONFIRMED` |
 | BL-LINE-004 | Notification Failure ไม่ Rollback สถานะ Booking และต้องแจ้ง Admin |
@@ -519,7 +519,7 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 | BL-OPS-001 | Booking Confirm ได้ก่อนมอบหมายหมอนวด แต่เริ่มบริการไม่ได้จนกว่าจะมอบหมายครบ |
 | BL-OPS-002 | ลูกค้าเปลี่ยนหรือยกเลิกด้วยตนเองไม่ได้ใน Phase 1 และต้องติดต่อร้าน |
 | BL-PAY-001 | ไม่มี Online Payment และลูกค้าชำระที่ร้าน |
-| BL-PRI-001 | รายละเอียดสุขภาพเปิดดูได้เฉพาะใน Admin System ที่มีสิทธิ์ |
+| BL-PRI-001 | รายละเอียดสุขภาพเปิดดูได้เฉพาะใน Admin System ที่มีสิทธิ์และ Registered Admin LINE Group ที่ควบคุมสมาชิกตามหน้าที่งาน พร้อม Audit การเปิดเผยโดยไม่บันทึกรายละเอียดซ้ำ |
 | BL-PRI-002 | Health Profile ใช้ข้าม Visit ได้ แต่ทุก Booking ต้องมี Health Snapshot และการแก้ไข/merge ต้อง Audit |
 | BL-PRI-003 | Booking acknowledgement และ Explicit Health Consent ต้องแยก checkbox, ไม่ pre-check และเก็บหลักฐานแบบ versioned ต่อ Participant |
 | BL-CAT-001 | Initial catalog ต้องมี 11 Service ตามหัวข้อ 7.1 รวม Couple Package แบบ `PER_BOOKING` สำหรับ 2 คนและ Hot Compress แบบจองเดี่ยว |

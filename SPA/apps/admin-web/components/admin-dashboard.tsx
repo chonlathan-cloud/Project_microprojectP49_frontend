@@ -1,11 +1,12 @@
 "use client";
 
-import type { BookingStatus, Locale, PreviewBooking } from "@spa/shared-types";
+import { INITIAL_SERVICE_CATALOG, type BookingStatus, type Locale, type PreviewBooking } from "@spa/shared-types";
 import type { User } from "firebase/auth";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminModulePage, type AdminView } from "@/components/admin-module-pages";
 import { adminApi } from "@/lib/admin-api";
+import { countNotificationsRequiringAction } from "@/lib/notification-state";
 
 const statusLabel: Record<BookingStatus, { th: string; en: string }> = {
   PENDING: { th: "รอยืนยัน", en: "Pending" },
@@ -44,6 +45,14 @@ function formatDate(value: string, locale: Locale) {
   }).format(new Date(value));
 }
 
+function formatServiceName(booking: PreviewBooking, locale: Locale) {
+  const localizedSnapshot = locale === "th" ? booking.serviceNameTh : booking.serviceNameEn;
+  if (localizedSnapshot) return localizedSnapshot;
+  const service = INITIAL_SERVICE_CATALOG.find((item) => booking.serviceName.includes(item.nameEn) || booking.serviceName.includes(item.nameTh));
+  if (!service) return booking.serviceName;
+  return locale === "th" ? service.nameTh : service.nameEn;
+}
+
 export function AdminDashboard({ user }: { user: User }) {
   const [activeView, setActiveView] = useState<"bookings" | AdminView>("bookings");
   const [locale, setLocale] = useState<Locale>("th");
@@ -60,6 +69,7 @@ export function AdminDashboard({ user }: { user: User }) {
   const [currentTime, setCurrentTime] = useState(0);
   const [bookingRefresh, setBookingRefresh] = useState(0);
   const [notificationFailures, setNotificationFailures] = useState(0);
+  const [notificationFilter, setNotificationFilter] = useState<"ALL" | "ACTION_REQUIRED">("ALL");
   const detailDrawerRef = useRef<HTMLElement>(null);
   const closeDrawerButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -120,18 +130,30 @@ export function AdminDashboard({ user }: { user: User }) {
 
   useEffect(() => {
     let active = true;
-    adminApi<{ items?: Array<{ state?: string }> }>(user, "/notifications")
-      .then((payload) => {
-        if (active) setNotificationFailures((payload.items ?? []).filter((item) => item.state !== "SENT").length);
-      })
-      .catch(() => {
-        if (active) setNotificationFailures(0);
-      });
-    return () => { active = false; };
+    const loadNotificationCount = () => {
+      adminApi<{ items?: Array<{ state?: string }> }>(user, "/notifications")
+        .then((payload) => {
+          if (active) setNotificationFailures(countNotificationsRequiringAction(payload.items ?? []));
+        })
+        .catch(() => {
+          // Keep the last known count when a refresh fails instead of hiding an existing alert.
+        });
+    };
+    loadNotificationCount();
+    const timer = window.setInterval(loadNotificationCount, 30_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") loadNotificationCount();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [user, bookingRefresh]);
 
   useEffect(() => {
-    if (!selectedId || activeView !== "bookings") return;
+    if (!selectedId || !["bookings", "calendar"].includes(activeView)) return;
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeDrawerButtonRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -242,7 +264,7 @@ export function AdminDashboard({ user }: { user: User }) {
     branch: "SPA 49 • สาขาหลัก",
     pending: "รอยืนยัน",
     unassigned: "ยังไม่มอบหมายหมอนวด",
-    notification: "การส่งแจ้งเตือนล้มเหลว",
+    notification: "การแจ้งเตือนที่ต้องตรวจสอบ",
     preview: connection === "checking" || bookingState === "loading"
       ? "กำลังตรวจสอบการเชื่อมต่อ SPA API และ Firestore..."
       : connection === "connected" && bookingState === "ready"
@@ -267,7 +289,7 @@ export function AdminDashboard({ user }: { user: User }) {
     branch: "SPA 49 • Main branch",
     pending: "Pending review",
     unassigned: "Therapist unassigned",
-    notification: "Notification failures",
+    notification: "Notifications requiring review",
     preview: connection === "checking" || bookingState === "loading"
       ? "Checking SPA API and Firestore connection..."
       : connection === "connected" && bookingState === "ready"
@@ -288,12 +310,19 @@ export function AdminDashboard({ user }: { user: User }) {
   };
 
   return (
-    <div className={selected && activeView === "bookings" ? "admin-layout drawer-open" : "admin-layout"}>
+    <div className={selected && ["bookings", "calendar"].includes(activeView) ? "admin-layout drawer-open" : "admin-layout"}>
       <aside className={sidebarOpen ? "sidebar open" : "sidebar"}>
         <div className="admin-brand"><div><strong>SPA 49</strong><small>BRANCH OPERATIONS</small></div></div>
         <div className="branch-chip"><span className="live-dot" />{text.branch}</div>
         <nav aria-label="Main navigation">
-          {navItems.map(([id, icon, th, en]) => <button className={activeView === id ? "nav-item active" : "nav-item"} aria-current={activeView === id ? "page" : undefined} title={locale === "th" ? th : en} onClick={() => { setActiveView(id); setSelectedId(""); setQuery(""); setSidebarOpen(false); }} key={id}><span aria-hidden="true">{icon}</span>{locale === "th" ? th : en}</button>)}
+          {navItems.map(([id, icon, th, en]) => {
+            const label = locale === "th" ? th : en;
+            const isNotifications = id === "notifications";
+            const ariaLabel = isNotifications && notificationFailures > 0
+              ? `${label}: ${notificationFailures} ${locale === "th" ? "รายการต้องตรวจสอบ" : "items require review"}`
+              : label;
+            return <button className={activeView === id ? "nav-item active" : "nav-item"} aria-current={activeView === id ? "page" : undefined} aria-label={ariaLabel} title={ariaLabel} onClick={() => { setActiveView(id); if (isNotifications) setNotificationFilter("ALL"); setSelectedId(""); setQuery(""); setSidebarOpen(false); }} key={id}><span className="nav-icon" aria-hidden="true">{icon}</span>{label}{isNotifications && notificationFailures > 0 && <span className="nav-badge" aria-hidden="true">{notificationFailures > 99 ? "99+" : notificationFailures}</span>}</button>;
+          })}
         </nav>
         <div className="sidebar-footer">
           <div className="avatar">พ</div><div><strong>คุณภา</strong><small>ADMIN</small></div>
@@ -305,7 +334,10 @@ export function AdminDashboard({ user }: { user: User }) {
           <button className="menu-button" aria-label="Toggle navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((value) => !value)}>☰</button>
           {activeView === "bookings" ? <label className="global-search"><span aria-hidden="true">⌕</span><input aria-label={text.search} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={text.search} /></label> : <div className="topbar-context"><span>{locale === "th" ? "พื้นที่ทำงาน" : "Workspace"}</span><strong>{locale === "th" ? navItems.find(([id]) => id === activeView)?.[2] : navItems.find(([id]) => id === activeView)?.[3]}</strong></div>}
           <div className="admin-language" role="group" aria-label="Language"><button aria-pressed={locale === "th"} onClick={() => setLocale("th")}>TH</button><button aria-pressed={locale === "en"} onClick={() => setLocale("en")}>EN</button></div>
-          <button className="notification-button" aria-label={`${locale === "th" ? "การแจ้งเตือนที่ต้องตรวจสอบ" : "Notifications requiring review"}: ${notificationFailures}`} onClick={() => { setActiveView("notifications"); setSelectedId(""); setQuery(""); }}>♢{notificationFailures > 0 && <span>{notificationFailures > 99 ? "99+" : notificationFailures}</span>}</button>
+          <button className="notification-button" aria-label={`${locale === "th" ? "การแจ้งเตือนที่ต้องตรวจสอบ" : "Notifications requiring review"}: ${notificationFailures}`} onClick={() => { setActiveView("notifications"); setNotificationFilter("ACTION_REQUIRED"); setSelectedId(""); setQuery(""); }}>
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>
+            {notificationFailures > 0 && <span className="topbar-notification-badge" aria-hidden="true">{notificationFailures > 99 ? "99+" : notificationFailures}</span>}
+          </button>
         </header>
 
         <div className="preview-strip" role="status">{text.preview}</div>
@@ -316,7 +348,7 @@ export function AdminDashboard({ user }: { user: User }) {
           <section className="queue-summary" aria-label="Operational queue summary">
             <div className="queue-item warning"><span>{text.pending}</span><strong>{pending}</strong></div>
             <div className="queue-item info"><span>{text.unassigned}</span><strong>{unassigned}</strong></div>
-            <button className="queue-item danger" onClick={() => setActiveView("notifications")}><span>{text.notification}</span><strong>{notificationFailures}</strong></button>
+            <button className="queue-item danger" onClick={() => { setActiveView("notifications"); setNotificationFilter("ACTION_REQUIRED"); }}><span>{text.notification}</span><strong>{notificationFailures}</strong></button>
           </section>
 
           <section className="operations-panel" aria-labelledby="bookings-table-title">
@@ -328,17 +360,17 @@ export function AdminDashboard({ user }: { user: User }) {
                   {filtered.map((booking) => <tr key={booking.bookingId} className={selectedId === booking.bookingId ? "selected-row" : undefined}>
                     <td><strong className="date-cell">{formatDate(booking.startLocal, locale)}</strong><span className="time-cell">{formatTime(booking.startLocal)}</span><small>{booking.bookingId}</small></td>
                     <td><strong>{booking.customerName}</strong><small>{booking.customerPhoneMasked}</small>{booking.healthAlert && <span className="health-alert">⚠ {locale === "th" ? "ตรวจสุขภาพ" : "Health review"}</span>}</td>
-                    <td>{booking.serviceName}</td><td>{booking.pax}</td><td>{booking.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</td><td><span className={`status status-${booking.status.toLowerCase()}`}>{statusLabel[booking.status][locale]}</span></td><td><button className="row-action" onClick={() => setSelectedId(booking.bookingId)} aria-label={`${text.detail} ${booking.bookingId}`}>→</button></td>
+                    <td>{formatServiceName(booking, locale)}</td><td>{booking.pax}</td><td>{booking.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</td><td><span className={`status status-${booking.status.toLowerCase()}`}>{statusLabel[booking.status][locale]}</span></td><td><button className="row-action" onClick={() => setSelectedId(booking.bookingId)} aria-label={`${text.detail} ${booking.bookingId}`}>→</button></td>
                   </tr>)}
                 </tbody>
               </table>
             </div>
             {filtered.length === 0 && <div className="empty-state">{locale === "th" ? "ไม่พบรายการที่ตรงกับตัวกรอง" : "No bookings match these filters"}</div>}
           </section>
-        </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} />}
+        </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} notificationFilter={notificationFilter} onNotificationFilterChange={setNotificationFilter} onNotificationCountChange={setNotificationFailures} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} onSelectBooking={(bookingId) => { setSelectedId(bookingId); setHealthDetails(null); }} />}
       </div>
 
-      {selected && <aside ref={detailDrawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button ref={closeDrawerButtonRef} aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div><div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>{selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดไม่แสดงในรายการหรือ LINE Group" : "Details stay out of lists and the LINE group"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}<dl><div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div><div><dt>{text.service}</dt><dd>{selected.serviceName}</dd></div><div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div><div><dt>{text.therapist}</dt><dd>{selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div><div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div></dl><div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready" || selected.status !== "PENDING"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready" || !["PENDING", "CONFIRMED"].includes(selected.status)} onClick={() => transitionBooking("cancel")}>{text.cancel}</button>{selected.status === "CONFIRMED" && <button className="confirm-button" disabled={!selected.therapistName} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button>}{selected.status === "CONFIRMED" && <button className="cancel-button" disabled={currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button>}{selected.status === "IN_SERVICE" && <button className="confirm-button" onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button>}</div>{selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}{actionMessage && <p className={`action-message ${actionMessage.kind}`} role="status">{actionMessage.text}</p>}<p className="api-gate">{text.apiGate}</p></aside>}
+      {selected && <aside ref={detailDrawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button ref={closeDrawerButtonRef} aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div><div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>{selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดไม่แสดงในรายการหรือ LINE Group" : "Details stay out of lists and the LINE group"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}<dl><div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div><div><dt>{text.service}</dt><dd>{formatServiceName(selected, locale)}</dd></div><div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div><div><dt>{text.therapist}</dt><dd>{selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div><div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div></dl><div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready" || selected.status !== "PENDING"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready" || !["PENDING", "CONFIRMED"].includes(selected.status)} onClick={() => transitionBooking("cancel")}>{text.cancel}</button>{selected.status === "CONFIRMED" && <button className="confirm-button" disabled={!selected.therapistName} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button>}{selected.status === "CONFIRMED" && <button className="cancel-button" disabled={currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button>}{selected.status === "IN_SERVICE" && <button className="confirm-button" onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button>}</div>{selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}{actionMessage && <p className={`action-message ${actionMessage.kind}`} role="status">{actionMessage.text}</p>}<p className="api-gate">{text.apiGate}</p></aside>}
     </div>
   );
 }

@@ -57,6 +57,9 @@ export type PreviewBooking = {
   customerName: string;
   customerPhoneMasked: string;
   serviceName: string;
+  serviceId?: string;
+  serviceNameTh?: string;
+  serviceNameEn?: string;
   durationMinutes: number;
   pax: number;
   status: BookingStatus;

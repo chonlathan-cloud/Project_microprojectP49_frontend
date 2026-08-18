@@ -4,11 +4,11 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Technical Design (TDD) |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Approved technical baseline |
-| Last updated | 14 August 2026 |
-| Business baseline | [Business Logic v1.2](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.1](./HLD.md) |
+| Last updated | 18 August 2026 |
+| Business baseline | [Business Logic v1.3](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.2](./HLD.md) |
 | Initial branch scope | One branch, multi-branch-ready data ownership |
 | Runtime location | `asia-southeast1` |
 
@@ -362,7 +362,7 @@ Public Booking ID sequence contention is acceptable at the approved volume. The 
 | `bookings` | Booking aggregate, contact snapshot, state, totals, source |
 | `booking_line_items` | Price-bearing variant snapshot, pricing mode, quantity, required pax, total; prevents duplicate Couple Package charge |
 | `booking_participants` | Nickname, selected line-item reference, allocation and assignment summary |
-| `participant_health` | Immutable Booking-time health declaration snapshot, isolated from customer-safe projections |
+| `participant_health` | Immutable Booking-time health declaration snapshot, isolated from customer-safe projections and joined only for authorized Admin Web reads or registered Admin Group rendering |
 | `customers` | Reusable minimal customer profile and provisional/verified/merged lifecycle |
 | `customer_identity_links` | Verified LINE identity linkage; phone is never stored as proof of identity |
 | `customer_health_profiles` | Current reusable health declaration, consent and retention metadata |
@@ -574,7 +574,7 @@ IDs are not intrinsically confidential, but keeping their deployment values in t
 
 ### 19.2 New Booking Group Message
 
-The worker renders one Flex bubble from versioned templates. The confirmation button uses a LINE message action with a compact command containing the public Booking ID and a non-secret command version. Health content is a boolean indicator only.
+The worker renders one Flex bubble from versioned templates. The confirmation button uses a LINE message action with a compact command containing the public Booking ID and a non-secret command version. For the registered Admin Group destination, the Worker loads each participant's restricted health snapshot at render time and includes the customer-supplied detail. The outbox event and Cloud Task contain references only.
 
 The webhook transaction accepts a confirmation only from a registered Group ID with an identifiable User ID. The transaction writes approver LINE User ID, Group ID, previous/new state, timestamp, audit, and customer notification outbox.
 
@@ -599,7 +599,7 @@ PENDING -> ENQUEUED -> PROCESSING -> SENT
                          +-> FAILED
 ```
 
-Each event contains a template type and data references, not health detail. The worker loads the latest customer-safe Booking projection before rendering.
+Each event contains a template type and data references, not health detail. The Worker uses a customer-safe projection for customer delivery and an explicit Admin Group projection that joins participant health snapshots only when the resolved destination is the configured registered Admin Group.
 
 ### 20.2 Queue Configuration
 
@@ -701,7 +701,7 @@ Firestore TTL deletion is asynchronous. Authorization checks use the logical `ex
 
 ### 24.2 Firestore
 
-Client security rules deny all reads/writes. Service accounts receive only required server roles. Separate data projection functions prevent health fields from entering public or notification objects.
+Client security rules deny all reads/writes. Service accounts receive only required server roles. Separate projection functions prevent health fields from entering public, customer notification, outbox, task, log, URL, metric, and operational-alert objects; only the registered Admin Group Booking renderer accepts health detail.
 
 ### 24.3 Secret and Key Management
 
@@ -789,7 +789,7 @@ Health detail, full phone, raw LINE User ID, status token, ID token, access toke
 | Guest rejection spike | Three times the rolling seven-day hourly baseline |
 | Backup age | No successful backup in 26 hours |
 
-All Phase 1 operational alerts are delivered only to the registered LINE Admin Group. Application alerts use a privacy-safe `OPS_ALERT` outbox event. Cloud Monitoring alert policies publish to the `spa-ops-alerts` Pub/Sub topic; its authenticated push subscription invokes the Worker, which renders a privacy-safe LINE message. No email, SMS, or PagerDuty destination is configured in Phase 1. Group messages must not include health detail, full phone numbers, credentials, or request bodies. Operational ownership and acknowledgement procedure remain production readiness inputs.
+All Phase 1 operational alerts are delivered only to the registered LINE Admin Group. Application alerts use a privacy-safe `OPS_ALERT` outbox event. Cloud Monitoring alert policies publish to the `spa-ops-alerts` Pub/Sub topic; its authenticated push subscription invokes the Worker, which renders a privacy-safe LINE message. No email, SMS, or PagerDuty destination is configured in Phase 1. Operational-alert messages must not include health detail, full phone numbers, credentials, or request bodies; the separately versioned Admin Booking Flex is the only Group template permitted to contain participant health detail. Operational ownership and acknowledgement procedure remain production readiness inputs.
 
 ## 29. Backup and Recovery
 
@@ -847,7 +847,7 @@ The approved integration branch may deploy only `spa-*-test` Cloud Run revisions
 - Outbox commit without immediate enqueue is recovered by reconciliation
 - Task redelivery does not send after terminal delivery state
 - Disabled Admin user is denied
-- Health detail absent from Guest, LINE, log, and task projections
+- Health detail absent from Guest, Customer LINE, non-Admin Group, operational-alert, log, URL, and task projections; present in the registered Admin Group Booking Flex
 
 ### 31.3 End-to-End Tests
 
@@ -868,7 +868,7 @@ Production LINE sandbox/test channels are used for pre-production integration; C
 | `BL-BKG-001`–`008` | Public endpoints, dual identity, transaction, status bearer, abuse policy |
 | `BL-CAP-001`–`003` | 15-minute buckets, deterministic complete allocation, transactional edit/block checks |
 | `BL-ADM-001`–`005` | Firebase roles, permission dependencies, separate verified group command boundary |
-| `BL-LINE-001`–`006` | Channel separation, masked projections, verified links, outbox/task worker, and LINE-Group-only operational alerts |
+| `BL-LINE-001`–`006` | Channel separation, explicit registered-Admin-Group health projection, masked customer/task/log projections, verified links, outbox/task worker, and LINE-Group-only operational alerts |
 | `BL-OPS-001`–`002` | Assignment condition and Admin-only operational commands |
 | `BL-PAY-001` | No payment endpoints, fields, or service |
 | `BL-PRI-001`–`003` | Profile/snapshot isolation, versioned consent receipts, explicit projections, and audited health operations |
