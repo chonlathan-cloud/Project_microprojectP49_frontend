@@ -33,6 +33,8 @@ class NotificationBookingView(BaseModel):
     participants: list[NotificationParticipantView] = Field(min_length=1, max_length=2)
     pax: int = Field(ge=1, le=2)
     estimated_amount_satang: int = Field(ge=0)
+    branch_name: str | None = Field(default=None, max_length=160)
+    branch_address: str | None = Field(default=None, max_length=500)
     map_url: str | None = None
     admin_booking_url: str | None = None
 
@@ -59,14 +61,14 @@ _THAI_MONTHS = (
 )
 
 
-def _safe_action_uri(value: str | None, fallback: str) -> str:
+def _safe_action_uri(value: str | None) -> str | None:
     candidate = (value or "").strip()
     try:
         parsed = urlsplit(candidate)
     except ValueError:
-        return fallback
+        return None
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return fallback
+        return None
     return urlunsplit(
         (
             parsed.scheme,
@@ -392,6 +394,7 @@ def render_admin_booking_confirmed(view: AdminNotificationBookingView) -> dict[s
 
 def render_customer_confirmed(view: NotificationBookingView) -> dict[str, object]:
     price = f"{view.estimated_amount_satang / 100:,.2f} บาท (รวม VAT แล้ว)"
+    map_uri = _safe_action_uri(view.map_url)
     details: list[dict[str, object]] = [
         {
             "type": "text",
@@ -429,7 +432,97 @@ def render_customer_confirmed(view: NotificationBookingView) -> dict[str, object
             "wrap": True,
         },
     ]
-    return {
+    body_contents: list[dict[str, object]] = [
+        {
+            "type": "text",
+            "text": f"ขอขอบคุณ คุณ{view.contact_nickname} ที่เลือกใช้บริการครับ/ค่ะ",
+            "size": "xs",
+            "color": "#666666",
+            "wrap": True,
+        },
+        {"type": "separator", "margin": "md"},
+        {
+            "type": "box",
+            "layout": "vertical",
+            "margin": "md",
+            "spacing": "sm",
+            "contents": details,
+        },
+    ]
+    location_contents: list[dict[str, object]] = [
+        {
+            "type": "text",
+            "text": "📍 สถานที่นัดหมาย",
+            "size": "xs",
+            "color": "#2F5D50",
+            "weight": "bold",
+        }
+    ]
+    if view.branch_name:
+        location_contents.append(
+            {
+                "type": "text",
+                "text": view.branch_name,
+                "size": "sm",
+                "color": "#111111",
+                "weight": "bold",
+                "margin": "xs",
+                "wrap": True,
+            }
+        )
+    if view.branch_address:
+        location_contents.append(
+            {
+                "type": "text",
+                "text": view.branch_address,
+                "size": "xs",
+                "color": "#555555",
+                "margin": "xs",
+                "wrap": True,
+            }
+        )
+    if view.branch_name or view.branch_address:
+        body_contents.append(
+            {
+                "type": "box",
+                "layout": "vertical",
+                "margin": "lg",
+                "spacing": "xs",
+                "contents": location_contents,
+            }
+        )
+    body_contents.append(
+        {
+            "type": "box",
+            "layout": "vertical",
+            "margin": "lg",
+            "paddingAll": "md",
+            "backgroundColor": "#F4F7F5",
+            "cornerRadius": "md",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "ℹ️ ข้อแนะนำก่อนรับบริการ",
+                    "size": "xs",
+                    "color": "#2F5D50",
+                    "weight": "bold",
+                },
+                {
+                    "type": "text",
+                    "text": (
+                        "• กรุณามาถึงก่อนเวลานัด 10 นาที\n"
+                        "• หากต้องการเปลี่ยนแปลงเวลานัด "
+                        "กรุณาแจ้งล่วงหน้าอย่างน้อย 1 วัน"
+                    ),
+                    "size": "xs",
+                    "color": "#555555",
+                    "margin": "xs",
+                    "wrap": True,
+                },
+            ],
+        }
+    )
+    bubble: dict[str, object] = {
         "type": "bubble",
         "header": {
             "type": "box",
@@ -448,54 +541,11 @@ def render_customer_confirmed(view: NotificationBookingView) -> dict[str, object
         "body": {
             "type": "box",
             "layout": "vertical",
-            "contents": [
-                {
-                    "type": "text",
-                    "text": f"ขอขอบคุณ คุณ{view.contact_nickname} ที่เลือกใช้บริการครับ/ค่ะ",
-                    "size": "xs",
-                    "color": "#666666",
-                    "wrap": True,
-                },
-                {"type": "separator", "margin": "md"},
-                {
-                    "type": "box",
-                    "layout": "vertical",
-                    "margin": "md",
-                    "spacing": "sm",
-                    "contents": details,
-                },
-                {
-                    "type": "box",
-                    "layout": "vertical",
-                    "margin": "lg",
-                    "paddingAll": "md",
-                    "backgroundColor": "#F4F7F5",
-                    "cornerRadius": "md",
-                    "contents": [
-                        {
-                            "type": "text",
-                            "text": "ℹ️ ข้อแนะนำก่อนรับบริการ",
-                            "size": "xs",
-                            "color": "#2F5D50",
-                            "weight": "bold",
-                        },
-                        {
-                            "type": "text",
-                            "text": (
-                                "• กรุณามาถึงก่อนเวลานัด 10 นาที\n"
-                                "• หากต้องการเปลี่ยนแปลงเวลานัด "
-                                "กรุณาแจ้งล่วงหน้าอย่างน้อย 1 วัน"
-                            ),
-                            "size": "xs",
-                            "color": "#555555",
-                            "margin": "xs",
-                            "wrap": True,
-                        },
-                    ],
-                },
-            ],
+            "contents": body_contents,
         },
-        "footer": {
+    }
+    if map_uri:
+        bubble["footer"] = {
             "type": "box",
             "layout": "horizontal",
             "spacing": "sm",
@@ -504,15 +554,15 @@ def render_customer_confirmed(view: NotificationBookingView) -> dict[str, object
                     "type": "button",
                     "action": {
                         "type": "uri",
-                        "label": "📍 แผนที่ร้าน",
-                        "uri": _safe_action_uri(view.map_url, "https://maps.google.com"),
+                        "label": "ดูเส้นทางไป SPA 49",
+                        "uri": map_uri,
                     },
                     "style": "secondary",
                     "height": "sm",
                 }
             ],
-        },
-    }
+        }
+    return bubble
 
 
 def flex_message(*, alt_text: str, bubble: dict[str, object]) -> dict[str, object]:

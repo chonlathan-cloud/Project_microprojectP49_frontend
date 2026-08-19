@@ -34,6 +34,11 @@ def base_values() -> dict[str, object]:
         ],
         "pax": 1,
         "estimated_amount_satang": 60000,
+        "branch_name": "SPA 49",
+        "branch_address": (
+            "53/72 ถนนเฉลิมพระเกียรติ ร.9 แขวงหนองบอน "
+            "เขตประเวศ กรุงเทพมหานคร 10250"
+        ),
         "admin_booking_url": "https://admin.example/?booking=BK-20260815-001",
     }
 
@@ -134,6 +139,10 @@ def test_customer_flex_contains_price_and_map() -> None:
     bubble = render_customer_confirmed(NotificationBookingView(**values))
     serialized = json.dumps(bubble, ensure_ascii=False)
     assert "600.00 บาท (รวม VAT แล้ว)" in serialized
+    assert "📍 สถานที่นัดหมาย" in serialized
+    assert "SPA 49" in serialized
+    assert "53/72 ถนนเฉลิมพระเกียรติ ร.9" in serialized
+    assert bubble["footer"]["contents"][0]["action"]["label"] == "ดูเส้นทางไป SPA 49"
     assert "https://maps.example/spa49" in serialized
 
 
@@ -151,10 +160,14 @@ def test_customer_flex_percent_encodes_non_ascii_map_uri() -> None:
     assert "%E0%B8" in uri
 
 
-def test_customer_flex_replaces_unsafe_map_uri() -> None:
-    values = {**base_values(), "status": "CONFIRMED", "map_url": "javascript:alert(1)"}
+@pytest.mark.parametrize("map_url", [None, "", "javascript:alert(1)"])
+def test_customer_flex_hides_map_action_without_safe_destination(map_url: str | None) -> None:
+    values = {**base_values(), "status": "CONFIRMED", "map_url": map_url}
     bubble = render_customer_confirmed(NotificationBookingView(**values))
-    assert bubble["footer"]["contents"][0]["action"]["uri"] == "https://maps.google.com"
+    assert "footer" not in bubble
+    serialized = json.dumps(bubble, ensure_ascii=False)
+    assert "📍 สถานที่นัดหมาย" in serialized
+    assert "53/72 ถนนเฉลิมพระเกียรติ ร.9" in serialized
 
 
 def test_pending_and_admin_confirmed_templates_are_privacy_safe() -> None:

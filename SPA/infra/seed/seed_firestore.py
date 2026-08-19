@@ -4,6 +4,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
 from google.cloud import firestore
 
@@ -18,7 +19,15 @@ def main() -> None:
     now = datetime.now(UTC)
     batch = client.batch()
     branch_ref = client.collection("branches").document(BRANCH_ID)
-    map_url = "https://www.bing.com/maps/search?q=53%2F72+ถนนเฉลิมพระเกียรติ+ร.+9+หนองบอน+ประเวศ+กรุงเทพมหานคร+10250"
+    map_url = "https://www.google.com/maps/dir/?" + urlencode(
+        {
+            "api": "1",
+            "destination": (
+                "SPA 49, 53/72 ถนนเฉลิมพระเกียรติ ร.9 แขวงหนองบอน "
+                "เขตประเวศ กรุงเทพมหานคร 10250"
+            ),
+        }
+    )
     batch.set(
         branch_ref,
         {

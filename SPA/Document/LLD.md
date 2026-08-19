@@ -1323,6 +1323,8 @@ class NotificationBookingView(BaseModel):
     participants: list[NotificationParticipantView]
     pax: int
     estimated_amount_satang: int
+    branch_name: str | None
+    branch_address: str | None
     map_url: str | None
 ```
 

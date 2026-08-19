@@ -86,7 +86,17 @@ class FakeClient:
                 },
             ),
             "branches": FakeCollection(
-                [], {"branch_001": FakeSnapshot("branch_001", {"mapUrl": None})}
+                [],
+                {
+                    "branch_001": FakeSnapshot(
+                        "branch_001",
+                        {
+                            "name": "SPA 49",
+                            "address": "53/72 ถนนเฉลิมพระเกียรติ ร.9 กรุงเทพฯ 10250",
+                            "mapUrl": "https://maps.example/spa49",
+                        },
+                    )
+                },
             ),
         }
 
@@ -129,6 +139,9 @@ def test_customer_projection_does_not_join_participant_health_detail() -> None:
     assert type(view) is NotificationBookingView
     assert "health_details" not in view.model_dump_json()
     assert "แพ้น้ำมันลาเวนเดอร์" not in view.model_dump_json()
+    assert view.branch_name == "SPA 49"
+    assert view.branch_address == "53/72 ถนนเฉลิมพระเกียรติ ร.9 กรุงเทพฯ 10250"
+    assert view.map_url == "https://maps.example/spa49"
 
 
 def test_admin_projection_does_not_join_detail_without_explicit_render_scope() -> None:

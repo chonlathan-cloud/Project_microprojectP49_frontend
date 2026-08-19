@@ -234,6 +234,8 @@ def _booking_view(
         "participants": participants,
         "pax": int(booking.get("pax", len(participants))),
         "estimated_amount_satang": int(booking.get("estimatedAmountSatang", 0)),
+        "branch_name": str(branch.get("name") or "").strip() or None,
+        "branch_address": str(branch.get("address") or "").strip() or None,
         "map_url": branch.get("mapUrl"),
         "admin_booking_url": (
             f"{os.getenv('ADMIN_WEB_URL', '').rstrip('/')}/?booking="
