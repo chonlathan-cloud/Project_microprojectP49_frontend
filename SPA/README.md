@@ -74,7 +74,7 @@ printed by the reviewed dry-run; any intervening source or target change invalid
 
 Production Admin and Customer deployments require an explicit production `SPA_API_URL`; the deploy scripts reject an omitted URL or a `spa-api-test` target to prevent cross-environment routing.
 
-Production API and Notification Worker deployments default all LINE bindings to the
+Production API, Customer Web, and Notification Worker deployments default all LINE bindings to the
 `spa-line-prod-*-Prod` Secret Manager resources. An overridden production secret name must either
 use a production suffix (`-Prod`, `-prod`, or `-production`) or carry the Secret Manager label
 `environment=prod` (or `environment=production`). Non-production deployments retain the

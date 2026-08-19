@@ -12,8 +12,20 @@ DOCKERFILE="${DOCKERFILE:-apps/customer-web/Dockerfile}"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/apps/customer-web/.env}"
 REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-false}"
 SPA_API_URL="${SPA_API_URL:-}"
+APP_ENV="${APP_ENV:-production}"
+
+if [[ "$APP_ENV" == "production" ]]; then
+  DEFAULT_LINE_LIFF_ID_SECRET_NAME="spa-line-prod-customer-liff-id-Prod"
+else
+  DEFAULT_LINE_LIFF_ID_SECRET_NAME="spa-line-customer-liff-id"
+fi
+LINE_LIFF_ID_SECRET_NAME="${LINE_LIFF_ID_SECRET_NAME:-$DEFAULT_LINE_LIFF_ID_SECRET_NAME}"
 
 if [[ "$SERVICE_NAME" != *-test ]]; then
+  if [[ "$APP_ENV" != "production" ]]; then
+    echo "ERROR: Production Customer Web requires APP_ENV=production." >&2
+    exit 1
+  fi
   if [[ -z "$SPA_API_URL" ]]; then
     echo "ERROR: SPA_API_URL must be set explicitly for a production deployment." >&2
     exit 1
@@ -22,6 +34,9 @@ if [[ "$SERVICE_NAME" != *-test ]]; then
     echo "ERROR: Production Customer Web cannot target spa-api-test." >&2
     exit 1
   fi
+elif [[ "$APP_ENV" == "production" ]]; then
+  echo "ERROR: Test Customer Web service requires a non-production APP_ENV such as APP_ENV=test." >&2
+  exit 1
 fi
 
 ARTIFACT_REPOSITORY="${ARTIFACT_REPOSITORY:-spa}"
@@ -114,6 +129,59 @@ case "$AUTH_MODE" in
     ;;
 esac
 
+validate_secret_binding() {
+  local variable_name="$1"
+  local secret_name="$2"
+  local latest_state
+  local environment_label
+  local runtime_accessor_role
+
+  if ! environment_label="$(
+    gcloud "${GCLOUD_AUTH_ARGS[@]}" secrets describe "$secret_name" \
+      --project "$PROJECT_ID" \
+      --format='value(labels.environment)' 2>/dev/null
+  )"; then
+    echo "ERROR: Secret Manager secret '$secret_name' configured by $variable_name was not found or is not accessible." >&2
+    exit 1
+  fi
+
+  if ! latest_state="$(
+    gcloud "${GCLOUD_AUTH_ARGS[@]}" secrets versions describe latest \
+      --secret "$secret_name" \
+      --project "$PROJECT_ID" \
+      --format='value(state)' 2>/dev/null
+  )" || [[ "$latest_state" != "ENABLED" ]]; then
+    echo "ERROR: Secret Manager secret '$secret_name' configured by $variable_name has no enabled latest version." >&2
+    exit 1
+  fi
+
+  if [[ "$APP_ENV" == "production" \
+    && "$secret_name" != *-Prod \
+    && "$secret_name" != *-prod \
+    && "$secret_name" != *-production \
+    && "$environment_label" != "prod" \
+    && "$environment_label" != "production" ]]; then
+    echo "ERROR: Production secret '$secret_name' configured by $variable_name is not production-scoped." >&2
+    echo "Use a secret name ending in '-Prod', '-prod', or '-production', or set the Secret Manager label environment=prod." >&2
+    exit 1
+  fi
+
+  runtime_accessor_role="$(
+    gcloud "${GCLOUD_AUTH_ARGS[@]}" secrets get-iam-policy "$secret_name" \
+      --project "$PROJECT_ID" \
+      --flatten='bindings[]' \
+      --filter="bindings.role=roles/secretmanager.secretAccessor AND bindings.members=serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" \
+      --format='value(bindings.role)' 2>/dev/null
+  )"
+  if [[ "$runtime_accessor_role" != "roles/secretmanager.secretAccessor" ]]; then
+    echo "ERROR: Runtime service account '$RUNTIME_SERVICE_ACCOUNT' is not a direct Secret Manager accessor for '$secret_name'." >&2
+    echo "Grant roles/secretmanager.secretAccessor on this secret before deploying." >&2
+    exit 1
+  fi
+}
+
+validate_secret_binding "LINE_LIFF_ID_SECRET_NAME" "$LINE_LIFF_ID_SECRET_NAME"
+
 if ! gcloud "${GCLOUD_AUTH_ARGS[@]}" artifacts repositories describe "$ARTIFACT_REPOSITORY" \
   --project "$PROJECT_ID" --location "$REGION" >/dev/null 2>&1; then
   if [[ "$CREATE_ARTIFACT_REPOSITORY" != "true" ]]; then
@@ -153,7 +221,7 @@ YAML
 env_args=()
 if [[ -f "$ENV_FILE" ]]; then
   tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_customer_web_env.XXXXXX.yaml")"
-  python3 - "$ENV_FILE" "$tmp_env_yaml" "$SPA_API_URL" <<'PY'
+  python3 - "$ENV_FILE" "$tmp_env_yaml" "$SPA_API_URL" "$APP_ENV" <<'PY'
 import json
 import re
 import sys
@@ -183,6 +251,7 @@ for raw_line in source.read_text(encoding="utf-8").splitlines():
 
 if sys.argv[3]:
     environment["SPA_API_URL"] = sys.argv[3]
+environment["APP_ENV"] = sys.argv[4]
 
 with destination.open("w", encoding="utf-8") as output:
     for key, value in environment.items():
@@ -195,11 +264,20 @@ elif [[ "$REQUIRE_ENV_FILE" == "true" ]]; then
 else
   if [[ -n "$SPA_API_URL" ]]; then
     tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_customer_env.XXXXXX.yaml")"
-    python3 - "$tmp_env_yaml" "$SPA_API_URL" <<'PY'
+    python3 - "$tmp_env_yaml" "$SPA_API_URL" "$APP_ENV" <<'PY'
 import json
 import sys
 from pathlib import Path
-Path(sys.argv[1]).write_text(f"SPA_API_URL: {json.dumps(sys.argv[2])}\n", encoding="utf-8")
+Path(sys.argv[1]).write_text(
+    "\n".join(
+        [
+            f"SPA_API_URL: {json.dumps(sys.argv[2])}",
+            f"APP_ENV: {json.dumps(sys.argv[3])}",
+            "",
+        ]
+    ),
+    encoding="utf-8",
+)
 PY
     env_args+=(--env-vars-file "$tmp_env_yaml")
   else
@@ -233,7 +311,7 @@ deploy_args=(
   --quiet
 )
 deploy_args+=("${env_args[@]}")
-deploy_args+=(--set-secrets "LINE_LIFF_ID=spa-line-customer-liff-id:latest")
+deploy_args+=(--set-secrets "LINE_LIFF_ID=${LINE_LIFF_ID_SECRET_NAME}:latest")
 
 if [[ "$ALLOW_UNAUTHENTICATED" == "true" ]]; then
   deploy_args+=(--allow-unauthenticated)
