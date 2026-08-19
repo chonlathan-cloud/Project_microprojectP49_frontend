@@ -53,7 +53,34 @@ The Admin Web uses an internal `/api/spa/*` server proxy, so the API URL is not 
 
 Service cover images are stored in a private Cloud Storage bucket and streamed through the API. Review/provision it with `infra/iam/service-assets-bucket.sh` and `infra/iam/service-assets-bucket.sh --apply`, set `SERVICE_ASSETS_BUCKET` on the API, then dry-run/import the legacy covers from `services/api` with `uv run python scripts/import_service_images.py` and `uv run python scripts/import_service_images.py --apply`. Only users with the `ADMIN` application role can upload, replace, or remove a cover; `STAFF` remains read-only.
 
+Promote approved master configuration from Test to Production with the API promotion tool. It
+copies only `branches`, `services`, and `resources` by default; dry-run is mandatory before apply:
+
+```bash
+cd SPA/services/api
+uv run python scripts/promote_firestore_config.py --report /tmp/spa-promotion-dry-run.json
+uv run python scripts/promote_firestore_config.py \
+  --apply --confirm-target spa-db --confirm-plan REVIEWED_PLAN_DIGEST \
+  --report /tmp/spa-promotion-apply.json
+```
+
+Use `--include-therapists` only after verifying the records represent real staff. Special closures
+require both `--include-special-closures` and an explicit `--closure-from YYYY-MM-DD`. Differing
+Production documents remain conflicts unless `--allow-updates` is supplied. The tool never copies
+bookings, capacity usage, health/consent data, identity records, audit events, notification state,
+webhook events, or idempotency records. Firestore promotion does not copy service image objects;
+validate the configured Production asset bucket separately. Apply also requires the exact digest
+printed by the reviewed dry-run; any intervening source or target change invalidates approval.
+
 Production Admin and Customer deployments require an explicit production `SPA_API_URL`; the deploy scripts reject an omitted URL or a `spa-api-test` target to prevent cross-environment routing.
+
+Production API and Notification Worker deployments default all LINE bindings to the
+`spa-line-prod-*-Prod` Secret Manager resources. An overridden production secret name must either
+use a production suffix (`-Prod`, `-prod`, or `-production`) or carry the Secret Manager label
+`environment=prod` (or `environment=production`). Non-production deployments retain the
+unsuffixed LINE secret defaults unless explicitly overridden. Both deploy preflights also require
+an enabled `latest` version and a direct `roles/secretmanager.secretAccessor` grant for the runtime
+service account on every bound secret.
 
 The notification worker has its own lockfile and environment under `services/notification-worker`
 and defaults to port `8081` locally. Test messages are prefixed `[TEST]` whenever

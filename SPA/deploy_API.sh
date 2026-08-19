@@ -14,8 +14,23 @@ REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-false}"
 FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-spa-db}"
 APP_ENV="${APP_ENV:-production}"
 SERVICE_ASSETS_BUCKET="${SERVICE_ASSETS_BUCKET:-${PROJECT_ID}-spa-service-assets-${APP_ENV}}"
-LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME="${LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME:-spa-line-customer-messaging-channel-secret}"
-LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME="${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME:-spa-line-admin-messaging-channel-secret}"
+
+if [[ "$APP_ENV" == "production" ]]; then
+  DEFAULT_LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME="spa-line-prod-customer-messaging-channel-secret-Prod"
+  DEFAULT_LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME="spa-line-prod-admin-messaging-channel-secret-Prod"
+  DEFAULT_LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME="spa-line-prod-customer-login-channel-id-Prod"
+  DEFAULT_LINE_ADMIN_GROUP_ID_SECRET_NAME="spa-line-prod-admin-group-id-Prod"
+else
+  DEFAULT_LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME="spa-line-customer-messaging-channel-secret"
+  DEFAULT_LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME="spa-line-admin-messaging-channel-secret"
+  DEFAULT_LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME="spa-line-customer-login-channel-id"
+  DEFAULT_LINE_ADMIN_GROUP_ID_SECRET_NAME="spa-line-admin-group-id"
+fi
+
+LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME="${LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME:-$DEFAULT_LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME}"
+LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME="${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME:-$DEFAULT_LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME}"
+LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME="${LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME:-$DEFAULT_LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME}"
+LINE_ADMIN_GROUP_ID_SECRET_NAME="${LINE_ADMIN_GROUP_ID_SECRET_NAME:-$DEFAULT_LINE_ADMIN_GROUP_ID_SECRET_NAME}"
 
 ARTIFACT_REPOSITORY="${ARTIFACT_REPOSITORY:-spa}"
 IMAGE_NAME="${IMAGE_NAME:-spa-api}"
@@ -106,6 +121,70 @@ case "$AUTH_MODE" in
     exit 1
     ;;
 esac
+
+validate_secret_binding() {
+  local variable_name="$1"
+  local secret_name="$2"
+  local latest_state
+  local environment_label
+  local runtime_accessor_role
+
+  if ! environment_label="$(
+    gcloud "${GCLOUD_AUTH_ARGS[@]}" secrets describe "$secret_name" \
+      --project "$PROJECT_ID" \
+      --format='value(labels.environment)' 2>/dev/null
+  )"; then
+    echo "ERROR: Secret Manager secret '$secret_name' configured by $variable_name was not found or is not accessible." >&2
+    exit 1
+  fi
+
+  if ! latest_state="$(
+    gcloud "${GCLOUD_AUTH_ARGS[@]}" secrets versions describe latest \
+      --secret "$secret_name" \
+      --project "$PROJECT_ID" \
+      --format='value(state)' 2>/dev/null
+  )" || [[ "$latest_state" != "ENABLED" ]]; then
+    echo "ERROR: Secret Manager secret '$secret_name' configured by $variable_name has no enabled latest version." >&2
+    exit 1
+  fi
+
+  if [[ "$APP_ENV" == "production" \
+    && "$secret_name" != *-Prod \
+    && "$secret_name" != *-prod \
+    && "$secret_name" != *-production \
+    && "$environment_label" != "prod" \
+    && "$environment_label" != "production" ]]; then
+    echo "ERROR: Production secret '$secret_name' configured by $variable_name is not production-scoped." >&2
+    echo "Use a secret name ending in '-Prod', '-prod', or '-production', or set the Secret Manager label environment=prod." >&2
+    exit 1
+  fi
+
+  runtime_accessor_role="$(
+    gcloud "${GCLOUD_AUTH_ARGS[@]}" secrets get-iam-policy "$secret_name" \
+      --project "$PROJECT_ID" \
+      --flatten='bindings[]' \
+      --filter="bindings.role=roles/secretmanager.secretAccessor AND bindings.members=serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" \
+      --format='value(bindings.role)' 2>/dev/null
+  )"
+  if [[ "$runtime_accessor_role" != "roles/secretmanager.secretAccessor" ]]; then
+    echo "ERROR: Runtime service account '$RUNTIME_SERVICE_ACCOUNT' is not a direct Secret Manager accessor for '$secret_name'." >&2
+    echo "Grant roles/secretmanager.secretAccessor on this secret before deploying." >&2
+    exit 1
+  fi
+}
+
+validate_secret_binding \
+  "LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME" \
+  "$LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME"
+validate_secret_binding \
+  "LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME" \
+  "$LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME"
+validate_secret_binding \
+  "LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME" \
+  "$LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME"
+validate_secret_binding \
+  "LINE_ADMIN_GROUP_ID_SECRET_NAME" \
+  "$LINE_ADMIN_GROUP_ID_SECRET_NAME"
 
 if ! gcloud "${GCLOUD_AUTH_ARGS[@]}" artifacts repositories describe "$ARTIFACT_REPOSITORY" \
   --project "$PROJECT_ID" --location "$REGION" >/dev/null 2>&1; then
@@ -236,7 +315,7 @@ deploy_args=(
   --ingress "$INGRESS"
   --execution-environment gen2
   --labels "application=spa,component=api"
-  --set-secrets "LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET=${LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_ADMIN_MESSAGING_CHANNEL_SECRET=${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_CUSTOMER_LOGIN_CHANNEL_ID=spa-line-customer-login-channel-id:latest,LINE_ADMIN_GROUP_ID=spa-line-admin-group-id:latest"
+  --set-secrets "LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET=${LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_ADMIN_MESSAGING_CHANNEL_SECRET=${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_CUSTOMER_LOGIN_CHANNEL_ID=${LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME}:latest,LINE_ADMIN_GROUP_ID=${LINE_ADMIN_GROUP_ID_SECRET_NAME}:latest"
   --quiet
 )
 deploy_args+=("${env_args[@]}")
