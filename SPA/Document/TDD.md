@@ -182,6 +182,12 @@ Customer Web obtains a LINE ID token through LIFF/LINE Login and submits it only
 
 The API derives the trusted LINE User ID from the verified token. It never trusts a client-provided User ID, display name, or profile object. No application customer JWT is issued in Phase 1.
 
+### 7.2.1 Read-only Customer Booking List
+
+`POST /api/v1/customer/bookings:list` accepts `lineIdToken`, `view` (`UPCOMING` or `HISTORY`), `pageSize` (maximum 50), and an optional signed `pageToken`. The API verifies the LINE token on each request and derives `SHA-256("LINE:" + channelId + ":" + lineUserId)`; raw LINE IDs and ID tokens are never query fields or response data.
+
+The query filters `bookings.lineIdentityHash`, orders by `startAt` plus document ID, and classifies each result against one stable `asOf` timestamp for the complete paginated traversal. Upcoming contains future `PENDING`/`CONFIRMED` Bookings plus `IN_SERVICE`; History contains terminal statuses and past `PENDING`/`CONFIRMED` Bookings. Upcoming is ascending; History is descending. The API scans filtered records in bounded batches so stale operational statuses cannot leave past appointments in Upcoming. The signed base64url cursor is bound to the selected view and carries the signed `asOf` timestamp; it uses the existing Customer Messaging channel secret with the domain separator `customer-bookings:v1` as signing material. Responses contain only public Booking ID, status, local appointment, service-name snapshots, pax, estimated total, currency semantics, and `nextPageToken`.
+
 ### 7.3 Customer Profile Resolution
 
 - A follow/unfollow webhook updates a pseudonymous `line_friendships` record. Following the OA alone does not create a Customer Profile or CRM record.
@@ -385,7 +391,7 @@ Public Booking ID sequence contention is acceptable at the approved volume. The 
 | `app_users` | Firebase UID, email, role, active state |
 | `app_user_invitations` | Invite-only email allowlist before first login |
 | `line_groups` | Registered Admin Group IDs and status; no channel secret |
-| `line_booking_links` | Verified Booking-to-LINE linkage required for push messages |
+| `line_booking_links` | Restricted verified Booking-to-LINE linkage required for push messages and customer-list indexing |
 | `guest_status_tokens` | SHA-256 token digest, Booking reference, lifecycle metadata |
 | `booking_daily_counters` | Per-branch/local-date public sequence |
 | `idempotency_records` | Caller scope, payload digest, stored response, expiry |
@@ -551,6 +557,8 @@ An idempotent retry with the same key and body returns the stored result and doe
 - Admin Web may revoke and issue a replacement token.
 - Resolution returns masked phone, no health detail, no internal IDs, and no therapist detail.
 - Five failed resolutions per enforcement key in 15 minutes trigger temporary throttling.
+
+A successful `POST /api/v1/public/booking-line-links` transaction also writes the channel-scoped `lineIdentityHash` and derived `customerListBucket` to the Booking. This makes an older Guest Booking visible in `/my-bookings` without using phone matching. Existing verified links are migrated by the dry-run-first `backfill_customer_booking_index.py` tool.
 
 ## 19. LINE Technical Integration
 

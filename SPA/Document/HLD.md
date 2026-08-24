@@ -165,6 +165,7 @@ Responsibilities:
 - Obtain a reCAPTCHA token for Guest submission
 - Display Booking ID, `PENDING` acknowledgement, and a Secure Status Link
 - Offer optional LINE account linking after a Guest Booking
+- Present a read-only Upcoming/History list for Bookings linked to the verified LINE identity
 
 The Customer Web holds no database credential and cannot decide that capacity is available. Availability displayed by the UI is advisory until the SPA API completes the submit transaction.
 
@@ -290,11 +291,13 @@ Test code and identities must not read the production `spa-db` database. Product
 | Mode | Identity proof | Booking rights | Notification and status |
 | --- | --- | --- | --- |
 | Website Guest | No account; nickname and phone are contact data, not authentication | Can search availability and submit after abuse checks | Booking ID and Secure Status Link; phone fallback; no SMS |
-| LINE-linked | Server-verified LINE credential or completed account-linking flow | Same Booking rights as Guest | Secure Status Link plus eligible Customer LINE OA messages |
+| LINE-linked | Server-verified LINE credential or completed account-linking flow | Same Booking rights as Guest plus read-only access to its linked Booking list | Secure Status Link plus eligible Customer LINE OA messages |
 
 For a LIFF/LINE Login flow, the client sends the LINE token to the SPA API over HTTPS. The API verifies the credential with LINE and derives the trusted LINE User ID. The API must not accept a client-supplied User ID or display name as verified identity.
 
 A LINE-linked Booking can still receive a Secure Status Link. LINE delivery is best effort because delivery eligibility may change, for example when a user blocks the OA.
+
+`/my-bookings` verifies a fresh LINE ID token on every list request and queries a channel-scoped identity hash stored on linked Booking aggregates. It never discovers Bookings by phone. `/status` remains an independent bearer capability for exactly one Booking; a valid status link may attach that Booking to the verified LINE identity for subsequent list access.
 
 ### 9.2 Guest Secure Status Link
 
@@ -521,7 +524,7 @@ Firestore is the system of record for Phase 1 operational data. Clients access i
 | Branch configuration | Branch identity, Asia/Bangkok timezone, operating hours, holidays, advance window, map/contact data |
 | Service catalog | Service, duration variant, price, active state, resource compatibility |
 | Resources and blocks | Rooms, beds, service areas, capacity, blocked periods, buffer configuration |
-| Bookings | Booking number, branch, contact snapshot, state, appointment, totals, source, timestamps |
+| Bookings | Booking number, branch, contact snapshot, state, appointment, totals, source, timestamps, and privacy-safe LINE list index fields |
 | Booking line items | Service/variant snapshot, pricing mode, required pax, quantity, and price charged once per sellable item |
 | Participants | Nickname, selected line-item reference, required health snapshot, assigned resource and therapist references |
 | Resource-time reservations | Capacity consumption for the complete participant intervals |

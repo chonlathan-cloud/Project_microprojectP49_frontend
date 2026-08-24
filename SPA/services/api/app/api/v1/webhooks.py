@@ -221,6 +221,7 @@ def _process_admin_command(
             booking_ref,
             {
                 "status": "CONFIRMED",
+                "customerListBucket": "UPCOMING",
                 "version": int(booking.get("version", 1)) + 1,
                 "updatedAt": now,
             },

@@ -23,8 +23,15 @@ from app.core.settings import get_settings
 from app.domains.capacity.buckets import required_bucket_starts
 from app.domains.catalog.seed import load_catalog_manifest
 from app.domains.customers.phone import mask_phone, normalize_thai_phone
+from app.integrations.line_identity import line_identity_hash
 
 BRANCH_TIMEZONE = ZoneInfo("Asia/Bangkok")
+
+UPCOMING_BOOKING_STATUSES = {"PENDING", "CONFIRMED", "IN_SERVICE"}
+
+
+def customer_list_bucket(status: str) -> str:
+    return "UPCOMING" if status in UPCOMING_BOOKING_STATUSES else "HISTORY"
 
 
 def _validate_advance_window(
@@ -219,12 +226,15 @@ def create_booking(
             "branchId": branch_id,
             "source": "LINE_CUSTOMER" if line_identity else "GUEST_WEB",
             "status": "PENDING",
+            "customerListBucket": "UPCOMING",
             "contact": {"phoneMasked": mask_phone(e164), "phoneE164": e164},
             "customerName": str(selections[0][0].get("nickname", "Guest")),
             "serviceName": selections[0][1].name_en,
             "serviceId": selections[0][1].id,
             "serviceNameTh": selections[0][1].name_th,
             "serviceNameEn": selections[0][1].name_en,
+            "serviceNamesTh": [service.name_th for _, service, _ in selections],
+            "serviceNamesEn": [service.name_en for _, service, _ in selections],
             "startAt": start_at,
             "endAt": start_at + timedelta(minutes=max_duration),
             "localDate": date,
@@ -242,6 +252,10 @@ def create_booking(
             "updatedAt": now,
             "statusTokenHash": status_token_hash,
         }
+        if line_identity:
+            booking_data["lineIdentityHash"] = line_identity_hash(
+                str(line_identity["sub"]), str(line_identity.get("aud", ""))
+            )
         tx.set(booking_ref, booking_data)
         if line_identity:
             line_user_id = str(line_identity["sub"])

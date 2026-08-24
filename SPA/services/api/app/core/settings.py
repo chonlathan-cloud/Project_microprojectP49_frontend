@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     booking_terms_version: str = "terms-draft-v1"
     no_show_grace_minutes: int = 15
     line_customer_login_channel_id: str = ""
+    line_customer_messaging_channel_secret: str = ""
 
     @property
     def allowed_origins(self) -> list[str]:

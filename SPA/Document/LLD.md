@@ -818,6 +818,19 @@ while the verified LINE ID token/deterministic identity hash enforces one partic
 
 Raw LINE User IDs are permitted only in this restricted document and audit when required. Logs use a keyed hash.
 
+The corresponding `bookings/{bookingDocId}` stores only the derived list index:
+
+```json
+{
+  "lineIdentityHash": "sha256-LINE-channel-user-hex",
+  "customerListBucket": "UPCOMING",
+  "serviceNamesTh": ["นวดอโรม่า"],
+  "serviceNamesEn": ["Aroma Therapy"]
+}
+```
+
+`customerListBucket` remains a status-derived compatibility field: it is `UPCOMING` for `PENDING`, `CONFIRMED`, and `IN_SERVICE`, and every status transition updates it transactionally. The customer list API does not use it as the final view decision because a `PENDING` or `CONFIRMED` Booking can become historical as time passes without a write. Instead, the API queries by `lineIdentityHash`, orders by `startAt`, and classifies against a signed, pagination-stable `asOf` timestamp. Future `PENDING`/`CONFIRMED` and `IN_SERVICE` are Upcoming; terminal statuses and past `PENDING`/`CONFIRMED` are History. Composite indexes cover `(lineIdentityHash ASC, startAt ASC)` and its descending equivalent. The list response is an explicit safe projection and never reuses the Admin serializer.
+
 ### 6.15 Guard and Idempotency Documents
 
 `phone_booking_guards/{branchId_phoneKey}`:

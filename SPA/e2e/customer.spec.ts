@@ -260,3 +260,84 @@ test("LINE campaign asks non-followers to add the OA before showing PII fields",
   await page.getByRole("button", { name: "เพิ่มเพื่อนและตรวจสอบ" }).click();
   await expect(page.getByRole("textbox", { name: /ชื่อ-นามสกุล/ })).toBeVisible();
 });
+
+test("LINE customer can review upcoming bookings and history without exposing PII", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "liff", {
+      value: {
+        init: async () => undefined,
+        isLoggedIn: () => true,
+        isInClient: () => true,
+        login: () => undefined,
+        getIDToken: () => "test-line-id-token-with-minimum-length",
+        getFriendship: async () => ({ friendFlag: true })
+      },
+      configurable: true
+    });
+  });
+  await page.route("**/api/config", async (route) => {
+    await route.fulfill({ json: { lineLiffId: "booking-test-liff-id" } });
+  });
+  await page.route("**/api/spa/api/v1/customer/bookings:list", async (route) => {
+    const request = route.request().postDataJSON() as { lineIdToken: string; view: string };
+    expect(request.lineIdToken).toBe("test-line-id-token-with-minimum-length");
+    const items = request.view === "UPCOMING" ? [{
+      bookingId: "BK-20260825-ABC123",
+      status: "CONFIRMED",
+      localDate: "2026-08-25",
+      localStartTime: "10:00",
+      timezone: "Asia/Bangkok",
+      serviceNamesTh: ["นวดอโรม่า"],
+      serviceNamesEn: ["Aroma Therapy"],
+      pax: 1,
+      estimatedAmountSatang: 50000,
+      priceIncludesVat: true
+    }] : [];
+    await route.fulfill({ json: { items, nextPageToken: null } });
+  });
+
+  await page.goto(`${customerUrl}/my-bookings`, { waitUntil: "networkidle" });
+  await expect(page.getByRole("heading", { name: "การจองของฉัน" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "SPA 49" })).toBeVisible();
+  await expect(page.getByText("นัดหมายถัดไป")).toBeVisible();
+  await expect(page.getByText("นวดอโรม่า")).toBeVisible();
+  await page.getByText("ดูรายละเอียด").click();
+  await expect(page.getByText("BK-20260825-ABC123")).toBeVisible();
+  expect(await page.getByText("0812345678").count()).toBe(0);
+
+  await page.getByRole("tab", { name: "ประวัติ" }).click();
+  await expect(page.getByRole("heading", { name: "ยังไม่มีประวัติการจอง" })).toBeVisible();
+  expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("My Bookings resumes after delayed LIFF authentication", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "liff", {
+      value: {
+        init: async () => new Promise<void>((resolve) => window.setTimeout(resolve, 1_000)),
+        isLoggedIn: () => true,
+        isInClient: () => true,
+        login: () => undefined,
+        getIDToken: () => "delayed-line-id-token-with-minimum-length",
+        getFriendship: async () => ({ friendFlag: true })
+      },
+      configurable: true
+    });
+  });
+  await page.route("**/api/config", async (route) => {
+    await route.fulfill({ json: { lineLiffId: "booking-test-liff-id" } });
+  });
+  await page.route("**/api/spa/api/v1/customer/bookings:list", async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      lineIdToken: "delayed-line-id-token-with-minimum-length",
+      view: "UPCOMING"
+    });
+    await route.fulfill({ json: { items: [], nextPageToken: null } });
+  });
+
+  await page.goto(`${customerUrl}/my-bookings`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("tab", { name: "กำลังจะมาถึง" })).toBeDisabled();
+  await expect(page.getByText("กำลังยืนยันบัญชี LINE…")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "ยังไม่มีการจองที่กำลังจะมาถึง" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "กำลังจะมาถึง" })).toBeEnabled();
+});

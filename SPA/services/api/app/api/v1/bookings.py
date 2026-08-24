@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
+import json
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, status
 from google.cloud import firestore
@@ -12,10 +15,19 @@ from app.core.auth import require_admin_user
 from app.core.errors import ConflictDomainError, NotFoundDomainError, ValidationDomainError
 from app.core.settings import get_settings
 from app.core.types import BookingStatus
-from app.domains.bookings.service import create_booking, serialize_booking
+from app.domains.bookings.service import (
+    create_booking,
+    customer_list_bucket,
+    serialize_booking,
+)
 from app.domains.bookings.state_machine import BookingStateMachine
 from app.infrastructure.firestore import get_firestore_client
-from app.integrations.line_identity import verify_line_id_token as _verify_line_id_token
+from app.integrations.line_identity import (
+    line_identity_hash,
+)
+from app.integrations.line_identity import (
+    verify_line_id_token as _verify_line_id_token,
+)
 
 router = APIRouter(tags=["bookings"])
 
@@ -59,6 +71,112 @@ class StatusResolveRequest(ApiModel):
 
 class BookingLineLinkRequest(StatusResolveRequest):
     line_id_token: str = Field(min_length=20, max_length=4096)
+
+
+class CustomerBookingListRequest(ApiModel):
+    line_id_token: str = Field(min_length=20, max_length=4096)
+    view: Literal["UPCOMING", "HISTORY"] = "UPCOMING"
+    page_size: int = Field(default=20, ge=1, le=50)
+    page_token: str | None = Field(default=None, max_length=2048)
+
+
+CUSTOMER_BOOKING_SCAN_BATCH_SIZE = 100
+CUSTOMER_ACTIVE_STATUSES = {"PENDING", "CONFIRMED"}
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _cursor_secret() -> bytes:
+    secret = get_settings().line_customer_messaging_channel_secret
+    if not secret:
+        raise ValidationDomainError("Customer booking pagination is not configured")
+    return secret.encode()
+
+
+def _encode_customer_cursor(
+    *, view: str, start_at: datetime, document_id: str, as_of: datetime
+) -> str:
+    payload = json.dumps(
+        {
+            "view": view,
+            "startAt": start_at.isoformat(),
+            "documentId": document_id,
+            "asOf": as_of.isoformat(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        _cursor_secret(), b"customer-bookings:v1:" + payload, hashlib.sha256
+    ).digest()
+    encoded_payload = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{encoded_payload}.{encoded_signature}"
+
+
+def _decode_customer_cursor(
+    token: str, *, expected_view: str
+) -> tuple[datetime, str, datetime]:
+    try:
+        encoded_payload, encoded_signature = token.split(".", 1)
+        payload = base64.urlsafe_b64decode(
+            encoded_payload + "=" * (-len(encoded_payload) % 4)
+        )
+        signature = base64.urlsafe_b64decode(
+            encoded_signature + "=" * (-len(encoded_signature) % 4)
+        )
+        expected = hmac.new(
+            _cursor_secret(), b"customer-bookings:v1:" + payload, hashlib.sha256
+        ).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError
+        state = json.loads(payload)
+        if state.get("view") != expected_view:
+            raise ValueError
+        start_at = datetime.fromisoformat(str(state["startAt"]))
+        document_id = str(state["documentId"])
+        as_of_value = state.get("asOf")
+        as_of = datetime.fromisoformat(str(as_of_value)) if as_of_value else _utc_now()
+        if not document_id or start_at.tzinfo is None or as_of.tzinfo is None:
+            raise ValueError
+        return start_at, document_id, as_of
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValidationDomainError("Invalid customer booking page token") from error
+
+
+def _customer_booking_view(data: dict[str, object], *, as_of: datetime) -> str:
+    status_value = str(data.get("status", ""))
+    start_at = data.get("startAt")
+    upcoming = status_value == "IN_SERVICE" or (
+        status_value in CUSTOMER_ACTIVE_STATUSES
+        and isinstance(start_at, datetime)
+        and start_at >= as_of
+    )
+    return "UPCOMING" if upcoming else "HISTORY"
+
+
+def _serialize_customer_booking(snapshot: firestore.DocumentSnapshot) -> dict[str, object]:
+    data = snapshot.to_dict() or {}
+    service_names_th = data.get("serviceNamesTh")
+    service_names_en = data.get("serviceNamesEn")
+    return {
+        "bookingId": data.get("publicBookingId", snapshot.id),
+        "status": data.get("status"),
+        "localDate": data.get("localDate"),
+        "localStartTime": data.get("localStartTime"),
+        "timezone": data.get("timezone", "Asia/Bangkok"),
+        "serviceNamesTh": service_names_th
+        if isinstance(service_names_th, list)
+        else [data.get("serviceNameTh") or data.get("serviceName") or ""],
+        "serviceNamesEn": service_names_en
+        if isinstance(service_names_en, list)
+        else [data.get("serviceNameEn") or data.get("serviceName") or ""],
+        "pax": data.get("pax"),
+        "estimatedAmountSatang": data.get("estimatedAmountSatang"),
+        "priceIncludesVat": bool(data.get("priceIncludesVat", True)),
+    }
 
 
 @router.post("/api/v1/public/bookings", status_code=status.HTTP_201_CREATED)
@@ -134,7 +252,7 @@ async def link_booking_to_line(
     identity = _verify_line_id_token(request.line_id_token)
     line_user_id = str(identity["sub"])
     channel_id = get_settings().line_customer_login_channel_id
-    line_user_hash = hashlib.sha256(line_user_id.encode()).hexdigest()
+    line_user_hash = line_identity_hash(line_user_id, channel_id)
     link_ref = client.collection("line_booking_links").document(booking.id)
     transaction = client.transaction()
 
@@ -142,40 +260,113 @@ async def link_booking_to_line(
     def write(tx: firestore.Transaction) -> bool:
         snapshot = link_ref.get(transaction=tx)
         existing = snapshot.to_dict() or {} if snapshot.exists else {}
-        if existing:
-            if existing.get("lineUserId") != line_user_id:
-                raise ConflictDomainError("Booking is already linked to another LINE account")
-            if existing.get("active"):
-                return True
+        if existing and existing.get("lineUserId") != line_user_id:
+            raise ConflictDomainError("Booking is already linked to another LINE account")
+        idempotent = bool(existing.get("active"))
         now = datetime.now(UTC)
+        if not idempotent:
+            tx.set(
+                link_ref,
+                {
+                    "bookingDocId": booking.id,
+                    "lineUserId": line_user_id,
+                    "channelId": channel_id,
+                    "verifiedAt": now,
+                    "linkedAt": existing.get("linkedAt", now),
+                    "active": True,
+                    "version": int(existing.get("version", 0)) + 1,
+                },
+                merge=True,
+            )
         tx.set(
-            link_ref,
+            booking.reference,
             {
-                "bookingDocId": booking.id,
-                "lineUserId": line_user_id,
-                "channelId": channel_id,
-                "verifiedAt": now,
-                "linkedAt": existing.get("linkedAt", now),
-                "active": True,
-                "version": int(existing.get("version", 0)) + 1,
+                "lineIdentityHash": line_user_hash,
+                "customerListBucket": customer_list_bucket(str(booking_data.get("status", ""))),
+                "updatedAt": now,
             },
             merge=True,
         )
-        tx.set(
-            client.collection("audit_events").document(),
-            {
-                "eventType": "BOOKING_LINE_LINKED",
-                "bookingDocId": booking.id,
-                "publicBookingId": request.booking_id,
-                "actorType": "LINE_CUSTOMER",
-                "actorIdHash": line_user_hash,
-                "createdAt": now,
-            },
-        )
-        return False
+        if not idempotent:
+            tx.set(
+                client.collection("audit_events").document(),
+                {
+                    "eventType": "BOOKING_LINE_LINKED",
+                    "bookingDocId": booking.id,
+                    "publicBookingId": request.booking_id,
+                    "actorType": "LINE_CUSTOMER",
+                    "actorIdHash": line_user_hash,
+                    "createdAt": now,
+                },
+            )
+        return idempotent
 
     idempotent = write(transaction)
     return {"bookingId": request.booking_id, "linked": True, "idempotent": idempotent}
+
+
+@router.post("/api/v1/customer/bookings:list")
+async def list_customer_bookings(
+    request: CustomerBookingListRequest,
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> dict[str, object]:
+    identity = _verify_line_id_token(request.line_id_token)
+    identity_hash = line_identity_hash(
+        str(identity["sub"]),
+        str(identity.get("aud") or get_settings().line_customer_login_channel_id),
+    )
+    direction = (
+        firestore.Query.ASCENDING if request.view == "UPCOMING" else firestore.Query.DESCENDING
+    )
+    base_query = (
+        client.collection("bookings")
+        .where("lineIdentityHash", "==", identity_hash)
+        .order_by("startAt", direction=direction)
+        .order_by("__name__", direction=direction)
+    )
+    as_of = _utc_now()
+    query = base_query
+    if request.page_token:
+        start_at, document_id, as_of = _decode_customer_cursor(
+            request.page_token, expected_view=request.view
+        )
+        query = query.start_after([start_at, document_id])
+
+    matching_snapshots: list[firestore.DocumentSnapshot] = []
+    while len(matching_snapshots) <= request.page_size:
+        snapshots = list(query.limit(CUSTOMER_BOOKING_SCAN_BATCH_SIZE).stream())
+        for snapshot in snapshots:
+            data = snapshot.to_dict() or {}
+            if _customer_booking_view(data, as_of=as_of) == request.view:
+                matching_snapshots.append(snapshot)
+                if len(matching_snapshots) > request.page_size:
+                    break
+        if len(matching_snapshots) > request.page_size:
+            break
+        if len(snapshots) < CUSTOMER_BOOKING_SCAN_BATCH_SIZE:
+            break
+        last_data = snapshots[-1].to_dict() or {}
+        last_start_at = last_data.get("startAt")
+        if not isinstance(last_start_at, datetime):
+            break
+        query = base_query.start_after([last_start_at, snapshots[-1].id])
+
+    page = matching_snapshots[: request.page_size]
+    next_page_token = None
+    if len(matching_snapshots) > request.page_size and page:
+        last_data = page[-1].to_dict() or {}
+        last_start_at = last_data.get("startAt")
+        if isinstance(last_start_at, datetime):
+            next_page_token = _encode_customer_cursor(
+                view=request.view,
+                start_at=last_start_at,
+                document_id=page[-1].id,
+                as_of=as_of,
+            )
+    return {
+        "items": [_serialize_customer_booking(snapshot) for snapshot in page],
+        "nextPageToken": next_page_token,
+    }
 
 
 @router.get("/api/v1/admin/bookings")
@@ -290,6 +481,7 @@ async def transition_admin_booking(
         next_version = int(data.get("version", 1)) + 1
         update: dict[str, object] = {
             "status": target.value,
+            "customerListBucket": customer_list_bucket(target.value),
             "version": next_version,
             "updatedAt": now,
         }

@@ -128,6 +128,40 @@ uv run python scripts/sync_line_followers.py --environment production \
 If LINE returns `403`, that OA does not have Followers API access; keep the explicit LIFF evidence
 policy enabled for this low-value campaign instead of attempting a follower export.
 
+### Read-only My Bookings rollout
+
+Deploy the new Firestore indexes before API traffic uses `/api/v1/customer/bookings:list`:
+
+```bash
+gcloud firestore indexes composite create \
+  --project=the49-487609 --database=spa-test-db \
+  --collection-group=bookings --query-scope=collection \
+  --field-config=field-path=lineIdentityHash,order=ascending \
+  --field-config=field-path=startAt,order=ascending
+gcloud firestore indexes composite create \
+  --project=the49-487609 --database=spa-test-db \
+  --collection-group=bookings --query-scope=collection \
+  --field-config=field-path=lineIdentityHash,order=ascending \
+  --field-config=field-path=startAt,order=descending
+```
+
+These indexes support time-aware list classification. Existing indexes that also contain
+`customerListBucket` can remain; the current API no longer depends on that materialized status-only
+bucket when deciding whether an appointment belongs in Upcoming or History.
+
+Backfill existing verified Booking-to-LINE links after reviewing the dry-run. The script does not
+print or copy raw LINE user IDs:
+
+```bash
+cd SPA/services/api
+uv run python scripts/backfill_customer_booking_index.py --environment test
+uv run python scripts/backfill_customer_booking_index.py --environment test \
+  --apply --confirm-database spa-test-db
+```
+
+Repeat with `--environment production` and `--confirm-database spa-db` only after Test acceptance.
+The Rich Menu target uses the existing Booking LIFF app: `https://liff.line.me/<BOOKING_LIFF_ID>/my-bookings`.
+
 The notification worker has its own lockfile and environment under `services/notification-worker`
 and defaults to port `8081` locally. Test messages are prefixed `[TEST]` whenever
 `APP_ENV` is not `production`.

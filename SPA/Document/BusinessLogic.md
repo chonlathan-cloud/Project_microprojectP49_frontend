@@ -524,6 +524,15 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 | BL-PRI-003 | Booking acknowledgement และ Explicit Health Consent ต้องแยก checkbox, ไม่ pre-check และเก็บหลักฐานแบบ versioned ต่อ Participant |
 | BL-CAT-001 | Initial catalog ต้องมี 11 Service ตามหัวข้อ 7.1 รวม Couple Package แบบ `PER_BOOKING` สำหรับ 2 คนและ Hot Compress แบบจองเดี่ยว |
 
+### 19.1 Phase 1.5 — My Bookings แบบ Read-only
+
+- ลูกค้าที่ผ่าน LINE Login สามารถเปิด `/my-bookings` เพื่อดูเฉพาะ Booking ที่เชื่อมกับ LINE identity เดียวกัน
+- แบ่งเป็น `กำลังจะมาถึง` สำหรับ `PENDING`/`CONFIRMED` ที่เวลานัดยังไม่ผ่าน และ `IN_SERVICE`; `ประวัติ` รวมสถานะสิ้นสุดทั้งหมด รวมถึง `PENDING`/`CONFIRMED` ที่เวลานัดผ่านแล้ว เพื่อไม่ให้ข้อมูลค้างจากงานปฏิบัติการแสดงเป็นนัดหมายอนาคต
+- หน้าแสดงเฉพาะ Booking ID, สถานะ, วันเวลา, Service snapshot, Pax และราคาประเมินรวม ไม่แสดงเบอร์โทร ข้อมูลสุขภาพ พนักงาน หรือ Internal ID
+- Booking จาก Guest Website จะปรากฏหลังลูกค้าเชื่อมด้วย Secure Status Link ที่ถูกต้องแล้วเท่านั้น ห้ามค้นหรือเปิดเผยรายการจากเบอร์โทรเพียงอย่างเดียว
+- รอบนี้เป็น Read-only; ลูกค้ายังไม่สามารถ Reschedule หรือ Cancel เองและต้องติดต่อร้าน
+- `/status` ยังคงเป็น Bearer Link สำหรับ Booking เดียวและไม่เปลี่ยนเป็นหน้าบัญชีลูกค้า
+
 ## 20. Phase 2 — CRM & Membership
 
 รายการต่อไปนี้ถูกวางแผนไว้แต่ไม่เปิดใช้ใน Phase 1:
@@ -535,7 +544,7 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 - Birthday Voucher และการส่งสิทธิ์ในเดือนเกิดอัตโนมัติ
 - Customer Directory และ Visit History เชิง CRM
 - Loyalty Tier และ Campaign
-- Customer Self-service My Bookings, Reschedule และ Cancel
+- Customer Self-service Reschedule และ Cancel (My Bookings แบบ Read-only เปิดใช้ใน Phase 1.5 แล้ว)
 - Online Payment
 - Analytics ขั้นสูง
 - Therapist commission reporting
