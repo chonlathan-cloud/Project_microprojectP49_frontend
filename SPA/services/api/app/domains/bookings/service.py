@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from datetime import UTC, datetime, timedelta
 from datetime import date as calendar_date
 from secrets import token_urlsafe
@@ -23,6 +22,7 @@ from app.core.errors import (
 from app.core.settings import get_settings
 from app.domains.capacity.buckets import required_bucket_starts
 from app.domains.catalog.seed import load_catalog_manifest
+from app.domains.customers.phone import mask_phone, normalize_thai_phone
 
 BRANCH_TIMEZONE = ZoneInfo("Asia/Bangkok")
 
@@ -44,19 +44,6 @@ def _validate_advance_window(
         raise AdvanceWindowViolation(
             f"Bookings must be made {min_days} to {max_days} local calendar days in advance"
         )
-
-
-def normalize_thai_phone(value: str) -> str:
-    digits = re.sub(r"\D", "", value)
-    if digits.startswith("66"):
-        digits = "0" + digits[2:]
-    if len(digits) != 10 or not digits.startswith("0"):
-        raise ValidationDomainError("A valid Thai phone number is required")
-    return f"+66{digits[1:]}"
-
-
-def mask_phone(e164: str) -> str:
-    return f"0{e164[3:5]}-xxx-{e164[-4:]}"
 
 
 def _variant(client: firestore.Client, variant_id: str):

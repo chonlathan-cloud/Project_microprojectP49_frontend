@@ -1421,6 +1421,7 @@ LINE_PROVIDER_ID_SECRET_NAME=spa-line-provider-id
 LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME=spa-line-customer-login-channel-id
 LINE_CUSTOMER_LOGIN_CHANNEL_SECRET_NAME=spa-line-customer-login-channel-secret
 LINE_CUSTOMER_LIFF_ID_SECRET_NAME=spa-line-customer-liff-id
+LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME=spa-line-campaign-v1-liff-id
 LINE_CUSTOMER_MESSAGING_CHANNEL_ID_SECRET_NAME=spa-line-customer-messaging-channel-id
 LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME=spa-line-customer-messaging-channel-secret
 LINE_ADMIN_MESSAGING_CHANNEL_ID_SECRET_NAME=spa-line-admin-messaging-channel-id

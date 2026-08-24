@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from google.api_core.exceptions import AlreadyExists
 
+from app.api.v1 import webhooks
 from app.infrastructure.firestore import get_firestore_client
 from app.main import app
 
@@ -15,15 +16,23 @@ class FakeDocument:
     def __init__(self, store: dict[str, dict[str, object]], key: str) -> None:
         self.store = store
         self.key = key
+        self.id = key
 
     def create(self, value: dict[str, object]) -> None:
         if self.key in self.store:
             raise AlreadyExists("duplicate")
         self.store[self.key] = value
 
-    def get(self):
+    def get(self, transaction=None):
         value = self.store.get(self.key)
-        return type("Snapshot", (), {"exists": value is not None})()
+        return type(
+            "Snapshot",
+            (),
+            {
+                "exists": value is not None,
+                "to_dict": lambda _self: dict(value) if value is not None else None,
+            },
+        )()
 
     def set(self, value: dict[str, object], merge: bool = False) -> None:
         if merge and self.key in self.store:
@@ -33,24 +42,41 @@ class FakeDocument:
 
 
 class FakeCollection:
-    def __init__(self, store: dict[str, dict[str, object]]) -> None:
+    def __init__(self, database: "FakeFirestore", store: dict[str, dict[str, object]]) -> None:
+        self.database = database
         self.store = store
 
-    def document(self, key: str) -> FakeDocument:
+    def document(self, key: str | None = None) -> FakeDocument:
+        if key is None:
+            self.database.counter += 1
+            key = f"generated-{self.database.counter:03d}"
         return FakeDocument(self.store, key)
+
+
+class FakeTransaction:
+    def set(self, ref: FakeDocument, value: dict[str, object], merge: bool = False) -> None:
+        ref.set(value, merge=merge)
 
 
 class FakeFirestore:
     def __init__(self) -> None:
+        self.counter = 0
         self.events: dict[str, dict[str, object]] = {}
         self.groups: dict[str, dict[str, object]] = {}
+        self.identities: dict[str, dict[str, object]] = {}
+        self.customers: dict[str, dict[str, object]] = {}
 
     def collection(self, name: str) -> FakeCollection:
         stores = {
             "line_webhook_events": self.events,
             "line_group_candidates": self.groups,
+            "customer_identity_links": self.identities,
+            "customers": self.customers,
         }
-        return FakeCollection(stores[name])
+        return FakeCollection(self, stores[name])
+
+    def transaction(self) -> FakeTransaction:
+        return FakeTransaction()
 
 
 fake_firestore = FakeFirestore()
@@ -150,3 +176,39 @@ def test_customer_webhook_does_not_capture_group_candidate(monkeypatch) -> None:
     )
     assert response.status_code == 200
     assert fake_firestore.groups == {}
+
+
+def test_customer_follow_creates_customer_and_friend_identity(monkeypatch) -> None:
+    monkeypatch.setenv("LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET", "customer-secret")
+    monkeypatch.setattr(webhooks.firestore, "transactional", lambda function: function)
+    fake_firestore.events.clear()
+    fake_firestore.identities.clear()
+    fake_firestore.customers.clear()
+    body = json.dumps(
+        {
+            "events": [
+                {
+                    "webhookEventId": "evt-follow-001",
+                    "type": "follow",
+                    "timestamp": 1787216400000,
+                    "source": {"type": "user", "userId": "line-user-001"},
+                }
+            ]
+        },
+        separators=(",", ":"),
+    ).encode()
+
+    response = client.post(
+        "/api/v1/webhooks/line/customer",
+        content=body,
+        headers={"x-line-signature": signature(body, "customer-secret")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] == 1
+    identity = next(iter(fake_firestore.identities.values()))
+    customer = next(iter(fake_firestore.customers.values()))
+    assert identity["lineUserId"] == "line-user-001"
+    assert identity["friendStatus"] == "FOLLOWING"
+    assert customer["friendStatus"] == "FOLLOWING"
+    assert customer["source"] == "LINE_FOLLOW"

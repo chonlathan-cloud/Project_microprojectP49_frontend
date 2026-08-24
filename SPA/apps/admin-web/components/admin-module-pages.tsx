@@ -6,10 +6,11 @@ import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAdminFeedback } from "@/components/admin-feedback";
+import { CampaignOperations } from "@/components/campaign-operations";
 import { adminApi } from "@/lib/admin-api";
 import { countNotificationsRequiringAction, isNotificationState, notificationRequiresAction, type NotificationState } from "@/lib/notification-state";
 
-export type AdminView = "calendar" | "capacity" | "services" | "therapists" | "notifications";
+export type AdminView = "calendar" | "capacity" | "services" | "therapists" | "notifications" | "campaign-operations";
 
 type Resource = { resourceId: string; name: string; active: boolean; version: number };
 type Closure = { closureId: string; localDate: string; reason: string };
@@ -49,6 +50,7 @@ export function AdminModulePage({ view, locale, user, bookings, notificationFilt
   if (view === "capacity") return <CapacityPage locale={locale} user={user} />;
   if (view === "services") return <ServicesPage locale={locale} user={user} />;
   if (view === "therapists") return <TherapistsPage locale={locale} user={user} bookings={bookings} onBookingsChanged={onBookingsChanged} />;
+  if (view === "campaign-operations") return <CampaignOperations locale={locale} user={user} />;
   return <NotificationsPage locale={locale} user={user} filter={notificationFilter} onFilterChange={onNotificationFilterChange} onActionRequiredCountChange={onNotificationCountChange} />;
 }
 

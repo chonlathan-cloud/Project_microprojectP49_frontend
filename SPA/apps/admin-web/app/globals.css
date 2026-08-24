@@ -325,6 +325,52 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .notification-filter button[aria-pressed="true"] { border-color: var(--forest); background: #e9eee6; color: var(--forest-dark); }
 .notification-filter button span { min-width: 20px; height: 20px; padding: 0 6px; display: grid; place-items: center; border-radius: 999px; background: #eceff3; color: #394150; font-size: 10px; }
 .notification-filter button[aria-pressed="true"] span { background: var(--forest); color: white; }
+.campaign-tabs { margin-bottom: 16px; display: flex; gap: 4px; border-bottom: 1px solid #cfd4cc; }
+.campaign-tabs button { min-height: 44px; padding: 0 18px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; font-weight: 800; }
+.campaign-tabs button[aria-current="page"] { border-bottom-color: var(--forest); color: var(--forest-dark); }
+.campaign-toolbar { min-height: 76px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
+.campaign-toolbar h2, .campaign-toolbar p { margin: 0; }
+.campaign-toolbar h2 { font-size: 17px; }
+.campaign-toolbar p { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.campaign-toolbar-actions { display: flex; align-items: center; gap: 8px; }
+.campaign-toolbar select, .campaign-search input { min-height: 40px; padding: 0 11px; border: 1px solid #aeb6aa; border-radius: 8px; background: white; color: var(--text); }
+.campaign-search { padding: 12px 18px; display: grid; grid-template-columns: minmax(240px, 520px) auto; gap: 8px; border-bottom: 1px solid var(--line); }
+.campaign-search input { width: 100%; }
+.campaign-search button, .coupon-search-panel button { min-height: 40px; padding: 0 16px; border: 1px solid var(--forest); border-radius: 8px; background: var(--forest); color: white; cursor: pointer; font-weight: 800; }
+.campaign-status { width: max-content; min-height: 26px; padding: 4px 9px; display: inline-flex; align-items: center; border: 1px solid #c7cec3; border-radius: 999px; background: #eef1ec; color: #3e4b3a; font-size: 10px; font-weight: 900; }
+.campaign-status-active, .campaign-status-granted, .campaign-status-following, .campaign-status-issued { border-color: #79b98d; background: #e3f5e8; color: #166534; }
+.campaign-status-paused { border-color: #e7b958; background: #fff3cc; color: #754500; }
+.campaign-status-ended, .campaign-status-denied, .campaign-status-void, .campaign-status-expired { border-color: #b7bdc6; background: #eceff3; color: #394150; }
+.campaign-status-redeemed { border-color: #93b4ed; background: #e7f0ff; color: #1648a0; }
+.coupon-workspace { display: grid; grid-template-columns: minmax(320px, 430px) minmax(420px, 1fr); align-items: start; gap: 18px; }
+.coupon-search-panel, .coupon-result { padding: 22px; border: 1px solid var(--line); border-radius: 11px; background: white; }
+.coupon-search-panel h2, .coupon-search-panel p, .coupon-result h2 { margin: 0; }
+.coupon-search-panel > p:not(.eyebrow) { margin-top: 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.coupon-search-panel label { margin-top: 22px; display: grid; gap: 7px; font-size: 12px; font-weight: 800; }
+.coupon-search-panel input { width: 100%; min-height: 46px; padding: 0 12px; border: 1px solid #aeb6aa; border-radius: 8px; font-family: ui-monospace, monospace; letter-spacing: .05em; text-transform: uppercase; }
+.coupon-search-panel button { width: 100%; margin-top: 12px; }
+.coupon-result-heading { padding-bottom: 18px; display: flex; align-items: start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
+.coupon-result dl, .pii-detail { margin: 0; }
+.coupon-result dl > div, .pii-detail > div { padding: 13px 0; display: grid; grid-template-columns: 140px 1fr; gap: 18px; border-bottom: 1px solid #edf0eb; }
+.coupon-result dt, .pii-detail dt { color: var(--muted); font-size: 12px; font-weight: 700; }
+.coupon-result dd, .pii-detail dd { margin: 0; font-weight: 800; }
+.coupon-result dd small { margin-top: 4px; display: block; color: var(--muted); font-size: 11px; }
+.coupon-actions { margin-top: 18px; display: flex; gap: 8px; }
+.coupon-actions button { min-height: 42px; padding: 0 16px; border-radius: 8px; font-weight: 800; }
+.drawer-scrim { display: flex; justify-content: flex-end; position: fixed; z-index: 44; inset: 0; background: rgb(20 28 19 / 32%); }
+.campaign-drawer { width: min(520px, 100vw); height: 100vh; overflow-y: auto; border-left: 1px solid var(--line); background: white; box-shadow: -18px 0 44px rgb(31 41 55 / 16%); }
+.service-drawer-title button { width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 8px; background: white; cursor: pointer; font-size: 22px; }
+.campaign-editor { padding: 18px; display: grid; gap: 13px; }
+.campaign-editor label { display: grid; gap: 6px; color: var(--text); font-size: 12px; font-weight: 800; }
+.campaign-editor input, .campaign-editor textarea { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid #aeb6aa; border-radius: 8px; background: white; color: var(--text); }
+.campaign-editor textarea { min-height: 78px; resize: vertical; }
+.campaign-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.campaign-rule { margin: -3px 0 0; color: var(--muted); font-size: 11px; }
+.campaign-transitions { padding: 16px 18px; display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--line); background: #f8f9f7; }
+.campaign-transitions strong { margin-right: auto; font-size: 12px; }
+.campaign-transitions button { min-height: 38px; padding: 0 13px; border: 1px solid var(--forest); border-radius: 8px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 12px; font-weight: 800; }
+.pii-warning { margin: 18px; padding: 12px; border: 1px solid #e7b958; border-radius: 8px; background: #fff7dc; color: #754500; font-size: 12px; font-weight: 700; }
+.pii-detail { padding: 0 18px; }
 
 @media (max-width: 1279px) {
   .admin-layout { grid-template-columns: 76px minmax(0, 1fr); }
@@ -367,6 +413,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .inline-form { align-items: stretch; flex-direction: column; }
   .therapist-dispatch-grid { grid-template-columns: 1fr; }
   .assignment-item { grid-template-columns: 1fr; }
+  .coupon-workspace { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {
@@ -386,6 +433,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .assignment-controls > button { width: 100%; }
   .modal-backdrop { padding: 12px; }
   .toast-region { width: calc(100vw - 24px); top: 12px; right: 12px; }
+  .campaign-toolbar, .campaign-toolbar-actions { align-items: stretch; flex-direction: column; }
+  .campaign-search, .campaign-editor-grid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

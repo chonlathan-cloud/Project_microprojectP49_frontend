@@ -1,0 +1,526 @@
+<div id="spa49-welcome50-mockup">
+  <style>
+    #spa49-welcome50-mockup {
+      color-scheme: light dark;
+      display: grid;
+      place-items: start center;
+      width: 100%;
+      padding: 12px 0;
+      font-family: "Noto Sans Thai", "Prompt", system-ui, sans-serif;
+      color: light-dark(#3a3f38, #f4f0e5);
+    }
+
+    #spa49-welcome50-mockup * { box-sizing: border-box; }
+
+    #spa49-welcome50-mockup .spa49-phone {
+      width: min(100%, 430px);
+      overflow: hidden;
+      border: 1px solid light-dark(#d9d1bf, #596653);
+      border-radius: 24px;
+      background: light-dark(#f7f4eb, #20271f);
+      box-shadow: 0 16px 44px light-dark(rgba(58, 63, 56, 0.16), rgba(0, 0, 0, 0.35));
+    }
+
+    #spa49-welcome50-mockup .spa49-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 56px;
+      padding: 10px 18px;
+      border-bottom: 1px solid light-dark(#e4dece, #45503f);
+      background: light-dark(#fcfaf5, #293228);
+    }
+
+    #spa49-welcome50-mockup .spa49-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #spa49-welcome50-mockup .spa49-mark {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #4e6148;
+      color: #fffaf0;
+      font-family: Georgia, serif;
+      font-weight: 500;
+    }
+
+    #spa49-welcome50-mockup .spa49-brand strong,
+    #spa49-welcome50-mockup .spa49-brand small {
+      display: block;
+    }
+
+    #spa49-welcome50-mockup .spa49-brand strong {
+      font-family: "Noto Serif Thai", Georgia, serif;
+      font-weight: 500;
+    }
+
+    #spa49-welcome50-mockup .spa49-brand small {
+      color: light-dark(#687163, #c5ccb9);
+      font-size: 12px;
+    }
+
+    #spa49-welcome50-mockup .spa49-line-state {
+      font-size: 12px;
+      color: light-dark(#315b36, #bfe0b9);
+    }
+
+    #spa49-welcome50-mockup .spa49-main {
+      padding: 18px;
+    }
+
+    #spa49-welcome50-mockup .spa49-offer {
+      position: relative;
+      overflow: hidden;
+      padding: 22px 20px;
+      border-radius: 18px;
+      background: #4e6148;
+      color: #fffaf0;
+    }
+
+    #spa49-welcome50-mockup .spa49-offer::after {
+      content: "✦";
+      position: absolute;
+      right: 18px;
+      top: 12px;
+      color: #d8c08c;
+      font-size: 42px;
+      opacity: 0.55;
+    }
+
+    #spa49-welcome50-mockup .spa49-eyebrow {
+      margin: 0 0 6px;
+      color: #eadab5;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+    }
+
+    #spa49-welcome50-mockup h1 {
+      max-width: 270px;
+      margin: 0;
+      font-family: "Noto Serif Thai", Georgia, serif;
+      font-size: clamp(27px, 8vw, 34px);
+      line-height: 1.2;
+      font-weight: 500;
+    }
+
+    #spa49-welcome50-mockup .spa49-offer p:last-child {
+      margin: 10px 0 0;
+      color: #f2ead8;
+      font-size: 14px;
+    }
+
+    #spa49-welcome50-mockup .spa49-form-heading {
+      margin: 22px 0 14px;
+    }
+
+    #spa49-welcome50-mockup .spa49-form-heading h2 {
+      margin: 0 0 4px;
+      font-family: "Noto Serif Thai", Georgia, serif;
+      font-size: 20px;
+      font-weight: 500;
+    }
+
+    #spa49-welcome50-mockup .spa49-form-heading p {
+      margin: 0;
+      color: light-dark(#687163, #c5ccb9);
+      font-size: 13px;
+    }
+
+    #spa49-welcome50-mockup .spa49-field {
+      display: grid;
+      gap: 7px;
+      margin-bottom: 14px;
+    }
+
+    #spa49-welcome50-mockup label,
+    #spa49-welcome50-mockup legend {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    #spa49-welcome50-mockup input,
+    #spa49-welcome50-mockup select {
+      width: 100%;
+      min-height: 48px;
+      padding: 10px 12px;
+      border: 1px solid light-dark(#cfc7b4, #5c6957);
+      border-radius: 10px;
+      background: light-dark(#fcfaf5, #293228);
+      color: light-dark(#3a3f38, #f4f0e5);
+      font: inherit;
+    }
+
+    #spa49-welcome50-mockup input:focus,
+    #spa49-welcome50-mockup select:focus {
+      outline: 3px solid light-dark(rgba(195, 163, 108, 0.3), rgba(216, 192, 140, 0.35));
+      border-color: #9d7c43;
+    }
+
+    #spa49-welcome50-mockup .spa49-required { color: #b45309; }
+
+    #spa49-welcome50-mockup .spa49-birthday {
+      display: grid;
+      grid-template-columns: 0.85fr 1.5fr;
+      gap: 10px;
+      border: 0;
+      padding: 0;
+      margin: 0 0 14px;
+    }
+
+    #spa49-welcome50-mockup .spa49-birthday legend {
+      grid-column: 1 / -1;
+      margin-bottom: 0;
+    }
+
+    #spa49-welcome50-mockup .spa49-birthday small {
+      grid-column: 1 / -1;
+      color: light-dark(#687163, #c5ccb9);
+      font-size: 12px;
+    }
+
+    #spa49-welcome50-mockup .spa49-consents {
+      display: grid;
+      gap: 12px;
+      margin: 18px 0;
+      padding-top: 16px;
+      border-top: 1px solid light-dark(#dfd8c7, #45503f);
+    }
+
+    #spa49-welcome50-mockup .spa49-check {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 10px;
+      align-items: start;
+      font-weight: 400;
+      line-height: 1.45;
+    }
+
+    #spa49-welcome50-mockup .spa49-check input {
+      width: 20px;
+      min-height: 20px;
+      margin: 1px 0 0;
+      accent-color: #4e6148;
+    }
+
+    #spa49-welcome50-mockup .spa49-check small {
+      display: block;
+      margin-top: 3px;
+      color: light-dark(#687163, #c5ccb9);
+      font-size: 12px;
+    }
+
+    #spa49-welcome50-mockup .spa49-inline-link {
+      color: light-dark(#496344, #caddc4);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    #spa49-welcome50-mockup .spa49-submit,
+    #spa49-welcome50-mockup .spa49-secondary {
+      width: 100%;
+      min-height: 50px;
+      border-radius: 999px;
+      font: inherit;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    #spa49-welcome50-mockup .spa49-submit {
+      border: 1px solid #4e6148;
+      background: #4e6148;
+      color: #fffaf0;
+    }
+
+    #spa49-welcome50-mockup .spa49-submit:hover { background: #40523b; }
+
+    #spa49-welcome50-mockup .spa49-secondary {
+      border: 1px solid light-dark(#9f947b, #87927f);
+      background: transparent;
+      color: light-dark(#3a3f38, #f4f0e5);
+    }
+
+    #spa49-welcome50-mockup .spa49-error {
+      display: none;
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: light-dark(#fef2f2, #4a2525);
+      color: light-dark(#9f2d2d, #ffd4d4);
+      font-size: 13px;
+    }
+
+    #spa49-welcome50-mockup .spa49-error.is-visible { display: block; }
+
+    #spa49-welcome50-mockup .spa49-fineprint {
+      margin: 10px 0 0;
+      text-align: center;
+      color: light-dark(#687163, #c5ccb9);
+      font-size: 11px;
+    }
+
+    #spa49-welcome50-mockup .spa49-success {
+      display: none;
+      min-height: 700px;
+      padding: 26px 18px;
+      text-align: center;
+    }
+
+    #spa49-welcome50-mockup .spa49-success.is-visible { display: block; }
+
+    #spa49-welcome50-mockup .spa49-success-mark {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      margin: 8px auto 14px;
+      border-radius: 50%;
+      background: light-dark(#e8f1e5, #31402f);
+      color: light-dark(#315b36, #bfe0b9);
+      font-size: 28px;
+    }
+
+    #spa49-welcome50-mockup .spa49-success h2 {
+      margin: 0;
+      font-family: "Noto Serif Thai", Georgia, serif;
+      font-size: 26px;
+      font-weight: 500;
+    }
+
+    #spa49-welcome50-mockup .spa49-success > p {
+      margin: 7px 0 22px;
+      color: light-dark(#687163, #c5ccb9);
+    }
+
+    #spa49-welcome50-mockup .spa49-coupon {
+      position: relative;
+      overflow: hidden;
+      margin-bottom: 18px;
+      padding: 22px 18px;
+      border: 1px solid #c3a36c;
+      border-radius: 16px;
+      background: light-dark(#fcfaf5, #293228);
+      text-align: left;
+    }
+
+    #spa49-welcome50-mockup .spa49-coupon::before,
+    #spa49-welcome50-mockup .spa49-coupon::after {
+      content: "";
+      position: absolute;
+      top: 48%;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: light-dark(#f7f4eb, #20271f);
+      border: 1px solid #c3a36c;
+    }
+
+    #spa49-welcome50-mockup .spa49-coupon::before { left: -12px; }
+    #spa49-welcome50-mockup .spa49-coupon::after { right: -12px; }
+
+    #spa49-welcome50-mockup .spa49-coupon-label {
+      margin: 0;
+      color: light-dark(#687163, #c5ccb9);
+      font-size: 12px;
+      letter-spacing: 0.06em;
+    }
+
+    #spa49-welcome50-mockup .spa49-coupon-value {
+      margin: 5px 0 14px;
+      color: light-dark(#496344, #d6e4cf);
+      font-family: "Noto Serif Thai", Georgia, serif;
+      font-size: 30px;
+      font-weight: 500;
+    }
+
+    #spa49-welcome50-mockup .spa49-code-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-top: 14px;
+      border-top: 1px dashed light-dark(#cfc7b4, #5c6957);
+    }
+
+    #spa49-welcome50-mockup .spa49-code-row strong {
+      letter-spacing: 0.08em;
+    }
+
+    #spa49-welcome50-mockup .spa49-status {
+      color: light-dark(#315b36, #bfe0b9);
+      font-size: 13px;
+    }
+
+    #spa49-welcome50-mockup .spa49-staff-note {
+      margin: 0 0 20px;
+      padding: 12px;
+      border-radius: 10px;
+      background: light-dark(#eee9dd, #313a2f);
+      color: light-dark(#51594d, #d6dccf);
+      font-size: 13px;
+      text-align: left;
+    }
+
+    #spa49-welcome50-mockup .spa49-success-actions {
+      display: grid;
+      gap: 10px;
+    }
+
+    @media (max-width: 359px) {
+      #spa49-welcome50-mockup .spa49-phone { border-radius: 16px; }
+      #spa49-welcome50-mockup .spa49-main { padding: 14px; }
+      #spa49-welcome50-mockup .spa49-birthday { grid-template-columns: 1fr; }
+      #spa49-welcome50-mockup .spa49-birthday legend,
+      #spa49-welcome50-mockup .spa49-birthday small { grid-column: 1; }
+    }
+  </style>
+
+  <section class="spa49-phone" aria-label="ตัวอย่างหน้าลงทะเบียนรับส่วนลด 50 บาท">
+    <header class="spa49-topbar">
+      <div class="spa49-brand">
+        <span class="spa49-mark" aria-hidden="true">49</span>
+        <span><strong>SPA 49</strong><small>Relax • Renew • Revive</small></span>
+      </div>
+      <span class="spa49-line-state">เชื่อมต่อ LINE แล้ว</span>
+    </header>
+
+    <main class="spa49-main" data-registration-view>
+      <section class="spa49-offer" aria-labelledby="spa49-offer-title">
+        <p class="spa49-eyebrow">WELCOME PRIVILEGE</p>
+        <h1 id="spa49-offer-title">รับส่วนลด 50 บาท</h1>
+        <p>สำหรับใช้บริการครั้งถัดไปที่ SPA 49</p>
+      </section>
+
+      <div class="spa49-form-heading">
+        <h2>ลงทะเบียนรับสิทธิ์</h2>
+        <p>ใช้เวลาไม่เกิน 1 นาที • 1 LINE Account ต่อ 1 สิทธิ์</p>
+      </div>
+
+      <form data-spa49-form novalidate>
+        <div class="spa49-field">
+          <label for="spa49-name">ชื่อ–นามสกุล <span class="spa49-required">*</span></label>
+          <input id="spa49-name" name="fullName" type="text" autocomplete="name" placeholder="เช่น สมชาย ใจดี" required>
+        </div>
+
+        <div class="spa49-field">
+          <label for="spa49-phone">เบอร์โทรศัพท์ <span class="spa49-required">*</span></label>
+          <input id="spa49-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="08X-XXX-XXXX" required>
+        </div>
+
+        <fieldset class="spa49-birthday">
+          <legend>วันและเดือนเกิด <span class="spa49-required">*</span></legend>
+          <select id="spa49-day" name="birthDay" aria-label="วันเกิด" required>
+            <option value="">วัน</option>
+          </select>
+          <select id="spa49-month" name="birthMonth" aria-label="เดือนเกิด" required>
+            <option value="">เดือน</option>
+            <option value="01">มกราคม</option><option value="02">กุมภาพันธ์</option>
+            <option value="03">มีนาคม</option><option value="04">เมษายน</option>
+            <option value="05">พฤษภาคม</option><option value="06">มิถุนายน</option>
+            <option value="07">กรกฎาคม</option><option value="08">สิงหาคม</option>
+            <option value="09">กันยายน</option><option value="10">ตุลาคม</option>
+            <option value="11">พฤศจิกายน</option><option value="12">ธันวาคม</option>
+          </select>
+          <small>เราไม่ขอปีเกิด และใช้ข้อมูลนี้เพื่อสิทธิพิเศษในช่วงวันเกิด</small>
+        </fieldset>
+
+        <div class="spa49-field">
+          <label for="spa49-gender">เพศ <span style="font-weight:400">(ไม่บังคับ)</span></label>
+          <select id="spa49-gender" name="gender">
+            <option value="">ไม่ระบุ</option>
+            <option value="female">หญิง</option>
+            <option value="male">ชาย</option>
+            <option value="other">อื่น ๆ</option>
+          </select>
+        </div>
+
+        <div class="spa49-consents">
+          <label class="spa49-check">
+            <input type="checkbox" name="privacy" required>
+            <span>ฉันรับทราบ <span class="spa49-inline-link">ประกาศความเป็นส่วนตัว</span> และยินยอมให้ใช้ข้อมูลเพื่อดำเนินการออกคูปองนี้ <span class="spa49-required">*</span></span>
+          </label>
+          <label class="spa49-check">
+            <input type="checkbox" name="birthdayMarketing">
+            <span>รับข่าวสารและสิทธิพิเศษช่วงวันเกิดผ่าน LINE<small>ไม่เลือกก็ยังรับคูปอง 50 บาทได้</small></span>
+          </label>
+        </div>
+
+        <p class="spa49-error" role="alert" data-error-message></p>
+        <button class="spa49-submit" type="submit">ยืนยันและรับคูปอง 50 บาท</button>
+        <p class="spa49-fineprint">ข้อมูลของคุณจะถูกจัดเก็บตามระยะเวลาที่ระบุในประกาศความเป็นส่วนตัว</p>
+      </form>
+    </main>
+
+    <main class="spa49-success" data-success-view aria-live="polite">
+      <div class="spa49-success-mark" aria-hidden="true">✓</div>
+      <h2>รับสิทธิ์สำเร็จ</h2>
+      <p>เก็บหน้านี้ไว้และแสดงให้พนักงานตอนชำระเงิน</p>
+
+      <section class="spa49-coupon" aria-label="คูปองส่วนลด 50 บาท">
+        <p class="spa49-coupon-label">SPA 49 DIGITAL COUPON</p>
+        <p class="spa49-coupon-value">ส่วนลด 50 บาท</p>
+        <div class="spa49-code-row">
+          <strong>W50-8Q7K2M9P</strong>
+          <span class="spa49-status">● พร้อมใช้งาน</span>
+        </div>
+      </section>
+
+      <p class="spa49-staff-note">พนักงานจะเป็นผู้ตรวจสอบและใช้สิทธิ์ให้คุณ กรุณาอย่าปิดกั้น LINE OA ก่อนใช้คูปอง</p>
+      <div class="spa49-success-actions">
+        <button class="spa49-submit" type="button">กลับไปที่ LINE</button>
+        <button class="spa49-secondary" type="button" data-edit-button>แก้ไขข้อมูล</button>
+      </div>
+    </main>
+  </section>
+
+  <script>
+    (() => {
+      const root = document.getElementById("spa49-welcome50-mockup");
+      const form = root.querySelector("[data-spa49-form]");
+      const daySelect = root.querySelector("#spa49-day");
+      const errorMessage = root.querySelector("[data-error-message]");
+      const registrationView = root.querySelector("[data-registration-view]");
+      const successView = root.querySelector("[data-success-view]");
+      const editButton = root.querySelector("[data-edit-button]");
+
+      for (let day = 1; day <= 31; day += 1) {
+        const option = document.createElement("option");
+        option.value = String(day).padStart(2, "0");
+        option.textContent = String(day);
+        daySelect.appendChild(option);
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const data = new FormData(form);
+        const phone = String(data.get("phone") || "").replace(/\D/g, "");
+        const missing = [];
+        if (!String(data.get("fullName") || "").trim()) missing.push("ชื่อ–นามสกุล");
+        if (phone.length < 9 || phone.length > 10) missing.push("เบอร์โทรศัพท์ที่ถูกต้อง");
+        if (!data.get("birthDay") || !data.get("birthMonth")) missing.push("วันและเดือนเกิด");
+        if (!data.get("privacy")) missing.push("การรับทราบประกาศความเป็นส่วนตัว");
+
+        if (missing.length) {
+          errorMessage.textContent = `กรุณาระบุ: ${missing.join(", ")}`;
+          errorMessage.classList.add("is-visible");
+          return;
+        }
+
+        errorMessage.classList.remove("is-visible");
+        registrationView.style.display = "none";
+        successView.classList.add("is-visible");
+        successView.querySelector("h2").focus?.();
+      });
+
+      editButton.addEventListener("click", () => {
+        successView.classList.remove("is-visible");
+        registrationView.style.display = "block";
+        root.querySelector("#spa49-name").focus();
+      });
+    })();
+  </script>
+</div>

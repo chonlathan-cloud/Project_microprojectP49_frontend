@@ -13,7 +13,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 
+from app.core.settings import get_settings
 from app.infrastructure.firestore import get_firestore_client
+from app.integrations.line_identity import line_identity_hash
 
 router = APIRouter(prefix="/api/v1/webhooks/line", tags=["line-webhooks"])
 
@@ -89,6 +91,65 @@ def _capture_admin_group_candidate(
     if not snapshot.exists:
         record["firstSeenAt"] = now
     ref.set(record, merge=True)
+
+
+def _capture_customer_friend_state(
+    client: firestore.Client,
+    *,
+    channel: Channel,
+    event: dict[str, object],
+) -> None:
+    if channel != "customer" or event.get("type") not in {"follow", "unfollow"}:
+        return
+    source = event.get("source")
+    if not isinstance(source, dict) or source.get("type") != "user":
+        return
+    line_user_id = source.get("userId")
+    if not isinstance(line_user_id, str) or not line_user_id:
+        return
+    event_time = datetime.now(UTC)
+    if isinstance(event.get("timestamp"), (int, float)):
+        event_time = datetime.fromtimestamp(float(event["timestamp"]) / 1000, UTC)
+    friend_status = "FOLLOWING" if event.get("type") == "follow" else "BLOCKED"
+    identity_ref = client.collection("customer_identity_links").document(
+        line_identity_hash(line_user_id)
+    )
+    new_customer_ref = client.collection("customers").document()
+    transaction = client.transaction()
+
+    @firestore.transactional
+    def write(tx: firestore.Transaction) -> None:
+        identity_snapshot = identity_ref.get(transaction=tx)
+        identity = identity_snapshot.to_dict() or {} if identity_snapshot.exists else {}
+        customer_id = str(identity.get("customerId") or new_customer_ref.id)
+        customer_ref = client.collection("customers").document(customer_id)
+        identity_data: dict[str, object] = {
+            "provider": "LINE",
+            "channelId": get_settings().line_customer_login_channel_id,
+            "lineUserId": line_user_id,
+            "customerId": customer_id,
+            "friendStatus": friend_status,
+            "active": True,
+            "updatedAt": event_time,
+        }
+        customer_data: dict[str, object] = {
+            "friendStatus": friend_status,
+            "source": "LINE_FOLLOW",
+            "updatedAt": event_time,
+        }
+        if event.get("type") == "follow":
+            identity_data["followedAt"] = identity.get("followedAt", event_time)
+            customer_data["followedAt"] = identity.get("followedAt", event_time)
+        else:
+            identity_data["unfollowedAt"] = event_time
+            customer_data["unfollowedAt"] = event_time
+        if not identity_snapshot.exists:
+            identity_data["createdAt"] = event_time
+            customer_data["createdAt"] = event_time
+        tx.set(identity_ref, identity_data, merge=True)
+        tx.set(customer_ref, customer_data, merge=True)
+
+    write(transaction)
 
 
 def _process_admin_command(
@@ -233,6 +294,7 @@ async def _receive(
             webhook_ref = client.collection("line_webhook_events").document(key)
             webhook_ref.create(record)
             accepted += 1
+            _capture_customer_friend_state(client, channel=channel, event=event)
             if channel == "admin":
                 _process_admin_command(client, event=event, webhook_ref=webhook_ref)
         except AlreadyExists:

@@ -279,6 +279,14 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | `GET` | `/api/v1/admin/notifications` | Active admin user |
 | `POST` | `/api/v1/admin/notifications/{eventId}:retry` | `notification.retry` |
 | `GET` | `/api/v1/admin/audit-events` | `audit.security.read` |
+| `GET/PATCH` | `/api/v1/admin/campaigns[/{campaignCode}]` | Active admin / `ADMIN` mutation |
+| `POST` | `/api/v1/admin/campaigns/{campaignCode}:transition` | `ADMIN`; versioned command |
+| `GET` | `/api/v1/admin/campaign-customers` | Active admin; masked projection |
+| `POST` | `/api/v1/admin/campaign-customers/{customerId}/pii-access` | `ADMIN`; reason and audit required |
+| `POST` | `/api/v1/admin/campaign-customers:export` | `ADMIN`; `BIRTHDAY_MARKETING=GRANTED` only |
+| `GET` | `/api/v1/admin/coupons:search` | `ADMIN` or `STAFF`; exact code |
+| `POST` | `/api/v1/admin/coupons/{couponId}:redeem` | `ADMIN` or `STAFF`; Firestore transaction |
+| `POST` | `/api/v1/admin/coupons/{couponId}:void` | `ADMIN`; reason and Firestore transaction |
 
 Exact request and response bodies are defined in the LLD and OpenAPI contract.
 
@@ -562,6 +570,7 @@ The following Secret Manager containers already exist in `the49-487609`; they in
 | `spa-line-customer-login-channel-id` | API and Customer Web deployment configuration |
 | `spa-line-customer-login-channel-secret` | SPA API |
 | `spa-line-customer-liff-id` | Customer Web deployment configuration |
+| `spa-line-campaign-v1-liff-id` | Customer Web Campaign v1 deployment configuration |
 | `spa-line-customer-messaging-channel-id` | SPA API / Worker configuration |
 | `spa-line-customer-messaging-channel-secret` | SPA API webhook verifier |
 | `spa-line-customer-messaging-channel-access-token` | Notification Worker |

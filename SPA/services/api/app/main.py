@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1.bookings import router as bookings_router
+from app.api.v1.campaign_admin import router as campaign_admin_router
+from app.api.v1.campaigns import router as campaigns_router
 from app.api.v1.operations import router as operations_router
 from app.api.v1.public import router as public_router
 from app.api.v1.webhooks import router as webhooks_router
@@ -22,6 +24,8 @@ app = FastAPI(
 )
 app.include_router(public_router)
 app.include_router(bookings_router)
+app.include_router(campaigns_router)
+app.include_router(campaign_admin_router)
 app.include_router(operations_router)
 app.include_router(webhooks_router)
 app.add_middleware(

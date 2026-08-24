@@ -24,6 +24,7 @@ const navItems = [
   ["capacity", "⌁", "สล็อตและความจุ", "Capacity"],
   ["services", "◇", "บริการและราคา", "Services"],
   ["therapists", "♙", "หมอนวด", "Therapists"],
+  ["campaign-operations", "◎", "ลูกค้าและแคมเปญ", "CRM & Campaigns"],
   ["notifications", "◉", "การแจ้งเตือน", "Notifications"]
 ] as const;
 

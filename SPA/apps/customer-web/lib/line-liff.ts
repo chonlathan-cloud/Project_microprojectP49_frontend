@@ -4,6 +4,7 @@ export type LiffClient = {
   isInClient: () => boolean;
   login: (options?: { redirectUri?: string }) => void;
   getIDToken: () => string | null;
+  closeWindow?: () => void;
 };
 
 declare global {

@@ -4,7 +4,6 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-import httpx
 from fastapi import APIRouter, Depends, Header, status
 from google.cloud import firestore
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +15,7 @@ from app.core.types import BookingStatus
 from app.domains.bookings.service import create_booking, serialize_booking
 from app.domains.bookings.state_machine import BookingStateMachine
 from app.infrastructure.firestore import get_firestore_client
+from app.integrations.line_identity import verify_line_id_token as _verify_line_id_token
 
 router = APIRouter(tags=["bookings"])
 
@@ -59,28 +59,6 @@ class StatusResolveRequest(ApiModel):
 
 class BookingLineLinkRequest(StatusResolveRequest):
     line_id_token: str = Field(min_length=20, max_length=4096)
-
-
-def _verify_line_id_token(id_token: str) -> dict[str, object]:
-    channel_id = get_settings().line_customer_login_channel_id
-    if not channel_id:
-        raise ValidationDomainError("LINE account linking is not configured")
-    try:
-        response = httpx.post(
-            "https://api.line.me/oauth2/v2.1/verify",
-            data={"id_token": id_token, "client_id": channel_id},
-            timeout=10,
-        )
-    except httpx.HTTPError as error:
-        raise ValidationDomainError(
-            "LINE identity verification is temporarily unavailable"
-        ) from error
-    if response.status_code != 200:
-        raise ValidationDomainError("LINE identity token is invalid or expired")
-    payload = response.json()
-    if str(payload.get("aud", "")) != channel_id or not payload.get("sub"):
-        raise ValidationDomainError("LINE identity token has an invalid audience")
-    return payload
 
 
 @router.post("/api/v1/public/bookings", status_code=status.HTTP_201_CREATED)

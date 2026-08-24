@@ -11,6 +11,8 @@ This directory is the isolated SPA product defined by `Document/BusinessLogic.md
 - Health consent evidence and separate retained health profiles with audited Admin access.
 - Admin Firebase Authentication, booking transitions with optimistic versioning, closures,
   resource activation, therapist registry/assignment and no-show gate.
+- Admin CRM/Campaign/Coupon workspace with masked customer lists, audited PII reveal and
+  consent-filtered CSV export, versioned campaign lifecycle, and transactional redeem/void.
 - Notification Worker with Cloud Tasks dispatch, Scheduler reconciliation, retry state and LINE sender.
 - Unit, build, API smoke, isolated Test Cloud and responsive browser evidence.
 
@@ -81,6 +83,12 @@ use a production suffix (`-Prod`, `-prod`, or `-production`) or carry the Secret
 unsuffixed LINE secret defaults unless explicitly overridden. Both deploy preflights also require
 an enabled `latest` version and a direct `roles/secretmanager.secretAccessor` grant for the runtime
 service account on every bound secret.
+
+Customer Web keeps Booking and Campaign LIFF applications independently configurable while using
+the same LINE Login channel/provider for stable customer identity. `LINE_LIFF_ID` is bound from
+`spa-line-customer-liff-id` for Booking; `LINE_CAMPAIGN_V1_LIFF_ID` is bound from
+`spa-line-campaign-v1-liff-id` for Campaign v1. Do not replace the Booking LIFF secret when adding
+or rotating a Campaign LIFF app.
 
 The notification worker has its own lockfile and environment under `services/notification-worker`
 and defaults to port `8081` locally. Test messages are prefixed `[TEST]` whenever

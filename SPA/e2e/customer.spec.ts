@@ -137,3 +137,82 @@ test("a booking conflict returns the guest to refreshed time selection", async (
   await expect(page.getByText("BK-TEST-001")).toBeVisible();
   await expect(page.getByRole("link", { name: "ตรวจสอบสถานะการจอง" })).toBeVisible();
 });
+
+test("LINE campaign registration issues one digital coupon", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "liff", {
+      value: {
+        init: async ({ liffId }: { liffId: string }) => {
+          (window as Window & { initializedLiffId?: string }).initializedLiffId = liffId;
+        },
+        isLoggedIn: () => true,
+        isInClient: () => true,
+        login: () => undefined,
+        getIDToken: () => "test-line-id-token-with-minimum-length",
+        closeWindow: () => undefined
+      },
+      configurable: true
+    });
+  });
+  await page.route("**/api/config", async (route) => {
+    await route.fulfill({
+      json: {
+        lineLiffId: "booking-test-liff-id",
+        lineCampaignV1LiffId: "campaign-v1-test-liff-id"
+      }
+    });
+  });
+  await page.route("**/api/spa/api/v1/public/campaigns/welcome-50", async (route) => {
+    await route.fulfill({
+      json: {
+        code: "welcome-50",
+        nameTh: "รับส่วนลด 50 บาท",
+        nameEn: "Get THB 50 off",
+        descriptionTh: "ลงทะเบียนครั้งเดียวเพื่อรับคูปองส่วนลดสำหรับใช้ที่ SPA 49",
+        descriptionEn: "Register once to receive a SPA 49 discount coupon.",
+        benefit: { amountSatang: 5000, currency: "THB" }
+      }
+    });
+  });
+  await page.route("**/api/spa/api/v1/public/campaigns/welcome-50/claims", async (route) => {
+    const request = route.request();
+    expect(request.headers()["idempotency-key"]).toBeTruthy();
+    expect(request.postDataJSON()).toMatchObject({
+      fullName: "มณี สุขใจ",
+      phone: "0812345678",
+      birthDay: 29,
+      birthMonth: 2,
+      privacyAcknowledged: true,
+      birthdayMarketingConsent: false
+    });
+    await route.fulfill({
+      status: 201,
+      json: {
+        campaignCode: "welcome-50",
+        alreadyClaimed: false,
+        coupon: {
+          code: "W50-TEST123456",
+          status: "ISSUED",
+          amountSatang: 5000,
+          currency: "THB",
+          issuedAt: "2026-08-20T10:00:00Z",
+          expiresAt: null
+        }
+      }
+    });
+  });
+
+  await page.goto(`${customerUrl}/offers/welcome-50`, { waitUntil: "networkidle" });
+  await expect(page.getByRole("heading", { name: "รับส่วนลด 50 บาท" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as Window & { initializedLiffId?: string }).initializedLiffId)).toBe("campaign-v1-test-liff-id");
+  await page.getByRole("textbox", { name: /ชื่อ-นามสกุล/ }).fill("มณี สุขใจ");
+  await page.getByRole("textbox", { name: /เบอร์โทรศัพท์/ }).fill("0812345678");
+  await page.locator("#campaign-birth-day").selectOption("29");
+  await page.locator("#campaign-birth-month").selectOption("2");
+  await page.getByRole("checkbox").first().check();
+  await page.getByRole("button", { name: "ยืนยันรับสิทธิ์ 50 บาท" }).click();
+
+  await expect(page.getByRole("heading", { name: "รับคูปองเรียบร้อยแล้ว" })).toBeVisible();
+  await expect(page.getByText("W50-TEST123456")).toBeVisible();
+  expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
+});

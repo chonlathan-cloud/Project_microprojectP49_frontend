@@ -311,6 +311,13 @@ Admin status actions, Cloud Tasks/Scheduler และ LINE sender เชื่�
 
   https://liff.line.me/{LIFF_ID}
 
+  Booking และ Campaign v1 ต้องเป็นคนละ LIFF app ภายใต้ LINE Login channel/provider เดียวกัน:
+
+  - Booking endpoint: Customer Web root URL และเก็บ LIFF ID ใน `spa-line-customer-liff-id`
+  - Campaign v1 endpoint: `/offers/welcome-50` และเก็บ LIFF ID ใน `spa-line-campaign-v1-liff-id`
+
+  ห้ามนำ Campaign LIFF ID ไปเขียนทับ Booking LIFF secret
+
   ต้องเปิด openid scope จึงจะเรียก liff.getIDToken() ได้ และควรส่ง raw ID token ไปให้ backend ตรวจสอบ ไม่ควรส่ง userId ที่ frontend อ่านเอง LIFF user identity
   guidance (https://developers.line.biz/en/docs/liff/developing-liff-apps), LINE ID token verification
   (https://developers.line.biz/en/reference/line-login/)
@@ -391,6 +398,8 @@ Admin status actions, Cloud Tasks/Scheduler และ LINE sender เชื่�
    spa-line-customer-login-channel-secret              LINE Login Channel Secret
   ──────────────────────────────────────────────────  ─────────────────────────────────────
    spa-line-customer-liff-id                           LIFF ID
+  ──────────────────────────────────────────────────  ─────────────────────────────────────
+   spa-line-campaign-v1-liff-id                        Campaign v1 LIFF ID
   ──────────────────────────────────────────────────  ─────────────────────────────────────
    spa-line-customer-messaging-channel-id              Customer Messaging Channel ID
   ──────────────────────────────────────────────────  ─────────────────────────────────────

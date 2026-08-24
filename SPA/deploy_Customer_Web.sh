@@ -16,10 +16,13 @@ APP_ENV="${APP_ENV:-production}"
 
 if [[ "$APP_ENV" == "production" ]]; then
   DEFAULT_LINE_LIFF_ID_SECRET_NAME="spa-line-prod-customer-liff-id-Prod"
+  DEFAULT_LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME="spa-line-prod-campaign-v1-liff-id-Prod"
 else
   DEFAULT_LINE_LIFF_ID_SECRET_NAME="spa-line-customer-liff-id"
+  DEFAULT_LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME="spa-line-campaign-v1-liff-id"
 fi
 LINE_LIFF_ID_SECRET_NAME="${LINE_LIFF_ID_SECRET_NAME:-$DEFAULT_LINE_LIFF_ID_SECRET_NAME}"
+LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME="${LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME:-$DEFAULT_LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME}"
 
 if [[ "$SERVICE_NAME" != *-test ]]; then
   if [[ "$APP_ENV" != "production" ]]; then
@@ -181,6 +184,9 @@ validate_secret_binding() {
 }
 
 validate_secret_binding "LINE_LIFF_ID_SECRET_NAME" "$LINE_LIFF_ID_SECRET_NAME"
+validate_secret_binding \
+  "LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME" \
+  "$LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME"
 
 if ! gcloud "${GCLOUD_AUTH_ARGS[@]}" artifacts repositories describe "$ARTIFACT_REPOSITORY" \
   --project "$PROJECT_ID" --location "$REGION" >/dev/null 2>&1; then
@@ -311,7 +317,7 @@ deploy_args=(
   --quiet
 )
 deploy_args+=("${env_args[@]}")
-deploy_args+=(--set-secrets "LINE_LIFF_ID=${LINE_LIFF_ID_SECRET_NAME}:latest")
+deploy_args+=(--set-secrets "LINE_LIFF_ID=${LINE_LIFF_ID_SECRET_NAME}:latest,LINE_CAMPAIGN_V1_LIFF_ID=${LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME}:latest")
 
 if [[ "$ALLOW_UNAUTHENTICATED" == "true" ]]; then
   deploy_args+=(--allow-unauthenticated)
