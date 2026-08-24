@@ -318,6 +318,11 @@ Admin status actions, Cloud Tasks/Scheduler และ LINE sender เชื่�
 
   ห้ามนำ Campaign LIFF ID ไปเขียนทับ Booking LIFF secret
 
+  Campaign LIFF ต้อง link กับ Customer LINE OA ภายใต้ Provider เดียวกัน เพื่อให้
+  `liff.getFriendship()` ตรวจสถานะเพื่อนได้ หากบัญชี OA ไม่ใช่ verified/premium และ Followers API
+  คืน `403` ให้เปิด `allowLiffFriendshipEvidence` เฉพาะ campaign มูลค่าต่ำที่ผ่านการอนุมัติ
+  แทนการสร้าง CRM profile ย้อนหลังจากการ follow
+
   ต้องเปิด openid scope จึงจะเรียก liff.getIDToken() ได้ และควรส่ง raw ID token ไปให้ backend ตรวจสอบ ไม่ควรส่ง userId ที่ frontend อ่านเอง LIFF user identity
   guidance (https://developers.line.biz/en/docs/liff/developing-liff-apps), LINE ID token verification
   (https://developers.line.biz/en/reference/line-login/)

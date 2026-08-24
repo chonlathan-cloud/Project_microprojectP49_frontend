@@ -14,6 +14,10 @@ from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 
 from app.core.settings import get_settings
+from app.domains.customers.line_friendship import (
+    friendship_ref,
+    webhook_friendship_record,
+)
 from app.infrastructure.firestore import get_firestore_client
 from app.integrations.line_identity import line_identity_hash
 
@@ -111,43 +115,53 @@ def _capture_customer_friend_state(
     if isinstance(event.get("timestamp"), (int, float)):
         event_time = datetime.fromtimestamp(float(event["timestamp"]) / 1000, UTC)
     friend_status = "FOLLOWING" if event.get("type") == "follow" else "BLOCKED"
+    channel_id = get_settings().line_customer_login_channel_id
     identity_ref = client.collection("customer_identity_links").document(
         line_identity_hash(line_user_id)
     )
-    new_customer_ref = client.collection("customers").document()
+    membership_ref = friendship_ref(
+        client, line_user_id=line_user_id, channel_id=channel_id
+    )
     transaction = client.transaction()
 
     @firestore.transactional
     def write(tx: firestore.Transaction) -> None:
         identity_snapshot = identity_ref.get(transaction=tx)
         identity = identity_snapshot.to_dict() or {} if identity_snapshot.exists else {}
-        customer_id = str(identity.get("customerId") or new_customer_ref.id)
-        customer_ref = client.collection("customers").document(customer_id)
+        tx.set(
+            membership_ref,
+            webhook_friendship_record(
+                channel_id=channel_id,
+                friend_status=friend_status,
+                observed_at=event_time,
+            ),
+            merge=True,
+        )
+        # Following the OA is not consent to create a CRM profile. Only update
+        # an existing identity/customer that was created by an explicit flow.
+        if not identity_snapshot.exists:
+            return
         identity_data: dict[str, object] = {
-            "provider": "LINE",
-            "channelId": get_settings().line_customer_login_channel_id,
-            "lineUserId": line_user_id,
-            "customerId": customer_id,
             "friendStatus": friend_status,
             "active": True,
             "updatedAt": event_time,
         }
         customer_data: dict[str, object] = {
             "friendStatus": friend_status,
-            "source": "LINE_FOLLOW",
             "updatedAt": event_time,
         }
         if event.get("type") == "follow":
-            identity_data["followedAt"] = identity.get("followedAt", event_time)
-            customer_data["followedAt"] = identity.get("followedAt", event_time)
+            followed_at = identity.get("followedAt", event_time)
+            identity_data["followedAt"] = followed_at
+            customer_data["followedAt"] = followed_at
         else:
             identity_data["unfollowedAt"] = event_time
             customer_data["unfollowedAt"] = event_time
-        if not identity_snapshot.exists:
-            identity_data["createdAt"] = event_time
-            customer_data["createdAt"] = event_time
         tx.set(identity_ref, identity_data, merge=True)
-        tx.set(customer_ref, customer_data, merge=True)
+        customer_id = identity.get("customerId")
+        if customer_id:
+            customer_ref = client.collection("customers").document(str(customer_id))
+            tx.set(customer_ref, customer_data, merge=True)
 
     write(transaction)
 

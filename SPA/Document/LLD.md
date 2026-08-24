@@ -678,6 +678,27 @@ This collection is never joined into public, Customer LINE, outbox, task, log, U
 
 `customer_identity_links/{provider_lineUserIdHash}` stores the restricted raw verified LINE User ID, Provider/Channel IDs, `customerId`, verification time, active state, and version. The deterministic document key is a keyed hash; phone is never an identity-link key.
 
+`line_friendships/{provider_lineUserIdHash}` is independent from CRM profile creation:
+
+```json
+{
+  "provider": "LINE",
+  "channelId": "customer-line-login-channel-id",
+  "status": "FOLLOWING",
+  "evidenceSource": "WEBHOOK",
+  "assurance": "SERVER_VERIFIED",
+  "lastObservedAt": "timestamp",
+  "followedAt": "timestamp",
+  "updatedAt": "timestamp"
+}
+```
+
+The document contains neither raw LINE User ID nor customer PII. `WEBHOOK` and `FOLLOWER_SYNC`
+evidence is `SERVER_VERIFIED`; `LIFF_CLIENT` evidence uses status `REPORTED_FOLLOWING` and assurance
+`CLIENT_ATTESTED`. A later webhook replaces the reported state with authoritative `FOLLOWING` or
+`BLOCKED`. Coupon claim transactions read this document and the campaign policy before any write,
+while the verified LINE ID token/deterministic identity hash enforces one participation per campaign.
+
 `customer_health_profiles/{customerId}`:
 
 ```json

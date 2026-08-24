@@ -90,6 +90,44 @@ the same LINE Login channel/provider for stable customer identity. `LINE_LIFF_ID
 `spa-line-campaign-v1-liff-id` for Campaign v1. Do not replace the Booking LIFF secret when adding
 or rotating a Campaign LIFF app.
 
+Campaigns that require an active LINE friendship check `line_friendships` first. Webhook and
+Followers API records are server-verified. The `welcome-50` campaign may explicitly allow a
+positive LIFF `getFriendship()` result as client-attested evidence so followers who added the OA
+before webhook capture can still register. The verified LINE ID token remains the customer
+identity authority and coupon uniqueness key; the browser never supplies a trusted LINE user ID.
+Following alone creates no CRM customer or PII record—those are created only after form submission
+and privacy acknowledgement.
+
+Set the policy on an already-seeded campaign with a dry-run followed by the confirmed write. The
+policy script accepts `--project`, `--database`, `--campaign`, and the required
+`--allow-liff-evidence true|false` options. For example:
+
+```bash
+cd SPA/services/api
+uv run python scripts/set_campaign_friendship_policy.py \
+  --database spa-test-db --campaign welcome-50 --allow-liff-evidence true
+uv run python scripts/set_campaign_friendship_policy.py \
+  --database spa-test-db --campaign welcome-50 --allow-liff-evidence true \
+  --apply --confirm-database spa-test-db
+```
+
+For a verified or premium LINE OA, the optional backfill tool retrieves follower IDs directly from
+LINE and writes only deterministic hashes to `line_friendships`. It reads both secret values through
+`gcloud` without printing them and defaults to dry-run:
+
+```bash
+uv run python scripts/sync_line_followers.py --environment test
+uv run python scripts/sync_line_followers.py --environment test \
+  --apply --confirm-database spa-test-db
+
+uv run python scripts/sync_line_followers.py --environment production
+uv run python scripts/sync_line_followers.py --environment production \
+  --apply --confirm-database spa-db
+```
+
+If LINE returns `403`, that OA does not have Followers API access; keep the explicit LIFF evidence
+policy enabled for this low-value campaign instead of attempting a follower export.
+
 The notification worker has its own lockfile and environment under `services/notification-worker`
 and defaults to port `8081` locally. Test messages are prefixed `[TEST]` whenever
 `APP_ENV` is not `production`.

@@ -43,6 +43,11 @@ class NotFoundDomainError(DomainError):
     status_code = 404
 
 
+class LineFriendshipRequired(DomainError):
+    code = "LINE_FRIENDSHIP_REQUIRED"
+    status_code = 422
+
+
 class DuplicateBooking(DomainError):
     code = "DUPLICATE_BOOKING"
 

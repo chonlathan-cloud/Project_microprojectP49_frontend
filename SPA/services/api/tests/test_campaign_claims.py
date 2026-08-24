@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.core.errors import ValidationDomainError
+from app.core.errors import LineFriendshipRequired, ValidationDomainError
 from app.domains.campaigns import service
 from app.integrations.line_identity import line_identity_hash
 
@@ -96,7 +96,13 @@ def database(monkeypatch) -> Database:
     return value
 
 
-def claim(database: Database, *, idempotency_key: str, marketing: bool = False):
+def claim(
+    database: Database,
+    *,
+    idempotency_key: str,
+    marketing: bool = False,
+    friendship_confirmed: bool = False,
+):
     return service.claim_campaign(
         database,
         campaign_code="welcome-50",
@@ -107,6 +113,7 @@ def claim(database: Database, *, idempotency_key: str, marketing: bool = False):
         gender=None,
         privacy_acknowledged=True,
         birthday_marketing_consent=marketing,
+        line_friendship_confirmed=friendship_confirmed,
         idempotency_key=idempotency_key,
         line_identity={"sub": "line-user-001"},
         now=datetime(2026, 8, 20, 10, tzinfo=UTC),
@@ -179,7 +186,7 @@ def test_campaign_can_require_active_line_friendship(database) -> None:
         "maxClaimsPerCustomer": 1,
         "requiresFollowing": True,
     }
-    with pytest.raises(ValidationDomainError, match="friendship is required"):
+    with pytest.raises(LineFriendshipRequired, match="friendship is required"):
         claim(database, idempotency_key="claim-request-005")
 
     identity_id = line_identity_hash("line-user-001", "line-login-test")
@@ -189,3 +196,84 @@ def test_campaign_can_require_active_line_friendship(database) -> None:
     }
     result = claim(database, idempotency_key="claim-request-006")
     assert result["coupon"]["status"] == "ISSUED"
+
+
+def test_server_verified_friendship_allows_existing_follower_without_crm_record(
+    database,
+) -> None:
+    database.data["campaigns"]["welcome-50"]["eligibility"] = {
+        "maxClaimsPerCustomer": 1,
+        "requiresFollowing": True,
+    }
+    friendship_id = line_identity_hash("line-user-001", "line-login-test")
+    database.data.setdefault("line_friendships", {})[friendship_id] = {
+        "status": "FOLLOWING",
+        "evidenceSource": "FOLLOWER_SYNC",
+        "assurance": "SERVER_VERIFIED",
+    }
+
+    result = claim(database, idempotency_key="claim-request-007")
+
+    assert result["coupon"]["status"] == "ISSUED"
+    participation = next(iter(database.data["campaign_participations"].values()))
+    assert participation["friendshipEvidence"] == "FOLLOWER_SYNC"
+
+
+def test_campaign_can_accept_liff_friendship_evidence_for_existing_follower(
+    database,
+) -> None:
+    database.data["campaigns"]["welcome-50"]["eligibility"] = {
+        "maxClaimsPerCustomer": 1,
+        "requiresFollowing": True,
+        "allowLiffFriendshipEvidence": True,
+    }
+
+    result = claim(
+        database,
+        idempotency_key="claim-request-008",
+        friendship_confirmed=True,
+    )
+
+    assert result["coupon"]["status"] == "ISSUED"
+    friendship = next(iter(database.data["line_friendships"].values()))
+    assert friendship["status"] == "REPORTED_FOLLOWING"
+    assert friendship["evidenceSource"] == "LIFF_CLIENT"
+    assert friendship["assurance"] == "CLIENT_ATTESTED"
+    identity = next(iter(database.data["customer_identity_links"].values()))
+    assert identity["friendStatus"] == "REPORTED_FOLLOWING"
+    summary = next(iter(database.data["customers"].values()))
+    assert summary["friendStatus"] == "REPORTED_FOLLOWING"
+
+
+def test_liff_evidence_is_rejected_unless_campaign_explicitly_allows_it(
+    database,
+) -> None:
+    database.data["campaigns"]["welcome-50"]["eligibility"] = {
+        "maxClaimsPerCustomer": 1,
+        "requiresFollowing": True,
+        "allowLiffFriendshipEvidence": False,
+    }
+
+    with pytest.raises(LineFriendshipRequired):
+        claim(
+            database,
+            idempotency_key="claim-request-009",
+            friendship_confirmed=True,
+        )
+
+    assert "coupons" not in database.data
+
+
+def test_liff_flag_is_not_recorded_when_campaign_does_not_require_friendship(
+    database,
+) -> None:
+    result = claim(
+        database,
+        idempotency_key="claim-request-010",
+        friendship_confirmed=True,
+    )
+
+    assert result["coupon"]["status"] == "ISSUED"
+    assert "line_friendships" not in database.data
+    identity = next(iter(database.data["customer_identity_links"].values()))
+    assert identity["friendStatus"] == "UNKNOWN"

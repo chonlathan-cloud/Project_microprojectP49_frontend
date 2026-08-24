@@ -4,6 +4,9 @@ export type LiffClient = {
   isInClient: () => boolean;
   login: (options?: { redirectUri?: string }) => void;
   getIDToken: () => string | null;
+  getFriendship: () => Promise<{ friendFlag: boolean }>;
+  requestFriendship?: () => Promise<void>;
+  isApiAvailable?: (apiName: string) => boolean;
   closeWindow?: () => void;
 };
 

@@ -228,6 +228,11 @@ textarea { min-height: 110px; resize: vertical; }
 .offer-amount span { color: var(--gold); font-size: 11px; font-weight: 900; letter-spacing: .12em; }
 .offer-amount strong { margin-top: 3px; font-family: var(--font-display), Georgia, serif; font-size: 28px; }
 .campaign-form { width: min(680px, calc(100% - 32px)); margin: 30px auto 0; }
+.friendship-gate { width: min(620px, calc(100% - 32px)); margin: 30px auto 0; padding: 28px 24px; border-block: 1px solid var(--gold-soft); background: var(--surface); text-align: center; }
+.friendship-gate h2 { margin: 14px 0 6px; color: var(--forest-deep); font-family: var(--font-display), Georgia, serif; font-size: 25px; }
+.friendship-gate p { max-width: 440px; margin: 0 auto 20px; color: var(--muted); line-height: 1.6; }
+.friendship-gate .primary-button { width: 100%; min-height: 52px; }
+.friendship-mark { width: 58px; height: 58px; margin: 0 auto; display: grid; place-content: center; border-radius: 50%; background: #06c755; color: white; font-size: 12px; font-weight: 900; letter-spacing: .04em; }
 .campaign-form .validation-summary { width: 100%; margin: 0 0 18px; }
 .campaign-form-section { padding: 2px 24px 8px; border-block: 1px solid var(--gold-soft); background: var(--surface); }
 .required-mark { color: var(--error); }

@@ -8,8 +8,17 @@ from uuid import uuid4
 
 from google.cloud import firestore
 
-from app.core.errors import IdempotencyConflict, NotFoundDomainError, ValidationDomainError
+from app.core.errors import (
+    IdempotencyConflict,
+    LineFriendshipRequired,
+    NotFoundDomainError,
+    ValidationDomainError,
+)
 from app.core.settings import get_settings
+from app.domains.customers.line_friendship import (
+    client_attested_friendship_record,
+    friendship_ref,
+)
 from app.domains.customers.phone import mask_phone, normalize_thai_phone
 from app.integrations.line_identity import line_identity_hash
 
@@ -42,6 +51,11 @@ def _assert_campaign_available(campaign: dict[str, object], now: datetime) -> No
 
 def _safe_campaign(campaign_code: str, campaign: dict[str, object]) -> dict[str, object]:
     benefit = campaign.get("benefit") if isinstance(campaign.get("benefit"), dict) else {}
+    eligibility = (
+        campaign.get("eligibility")
+        if isinstance(campaign.get("eligibility"), dict)
+        else {}
+    )
     return {
         "code": campaign_code,
         "nameTh": campaign.get("nameTh", "รับส่วนลด 50 บาท"),
@@ -58,6 +72,9 @@ def _safe_campaign(campaign_code: str, campaign: dict[str, object]) -> dict[str,
         ),
         "endsAt": campaign.get("endsAt"),
         "couponExpiresAt": campaign.get("couponExpiresAt"),
+        "eligibility": {
+            "requiresFollowing": bool(eligibility.get("requiresFollowing", False))
+        },
     }
 
 
@@ -85,6 +102,7 @@ def claim_campaign(
     birthday_marketing_consent: bool,
     idempotency_key: str | None,
     line_identity: dict[str, object],
+    line_friendship_confirmed: bool = False,
     now: datetime | None = None,
 ) -> dict[str, object]:
     if not idempotency_key or not 8 <= len(idempotency_key) <= 128:
@@ -116,12 +134,18 @@ def claim_campaign(
         "gender": gender,
         "privacyAcknowledged": privacy_acknowledged,
         "birthdayMarketingConsent": birthday_marketing_consent,
+        "lineFriendshipConfirmed": line_friendship_confirmed,
         "lineIdentityHash": identity_hash,
     }
     request_hash = _request_hash(request_payload)
 
     campaign_ref = client.collection("campaigns").document(campaign_code)
     identity_ref = client.collection("customer_identity_links").document(identity_hash)
+    line_friendship_ref = friendship_ref(
+        client,
+        line_user_id=line_user_id,
+        channel_id=settings.line_customer_login_channel_id,
+    )
     idempotency_ref = client.collection("campaign_claim_idempotency").document(
         _digest(idempotency_key)
     )
@@ -153,13 +177,33 @@ def claim_campaign(
 
         identity_snapshot = identity_ref.get(transaction=tx)
         identity = identity_snapshot.to_dict() or {} if identity_snapshot.exists else {}
+        friendship_snapshot = line_friendship_ref.get(transaction=tx)
+        friendship = (
+            friendship_snapshot.to_dict() or {} if friendship_snapshot.exists else {}
+        )
         eligibility = (
             campaign.get("eligibility")
             if isinstance(campaign.get("eligibility"), dict)
             else {}
         )
-        if eligibility.get("requiresFollowing") and identity.get("friendStatus") != "FOLLOWING":
-            raise ValidationDomainError("Active LINE OA friendship is required")
+        server_following = (
+            friendship.get("status") == "FOLLOWING"
+            or identity.get("friendStatus") == "FOLLOWING"
+        )
+        requires_following = bool(eligibility.get("requiresFollowing"))
+        allow_liff_evidence = bool(eligibility.get("allowLiffFriendshipEvidence"))
+        client_following = bool(
+            requires_following and allow_liff_evidence and line_friendship_confirmed
+        )
+        if requires_following and not (server_following or client_following):
+            raise LineFriendshipRequired("Active LINE OA friendship is required")
+        friendship_evidence = "NOT_REQUIRED"
+        if server_following:
+            friendship_evidence = str(
+                friendship.get("evidenceSource") or "LEGACY_WEBHOOK"
+            )
+        elif client_following:
+            friendship_evidence = "LIFF_CLIENT"
         customer_id = str(identity.get("customerId") or new_customer_ref.id)
         customer_ref = client.collection("customers").document(customer_id)
         private_ref = client.collection("customer_private").document(customer_id)
@@ -234,15 +278,38 @@ def claim_campaign(
                     "channelId": settings.line_customer_login_channel_id,
                     "lineUserId": line_user_id,
                     "customerId": customer_id,
+                    "friendStatus": (
+                        "FOLLOWING"
+                        if server_following
+                        else "REPORTED_FOLLOWING"
+                        if client_following
+                        else "UNKNOWN"
+                    ),
+                    "friendshipEvidence": friendship_evidence,
                     "verifiedAt": current_time,
                     "createdAt": current_time,
                     "active": True,
                 },
             )
+        if client_following and not server_following:
+            tx.set(
+                line_friendship_ref,
+                client_attested_friendship_record(
+                    channel_id=settings.line_customer_login_channel_id,
+                    observed_at=current_time,
+                ),
+                merge=True,
+            )
         customer_data = {
             "displayName": normalized_name,
             "phoneMasked": mask_phone(phone_e164),
-            "friendStatus": identity.get("friendStatus", "UNKNOWN"),
+            "friendStatus": (
+                "FOLLOWING"
+                if server_following
+                else "REPORTED_FOLLOWING"
+                if client_following
+                else identity.get("friendStatus", "UNKNOWN")
+            ),
             "source": "LINE_CAMPAIGN",
             "profileCompleteness": "CAMPAIGN_REQUIRED_COMPLETE",
             "updatedAt": current_time,
@@ -301,6 +368,7 @@ def claim_campaign(
                 "couponId": new_coupon_ref.id,
                 "status": "CLAIMED",
                 "claimedAt": current_time,
+                "friendshipEvidence": friendship_evidence,
             },
         )
         notice_version = campaign.get(
@@ -360,6 +428,7 @@ def claim_campaign(
                 "couponId": new_coupon_ref.id,
                 "actorType": "LINE_CUSTOMER",
                 "actorIdHash": identity_hash,
+                "friendshipEvidence": friendship_evidence,
                 "createdAt": current_time,
             },
         )

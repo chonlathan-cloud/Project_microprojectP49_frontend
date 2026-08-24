@@ -44,7 +44,11 @@ def campaign_document() -> dict[str, object]:
             "amountSatang": 5000,
             "currency": "THB",
         },
-        "eligibility": {"maxClaimsPerCustomer": 1, "requiresFollowing": True},
+        "eligibility": {
+            "maxClaimsPerCustomer": 1,
+            "requiresFollowing": True,
+            "allowLiffFriendshipEvidence": True,
+        },
         "form": {
             "requiredFields": ["fullName", "phone", "birthDay", "birthMonth"],
             "optionalFields": ["gender"],

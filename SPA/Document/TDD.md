@@ -184,7 +184,9 @@ The API derives the trusted LINE User ID from the verified token. It never trust
 
 ### 7.3 Customer Profile Resolution
 
-- A verified Customer LINE User ID resolves an existing `customer_identity_links` record or creates a new Customer Profile.
+- A follow/unfollow webhook updates a pseudonymous `line_friendships` record. Following the OA alone does not create a Customer Profile or CRM record.
+- A verified Customer LINE User ID resolves an existing `customer_identity_links` record or creates a new Customer Profile only when the customer explicitly submits a booking/campaign flow with the required acknowledgement/consent.
+- Campaign eligibility prefers server-verified friendship evidence from webhook or an authorized Followers API sync. A campaign may explicitly permit a positive LIFF `getFriendship()` response as lower-assurance `CLIENT_ATTESTED` evidence for followers who predate webhook capture. This policy is disabled unless configured on that campaign.
 - A Website Guest submission creates a provisional Customer/Participant Profile for that Booking. A phone match may be shown as a restricted staff-side reconciliation candidate but is never sufficient for automatic merge, login, or profile disclosure.
 - `ADMIN` or `STAFF` may reconcile/merge profiles only after confirming the customer in an operational interaction. The merge records source/target IDs, actor, reason, time, and a safe field-change summary.
 - The current Health Profile may prefill a future verified LINE booking after the customer is informed and can correct it. Every submit creates a separate Booking Health Snapshot.
@@ -373,6 +375,8 @@ Public Booking ID sequence contention is acceptable at the approved volume. The 
 | `participant_health` | Immutable Booking-time health declaration snapshot, isolated from customer-safe projections and joined only for authorized Admin Web reads or registered Admin Group rendering |
 | `customers` | Reusable minimal customer profile and provisional/verified/merged lifecycle |
 | `customer_identity_links` | Verified LINE identity linkage; phone is never stored as proof of identity |
+| `line_friendships` | Pseudonymous OA friendship state and evidence assurance; raw LINE User ID and CRM PII are not stored |
+| `line_friendship_sync_runs` | Metadata-only summary for an authorized Followers API backfill; no follower IDs |
 | `customer_health_profiles` | Current reusable health declaration, consent and retention metadata |
 | `consent_receipts` | Versioned acknowledgement/explicit consent evidence and withdrawal state |
 | `customer_profile_merges` | Audited source-to-target reconciliation without plaintext health detail |

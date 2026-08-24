@@ -14,6 +14,7 @@ type Campaign = {
   descriptionTh?: string | null;
   descriptionEn?: string | null;
   benefit: { amountSatang: number; currency: string };
+  eligibility?: { requiresFollowing?: boolean };
   endsAt?: string | null;
 };
 type CouponResult = {
@@ -56,6 +57,11 @@ const copy = {
     campaignLoading: "กำลังโหลดสิทธิพิเศษ…",
     loginRedirect: "กำลังพาไปยืนยันตัวตนกับ LINE…",
     configError: "ไม่สามารถเปิดสิทธิพิเศษนี้ได้ กรุณาลองใหม่จาก Rich Menu",
+    friendshipTitle: "เพิ่มเพื่อน SPA 49 ก่อนรับสิทธิ์",
+    friendshipBody: "คูปองนี้สำหรับเพื่อน LINE OA ของ SPA 49 กรุณาเพิ่มเพื่อนแล้วกลับมาตรวจสอบอีกครั้ง",
+    friendshipAction: "เพิ่มเพื่อนและตรวจสอบ",
+    friendshipChecking: "กำลังตรวจสอบสถานะเพื่อน…",
+    friendshipError: "ตรวจสอบสถานะเพื่อน LINE ไม่สำเร็จ กรุณาเปิดใหม่จาก Rich Menu",
     formError: "กรุณาตรวจสอบข้อมูลที่จำเป็นให้ครบถ้วน",
     submitError: "ยังออกคูปองไม่ได้ กรุณาลองอีกครั้ง",
     success: "รับคูปองเรียบร้อยแล้ว",
@@ -93,6 +99,11 @@ const copy = {
     campaignLoading: "Loading offer…",
     loginRedirect: "Redirecting to LINE login…",
     configError: "This offer cannot be opened. Please try again from the Rich Menu.",
+    friendshipTitle: "Add SPA 49 as a friend",
+    friendshipBody: "This coupon is for SPA 49 LINE OA friends. Add the account, then check again.",
+    friendshipAction: "Add friend and check",
+    friendshipChecking: "Checking LINE friendship…",
+    friendshipError: "We could not verify your LINE friendship. Please reopen this offer from the Rich Menu.",
     formError: "Please complete all required information.",
     submitError: "We could not issue the coupon. Please try again.",
     success: "Your coupon is ready",
@@ -137,6 +148,7 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
   const [lineToken, setLineToken] = useState<string | null>(null);
   const [liffClient, setLiffClient] = useState<LiffClient | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "redirecting" | "ready" | "error">("loading");
+  const [friendshipState, setFriendshipState] = useState<"not-required" | "checking" | "following" | "required" | "requesting" | "error">("checking");
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [birthDay, setBirthDay] = useState("");
@@ -177,15 +189,42 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
         if (!token) throw new Error("LINE ID token unavailable");
         return { liff, token };
       })
-    ]).then(([campaignPayload, line]) => {
+    ]).then(async ([campaignPayload, line]) => {
       if (!active || !line) return;
       setCampaign(campaignPayload);
       setLiffClient(line.liff);
       setLineToken(line.token);
+      if (campaignPayload.eligibility?.requiresFollowing) {
+        try {
+          const friendship = await line.liff.getFriendship();
+          if (!active) return;
+          setFriendshipState(friendship.friendFlag ? "following" : "required");
+        } catch {
+          if (!active) return;
+          setFriendshipState("error");
+        }
+      } else {
+        setFriendshipState("not-required");
+      }
       setLoadState("ready");
     }).catch(() => active && setLoadState("error"));
     return () => { active = false; };
   }, [campaignCode]);
+
+  async function requestFriendship() {
+    if (!liffClient?.requestFriendship) {
+      setFriendshipState("error");
+      return;
+    }
+    setFriendshipState("requesting");
+    try {
+      await liffClient.requestFriendship();
+      const friendship = await liffClient.getFriendship();
+      setFriendshipState(friendship.friendFlag ? "following" : "required");
+    } catch {
+      setFriendshipState("error");
+    }
+  }
 
   const idempotencyKey = useMemo(() => {
     if (typeof window === "undefined") return "";
@@ -221,13 +260,21 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
           gender: gender || null,
           privacyAcknowledged,
           birthdayMarketingConsent: marketingConsent,
+          lineFriendshipConfirmed: friendshipState === "following",
           lineIdToken: lineToken
         })
       });
-      if (!response.ok) throw new Error("Claim failed");
+      if (!response.ok) {
+        const problem = await response.json().catch(() => null) as { code?: string } | null;
+        if (problem?.code === "LINE_FRIENDSHIP_REQUIRED") {
+          setFriendshipState("required");
+          throw new Error("LINE_FRIENDSHIP_REQUIRED");
+        }
+        throw new Error("Claim failed");
+      }
       setResult(await response.json() as CouponResult);
-    } catch {
-      setSubmitError(t.submitError);
+    } catch (error) {
+      setSubmitError(error instanceof Error && error.message === "LINE_FRIENDSHIP_REQUIRED" ? t.friendshipBody : t.submitError);
       queueMicrotask(() => errorRef.current?.focus());
     } finally {
       setIsSubmitting(false);
@@ -292,6 +339,20 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
           <strong>{amountLabel(campaign.benefit.amountSatang, locale)}</strong>
         </div>
       </section>
+      {campaign.eligibility?.requiresFollowing && friendshipState !== "following" ? (
+        <section className="friendship-gate" aria-live="polite">
+          <div className="friendship-mark" aria-hidden="true">LINE</div>
+          <h2>{t.friendshipTitle}</h2>
+          <p>{friendshipState === "error" ? t.friendshipError : t.friendshipBody}</p>
+          {friendshipState === "error" ? (
+            <button className="primary-button" type="button" onClick={() => window.location.reload()}>{t.retry}</button>
+          ) : (
+            <button className="primary-button" type="button" disabled={friendshipState === "requesting" || friendshipState === "checking"} onClick={requestFriendship}>
+              {friendshipState === "requesting" || friendshipState === "checking" ? t.friendshipChecking : t.friendshipAction}
+            </button>
+          )}
+        </section>
+      ) : (
       <form className="campaign-form" onSubmit={submit} noValidate>
         {showValidation && !valid && <div className="validation-summary" role="alert" tabIndex={-1} ref={errorRef}>{t.formError}</div>}
         {submitError && <div className="validation-summary" role="alert" tabIndex={-1} ref={errorRef}>{submitError}</div>}
@@ -346,6 +407,7 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
         </div>
         <button className="primary-button campaign-submit" type="submit" disabled={isSubmitting || !lineToken}>{isSubmitting ? t.submitting : t.submit}</button>
       </form>
+      )}
     </main>
   );
 }

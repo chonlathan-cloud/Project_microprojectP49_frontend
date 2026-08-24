@@ -30,6 +30,7 @@ class CampaignClaimRequest(ApiModel):
     gender: Literal["FEMALE", "MALE", "NON_BINARY", "PREFER_NOT_TO_SAY"] | None = None
     privacy_acknowledged: bool
     birthday_marketing_consent: bool = False
+    line_friendship_confirmed: bool = False
     line_id_token: str = Field(min_length=20, max_length=4096)
 
 
@@ -59,6 +60,7 @@ async def create_campaign_claim(
         gender=request.gender,
         privacy_acknowledged=request.privacy_acknowledged,
         birthday_marketing_consent=request.birthday_marketing_consent,
+        line_friendship_confirmed=request.line_friendship_confirmed,
         idempotency_key=idempotency_key,
         line_identity=identity,
     )

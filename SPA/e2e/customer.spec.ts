@@ -149,6 +149,8 @@ test("LINE campaign registration issues one digital coupon", async ({ page }) =>
         isInClient: () => true,
         login: () => undefined,
         getIDToken: () => "test-line-id-token-with-minimum-length",
+        getFriendship: async () => ({ friendFlag: true }),
+        requestFriendship: async () => undefined,
         closeWindow: () => undefined
       },
       configurable: true
@@ -170,7 +172,8 @@ test("LINE campaign registration issues one digital coupon", async ({ page }) =>
         nameEn: "Get THB 50 off",
         descriptionTh: "ลงทะเบียนครั้งเดียวเพื่อรับคูปองส่วนลดสำหรับใช้ที่ SPA 49",
         descriptionEn: "Register once to receive a SPA 49 discount coupon.",
-        benefit: { amountSatang: 5000, currency: "THB" }
+        benefit: { amountSatang: 5000, currency: "THB" },
+        eligibility: { requiresFollowing: true }
       }
     });
   });
@@ -183,7 +186,8 @@ test("LINE campaign registration issues one digital coupon", async ({ page }) =>
       birthDay: 29,
       birthMonth: 2,
       privacyAcknowledged: true,
-      birthdayMarketingConsent: false
+      birthdayMarketingConsent: false,
+      lineFriendshipConfirmed: true
     });
     await route.fulfill({
       status: 201,
@@ -215,4 +219,44 @@ test("LINE campaign registration issues one digital coupon", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "รับคูปองเรียบร้อยแล้ว" })).toBeVisible();
   await expect(page.getByText("W50-TEST123456")).toBeVisible();
   expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("LINE campaign asks non-followers to add the OA before showing PII fields", async ({ page }) => {
+  await page.addInitScript(() => {
+    let friendFlag = false;
+    Object.defineProperty(window, "liff", {
+      value: {
+        init: async () => undefined,
+        isLoggedIn: () => true,
+        isInClient: () => true,
+        login: () => undefined,
+        getIDToken: () => "test-line-id-token-with-minimum-length",
+        getFriendship: async () => ({ friendFlag }),
+        requestFriendship: async () => { friendFlag = true; },
+        closeWindow: () => undefined
+      },
+      configurable: true
+    });
+  });
+  await page.route("**/api/config", async (route) => {
+    await route.fulfill({ json: { lineCampaignV1LiffId: "campaign-v1-test-liff-id" } });
+  });
+  await page.route("**/api/spa/api/v1/public/campaigns/welcome-50", async (route) => {
+    await route.fulfill({
+      json: {
+        code: "welcome-50",
+        nameTh: "รับส่วนลด 50 บาท",
+        nameEn: "Get THB 50 off",
+        benefit: { amountSatang: 5000, currency: "THB" },
+        eligibility: { requiresFollowing: true }
+      }
+    });
+  });
+
+  await page.goto(`${customerUrl}/offers/welcome-50`, { waitUntil: "networkidle" });
+
+  await expect(page.getByRole("heading", { name: "เพิ่มเพื่อน SPA 49 ก่อนรับสิทธิ์" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /ชื่อ-นามสกุล/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "เพิ่มเพื่อนและตรวจสอบ" }).click();
+  await expect(page.getByRole("textbox", { name: /ชื่อ-นามสกุล/ })).toBeVisible();
 });

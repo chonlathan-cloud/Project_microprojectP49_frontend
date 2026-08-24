@@ -9,6 +9,7 @@ from google.api_core.exceptions import AlreadyExists
 
 from app.api.v1 import webhooks
 from app.infrastructure.firestore import get_firestore_client
+from app.integrations.line_identity import line_identity_hash
 from app.main import app
 
 
@@ -64,6 +65,7 @@ class FakeFirestore:
         self.events: dict[str, dict[str, object]] = {}
         self.groups: dict[str, dict[str, object]] = {}
         self.identities: dict[str, dict[str, object]] = {}
+        self.friendships: dict[str, dict[str, object]] = {}
         self.customers: dict[str, dict[str, object]] = {}
 
     def collection(self, name: str) -> FakeCollection:
@@ -71,6 +73,7 @@ class FakeFirestore:
             "line_webhook_events": self.events,
             "line_group_candidates": self.groups,
             "customer_identity_links": self.identities,
+            "line_friendships": self.friendships,
             "customers": self.customers,
         }
         return FakeCollection(self, stores[name])
@@ -178,11 +181,12 @@ def test_customer_webhook_does_not_capture_group_candidate(monkeypatch) -> None:
     assert fake_firestore.groups == {}
 
 
-def test_customer_follow_creates_customer_and_friend_identity(monkeypatch) -> None:
+def test_customer_follow_records_friendship_without_creating_crm_customer(monkeypatch) -> None:
     monkeypatch.setenv("LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET", "customer-secret")
     monkeypatch.setattr(webhooks.firestore, "transactional", lambda function: function)
     fake_firestore.events.clear()
     fake_firestore.identities.clear()
+    fake_firestore.friendships.clear()
     fake_firestore.customers.clear()
     body = json.dumps(
         {
@@ -206,9 +210,47 @@ def test_customer_follow_creates_customer_and_friend_identity(monkeypatch) -> No
 
     assert response.status_code == 200
     assert response.json()["accepted"] == 1
-    identity = next(iter(fake_firestore.identities.values()))
-    customer = next(iter(fake_firestore.customers.values()))
-    assert identity["lineUserId"] == "line-user-001"
-    assert identity["friendStatus"] == "FOLLOWING"
-    assert customer["friendStatus"] == "FOLLOWING"
-    assert customer["source"] == "LINE_FOLLOW"
+    friendship = next(iter(fake_firestore.friendships.values()))
+    assert fake_firestore.identities == {}
+    assert fake_firestore.customers == {}
+    assert friendship["status"] == "FOLLOWING"
+    assert friendship["evidenceSource"] == "WEBHOOK"
+    assert "lineUserId" not in friendship
+
+
+def test_customer_follow_updates_existing_crm_customer(monkeypatch) -> None:
+    monkeypatch.setenv("LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET", "customer-secret")
+    monkeypatch.setattr(webhooks.firestore, "transactional", lambda function: function)
+    fake_firestore.events.clear()
+    fake_firestore.friendships.clear()
+    fake_firestore.customers.clear()
+    fake_firestore.identities.clear()
+    identity_id = line_identity_hash("line-user-002")
+    fake_firestore.identities[identity_id] = {
+        "customerId": "customer-002",
+        "friendStatus": "UNKNOWN",
+    }
+    fake_firestore.customers["customer-002"] = {"source": "LINE_CAMPAIGN"}
+    body = json.dumps(
+        {
+            "events": [
+                {
+                    "webhookEventId": "evt-follow-002",
+                    "type": "follow",
+                    "timestamp": 1787216400000,
+                    "source": {"type": "user", "userId": "line-user-002"},
+                }
+            ]
+        },
+        separators=(",", ":"),
+    ).encode()
+
+    response = client.post(
+        "/api/v1/webhooks/line/customer",
+        content=body,
+        headers={"x-line-signature": signature(body, "customer-secret")},
+    )
+
+    assert response.status_code == 200
+    assert fake_firestore.identities[identity_id]["friendStatus"] == "FOLLOWING"
+    assert fake_firestore.customers["customer-002"]["friendStatus"] == "FOLLOWING"
