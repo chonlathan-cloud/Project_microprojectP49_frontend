@@ -4,7 +4,7 @@ from app.infrastructure.firestore_payments import _snapshots
 
 
 class AsyncGeneratorTransaction:
-    def get(self, reference):
+    async def get(self, reference):
         assert reference is SENTINEL
 
         async def snapshots():

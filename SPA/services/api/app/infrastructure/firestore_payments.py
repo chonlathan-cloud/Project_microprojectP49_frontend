@@ -44,7 +44,7 @@ from app.integrations.beam import BeamCharge, validate_authoritative_charge
 
 
 async def _snapshots(transaction: AsyncTransaction, reference_or_query: Any) -> list[Any]:
-    stream = transaction.get(reference_or_query)
+    stream = await transaction.get(reference_or_query)
     return [snapshot async for snapshot in stream]
 
 
