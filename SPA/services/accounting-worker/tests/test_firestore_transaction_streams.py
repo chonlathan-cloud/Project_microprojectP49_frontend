@@ -7,20 +7,16 @@ class Snapshot:
     exists = True
 
 
-class AsyncGeneratorTransaction:
-    async def get(self, reference):
-        assert reference is SENTINEL
-
-        async def snapshots():
-            yield Snapshot()
-
-        return snapshots()
+class AsyncDocumentReference:
+    async def get(self, *, transaction):
+        assert transaction is TRANSACTION
+        return Snapshot()
 
 
-SENTINEL = object()
+TRANSACTION = object()
 
 
 @pytest.mark.asyncio
-async def test_transaction_consumes_firestore_async_generator() -> None:
-    result = await _one(AsyncGeneratorTransaction(), SENTINEL)
+async def test_transaction_reads_document_reference_directly() -> None:
+    result = await _one(TRANSACTION, AsyncDocumentReference())
     assert result.exists

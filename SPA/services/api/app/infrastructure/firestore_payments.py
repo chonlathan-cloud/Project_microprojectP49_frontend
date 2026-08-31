@@ -49,10 +49,7 @@ async def _snapshots(transaction: AsyncTransaction, reference_or_query: Any) -> 
 
 
 async def _one(transaction: AsyncTransaction, reference: Any) -> Any:
-    snapshots = await _snapshots(transaction, reference)
-    if len(snapshots) != 1:
-        raise PersistenceUnavailable("Firestore returned an invalid document result")
-    return snapshots[0]
+    return await reference.get(transaction=transaction)
 
 
 def _payment_id(booking_doc_id: str) -> str:

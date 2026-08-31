@@ -28,11 +28,7 @@ class ClaimedExport:
 
 
 async def _one(transaction: AsyncTransaction, reference: Any) -> Any:
-    stream = await transaction.get(reference)
-    snapshots = [snapshot async for snapshot in stream]
-    if len(snapshots) != 1:
-        raise ExportRepositoryError("Firestore returned an invalid result")
-    return snapshots[0]
+    return await reference.get(transaction=transaction)
 
 
 def _projection(export_id: str, data: dict[str, Any]) -> ExportProjection:
