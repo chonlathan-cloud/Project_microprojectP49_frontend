@@ -8,6 +8,9 @@ from app.api.v1.bookings import router as bookings_router
 from app.api.v1.campaign_admin import router as campaign_admin_router
 from app.api.v1.campaigns import router as campaigns_router
 from app.api.v1.operations import router as operations_router
+from app.api.v1.payments import admin_router as payment_admin_router
+from app.api.v1.payments import public_router as payment_public_router
+from app.api.v1.payments import webhook_router as payment_webhook_router
 from app.api.v1.public import router as public_router
 from app.api.v1.webhooks import router as webhooks_router
 from app.core.errors import DomainError
@@ -28,6 +31,9 @@ app.include_router(campaigns_router)
 app.include_router(campaign_admin_router)
 app.include_router(operations_router)
 app.include_router(webhooks_router)
+app.include_router(payment_public_router)
+app.include_router(payment_admin_router)
+app.include_router(payment_webhook_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
@@ -65,6 +71,9 @@ async def ready() -> dict[str, object]:
     firestore_ready, firestore_error = check_firestore_connection()
     dependencies: dict[str, object] = {
         "catalogSeed": "ready",
+        "beamPaymentConfiguration": (
+            "ready" if not settings.beam_readiness_errors() else "not_ready"
+        ),
         "firestore": {
             "status": "ready" if firestore_ready else "unavailable",
             "database": settings.firestore_database,
@@ -76,4 +85,9 @@ async def ready() -> dict[str, object]:
             "database": settings.firestore_database,
             "error": firestore_error,
         }
-    return {"status": "ready" if firestore_ready else "degraded", "dependencies": dependencies}
+    reason_codes = list(settings.beam_readiness_errors())
+    return {
+        "status": "ready" if firestore_ready and not reason_codes else "degraded",
+        "dependencies": dependencies,
+        "reasonCodes": reason_codes,
+    }

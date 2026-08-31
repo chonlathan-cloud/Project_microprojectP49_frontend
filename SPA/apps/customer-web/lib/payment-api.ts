@@ -1,0 +1,109 @@
+export type PaymentStatus =
+  | "UNAVAILABLE"
+  | "DUE"
+  | "PAYMENT_PENDING"
+  | "PAYMENT_REVIEW"
+  | "PAID"
+  | "REFUND_PENDING"
+  | "PARTIALLY_REFUNDED"
+  | "REFUNDED";
+
+export type PaymentOptions = {
+  bookingId: string;
+  paymentId: string;
+  status: PaymentStatus;
+  source: "BEAM" | "CASH" | null;
+  serviceAmountSatang: number;
+  currency: "THB";
+  eligible: boolean;
+  reason: string | null;
+  tipPresetsSatang: number[];
+  customTipMaxSatang: number | null;
+  methods: string[];
+  version: number;
+};
+
+export type PaymentAttempt = {
+  attemptId: string;
+  paymentId: string;
+  status: string;
+  actionRequired: "NONE" | "REDIRECT" | "ENCODED_IMAGE";
+  expiresAt: string | null;
+  statusToken: string;
+  imageBase64: string | null;
+  redirectUrl: string | null;
+};
+
+export type ResolvedPayment = {
+  paymentId: string;
+  bookingId: string;
+  status: PaymentStatus;
+  source: "BEAM" | "CASH" | null;
+  serviceAmountSatang: number;
+  tipAmountSatang: number;
+  grossAmountSatang: number;
+  paidAt: string | null;
+};
+
+export class PaymentApiError extends Error {
+  constructor(public readonly code: string, public readonly status: number) {
+    super(code);
+  }
+}
+
+async function post<T>(
+  path: string,
+  body: object,
+  options: { idempotencyKey?: string; signal?: AbortSignal } = {},
+): Promise<T> {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (options.idempotencyKey) headers.set("Idempotency-Key", options.idempotencyKey);
+  const response = await fetch(`/api/spa${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    cache: "no-store",
+    signal: options.signal,
+  });
+  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) {
+    throw new PaymentApiError(
+      String(payload?.code ?? payload?.detail ?? "PAYMENT_UNAVAILABLE"),
+      response.status,
+    );
+  }
+  return payload as T;
+}
+
+export function getPaymentOptions(
+  bookingId: string,
+  lineIdToken: string,
+  signal?: AbortSignal,
+) {
+  return post<PaymentOptions>(
+    `/api/v1/public/bookings/${encodeURIComponent(bookingId)}/payment-options`,
+    { lineIdToken },
+    { signal },
+  );
+}
+
+export function createPaymentAttempt(
+  bookingId: string,
+  lineIdToken: string,
+  tipAmountSatang: number,
+  idempotencyKey: string,
+) {
+  return post<PaymentAttempt>(
+    `/api/v1/public/bookings/${encodeURIComponent(bookingId)}/payment-attempts`,
+    { lineIdToken, tipAmountSatang, paymentMethod: "QR_PROMPT_PAY" },
+    { idempotencyKey },
+  );
+}
+
+export function resolvePaymentStatus(statusToken: string, signal?: AbortSignal) {
+  return post<ResolvedPayment>(
+    "/api/v1/public/payment-status:resolve",
+    { statusToken },
+    { signal },
+  );
+}

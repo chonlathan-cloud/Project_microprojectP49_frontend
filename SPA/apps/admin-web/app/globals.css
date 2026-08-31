@@ -113,7 +113,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .status-no_show { border-color: #b7bdc6; background: #eceff3; color: #394150; }
 .row-action { width: 38px; height: 38px; border: 1px solid #cfd4cc; border-radius: 8px; background: white; color: var(--forest); cursor: pointer; font-size: 18px; }
 .empty-state { padding: 42px; color: var(--muted); text-align: center; }
-.detail-drawer { width: 370px; min-height: 100vh; padding: 22px; position: fixed; z-index: 40; top: 0; right: 0; border-left: 1px solid var(--line); background: white; box-shadow: -14px 0 38px rgb(31 41 55 / 12%); }
+.detail-drawer { width: 370px; height: 100dvh; padding: 22px; overflow-y: auto; position: fixed; z-index: 40; top: 0; right: 0; border-left: 1px solid var(--line); background: white; box-shadow: -14px 0 38px rgb(31 41 55 / 12%); }
 .drawer-header { display: flex; justify-content: space-between; gap: 18px; align-items: start; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .drawer-header h2 { margin: 0; font-size: 20px; }
 .drawer-header button { width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 8px; background: white; cursor: pointer; font-size: 22px; }
@@ -131,6 +131,24 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .confirm-button { border: 0; background: var(--forest); color: white; }
 .cancel-button { border: 1px solid #d89999; background: white; color: #a31d1d; }
 .api-gate { color: var(--muted); font-size: 11px; line-height: 1.5; text-align: center; }
+.admin-cash-panel { margin: 0 0 20px; padding: 18px 0; border-block: 1px solid var(--line); }
+.admin-cash-panel h3 { margin: 0; color: var(--forest-dark); font-size: 18px; }
+.admin-cash-panel > p { color: var(--muted); font-size: 12px; }
+.admin-payment-amount, .admin-payment-total { padding: 13px 0; display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
+.admin-payment-amount { border-bottom: 1px solid var(--line); }
+.admin-payment-amount span, .admin-payment-total span { color: var(--muted); font-size: 11px; }
+.admin-payment-amount strong, .admin-payment-total strong { color: var(--forest-dark); font-size: 17px; }
+.admin-cash-panel fieldset { margin: 14px 0 8px; padding: 0; border: 0; }
+.admin-cash-panel legend { margin-bottom: 8px; color: var(--text); font-size: 11px; font-weight: 800; }
+.admin-tip-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.admin-tip-options button, .admin-tip-options label { min-height: 40px; border: 1px solid #cfd4cc; border-radius: 8px; background: white; color: var(--forest-dark); }
+.admin-tip-options button { padding: 6px; cursor: pointer; font-size: 11px; font-weight: 800; }
+.admin-tip-options button[aria-pressed="true"] { border-color: var(--forest); background: #e9eee6; box-shadow: inset 0 0 0 1px var(--forest); }
+.admin-tip-options label { padding: 5px 7px; display: grid; grid-template-columns: 1fr 72px; align-items: center; gap: 6px; font-size: 10px; }
+.admin-tip-options input { width: 100%; min-width: 0; min-height: 28px; padding: 3px 5px; border: 1px solid #aeb6aa; border-radius: 5px; text-align: right; }
+.admin-payment-total { border-top: 1px solid var(--line); }
+.admin-record-cash { width: 100%; min-height: 44px; border-radius: 8px; font-weight: 800; }
+.admin-payment-success { margin: 0; padding: 11px; border-left: 4px solid #2f7d46; background: #e3f5e8; color: #166534 !important; font-weight: 800; }
 .sr-only { width: 1px; height: 1px; padding: 0; margin: -1px; position: absolute; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .toast-region { width: min(390px, calc(100vw - 32px)); display: grid; gap: 10px; position: fixed; z-index: 100; top: 18px; right: 18px; pointer-events: none; }
 .admin-toast { min-height: 72px; padding: 14px 42px 14px 14px; display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: start; gap: 11px; position: relative; overflow: hidden; border: 1px solid #d7ddd4; border-radius: 12px; background: rgb(255 255 255 / 98%); box-shadow: 0 14px 36px rgb(20 28 19 / 20%); color: var(--text); pointer-events: auto; animation: toast-enter .24s cubic-bezier(.2,.8,.2,1) both; }

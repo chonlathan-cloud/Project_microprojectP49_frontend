@@ -66,6 +66,18 @@ export type PreviewBooking = {
   healthAlert: boolean;
   therapistName?: string;
   version: number;
+  paymentStatus?: PaymentStatus;
+  paidAmountSatang?: number;
 };
+
+export type PaymentStatus =
+  | "UNAVAILABLE"
+  | "DUE"
+  | "PAYMENT_PENDING"
+  | "PAYMENT_REVIEW"
+  | "PAID"
+  | "REFUND_PENDING"
+  | "PARTIALLY_REFUNDED"
+  | "REFUNDED";
 
 export { INITIAL_SERVICE_CATALOG } from "./catalog";

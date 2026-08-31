@@ -54,3 +54,45 @@ class DuplicateBooking(DomainError):
 
 class ActivePendingLimit(DomainError):
     code = "ACTIVE_PENDING_LIMIT"
+
+
+class PaymentNotEligible(DomainError):
+    code = "PAYMENT_NOT_ELIGIBLE"
+
+
+class FinancialInvariantError(DomainError):
+    code = "FINANCIAL_INVARIANT_VIOLATION"
+
+
+class FinancialConflict(DomainError):
+    code = "FINANCIAL_CONFLICT"
+
+
+class AuthenticationRequired(DomainError):
+    code = "AUTHENTICATION_REQUIRED"
+    status_code = 401
+
+
+class AuthenticationInvalid(DomainError):
+    code = "AUTHENTICATION_INVALID"
+    status_code = 401
+
+
+class PermissionDenied(DomainError):
+    code = "PERMISSION_DENIED"
+    status_code = 403
+
+
+class AuthorizationProfileIncomplete(DomainError):
+    code = "AUTHORIZATION_PROFILE_INCOMPLETE"
+    status_code = 403
+
+
+class IdentityProviderUnavailable(DomainError):
+    code = "IDENTITY_PROVIDER_UNAVAILABLE"
+    status_code = 503
+
+
+class PersistenceUnavailable(DomainError):
+    code = "PERSISTENCE_UNAVAILABLE"
+    status_code = 503

@@ -176,6 +176,8 @@ def _serialize_customer_booking(snapshot: firestore.DocumentSnapshot) -> dict[st
         "pax": data.get("pax"),
         "estimatedAmountSatang": data.get("estimatedAmountSatang"),
         "priceIncludesVat": bool(data.get("priceIncludesVat", True)),
+        "paymentStatus": data.get("paymentStatus", "UNAVAILABLE"),
+        "paidAmountSatang": int(data.get("paidAmountSatang", 0)),
     }
 
 

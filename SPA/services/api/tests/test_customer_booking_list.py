@@ -126,6 +126,8 @@ def test_customer_booking_list_is_line_scoped_and_omits_sensitive_fields(monkeyp
             "pax": 1,
             "estimatedAmountSatang": 50000,
             "priceIncludesVat": True,
+            "paymentStatus": "UNAVAILABLE",
+            "paidAmountSatang": 0,
         }
     ]
     assert "+66812345678" not in response.text

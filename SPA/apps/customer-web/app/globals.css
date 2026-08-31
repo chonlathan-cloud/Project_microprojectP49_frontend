@@ -263,6 +263,37 @@ textarea { min-height: 110px; resize: vertical; }
 .booking-detail dd small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; font-weight: 500; }
 .load-more-button { width: 100%; min-height: 52px; border: 0; border-top: 1px solid var(--gold-soft); background: transparent; color: var(--forest); cursor: pointer; font-weight: 850; }
 .my-bookings-actions { padding: 24px 0; }
+.booking-payment-action { margin-top: 12px; display: flex; justify-content: flex-end; }
+.booking-payment-action button { cursor: pointer; }
+.booking-paid-mark { min-height: 34px; padding: 6px 11px; display: inline-flex; align-items: center; border-radius: 999px; background: #e3f5e8; color: #166534; font-size: 12px; font-weight: 850; }
+.customer-payment-panel { margin-top: 16px; padding: 20px; border: 1px solid var(--gold-soft); border-left: 4px solid var(--forest); border-radius: 12px; background: var(--surface); }
+.customer-payment-heading { display: flex; justify-content: space-between; align-items: start; gap: 18px; }
+.customer-payment-heading h3 { margin: 0; color: var(--forest-deep); font-family: var(--font-display), Georgia, serif; font-size: 22px; }
+.customer-payment-heading > button { min-height: 40px; padding: 0 10px; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
+.customer-payment-line, .customer-payment-total { padding: 15px 0; display: flex; justify-content: space-between; align-items: baseline; gap: 20px; border-bottom: 1px solid #ded7c8; }
+.customer-payment-line span { color: var(--muted); font-size: 13px; }
+.customer-payment-line strong, .customer-payment-total strong { color: var(--forest-deep); font-size: 20px; }
+.customer-payment-panel fieldset { margin: 18px 0; padding: 0; border: 0; }
+.customer-payment-panel legend { margin-bottom: 10px; color: var(--text); font-size: 13px; font-weight: 850; }
+.customer-tip-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.customer-tip-options button, .customer-tip-options label { min-height: 48px; border: 1px solid var(--gold-soft); border-radius: 9px; background: white; color: var(--forest-deep); }
+.customer-tip-options button { padding: 8px; cursor: pointer; font-size: 12px; font-weight: 800; }
+.customer-tip-options button[aria-pressed="true"] { border-color: var(--forest); background: var(--forest-soft); box-shadow: inset 0 0 0 1px var(--forest); }
+.customer-tip-options label { padding: 7px 9px; display: grid; grid-template-columns: 1fr minmax(70px, 1fr); align-items: center; gap: 8px; font-size: 12px; }
+.customer-tip-options input { width: 100%; min-width: 0; min-height: 32px; padding: 4px 6px; border: 1px solid #9aa397; border-radius: 6px; text-align: right; }
+.customer-payment-total { border-top: 1px solid var(--gold-soft); border-bottom: 0; }
+.customer-payment-total span { font-weight: 850; }
+.payment-submit { width: 100%; display: flex; align-items: center; justify-content: center; text-decoration: none; }
+.payment-cash-hint, .payment-message { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; text-align: center; }
+.payment-message { padding: 12px; border-left: 3px solid var(--amber); background: var(--amber-soft); color: #684300; text-align: left; }
+.beam-qr { margin-top: 18px; padding-top: 18px; display: grid; justify-items: center; border-top: 1px solid var(--gold-soft); text-align: center; }
+.beam-qr h3 { margin: 0 0 14px; color: var(--forest-deep); }
+.beam-qr img { width: min(260px, 100%); height: auto; padding: 10px; border: 1px solid #ded7c8; background: white; }
+.beam-qr p { margin: 12px 0 4px; color: var(--forest-deep); font-weight: 800; }
+.beam-qr time { color: var(--muted); font-size: 12px; }
+.payment-success { margin-top: 16px; padding: 16px; display: grid; gap: 3px; border-left: 4px solid #2f7d46; background: #e3f5e8; color: #166534; }
+.payment-success time { font-size: 12px; }
+.payment-error { margin: 14px 0 0; padding: 12px; border-left: 4px solid var(--error); background: var(--error-soft); color: var(--error); font-size: 12px; font-weight: 800; overflow-wrap: anywhere; }
 
 .sr-only { width: 1px; height: 1px; padding: 0; overflow: hidden; position: absolute; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .campaign-shell { min-height: 100dvh; padding-bottom: max(40px, env(safe-area-inset-bottom)); background: var(--cream); }
@@ -341,6 +372,8 @@ textarea { min-height: 110px; resize: vertical; }
   .campaign-submit { width: calc(100% - 32px); margin-inline: 16px; }
   .my-bookings-content { width: calc(100% - 32px); }
   .my-bookings-actions a, .empty-actions a { flex: 1 1 150px; }
+  .customer-payment-panel { margin-inline: -8px; padding: 17px 14px; }
+  .customer-tip-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 374px) {

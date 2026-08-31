@@ -9,13 +9,35 @@ REGION="${REGION:-asia-southeast1}"
 SERVICE_NAME="${SERVICE_NAME:-spa-api}"
 SOURCE_DIR="${SOURCE_DIR:-$SCRIPT_DIR/services/api}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
-ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/services/api/.env}"
-REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-false}"
-FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-spa-db}"
-APP_ENV="${APP_ENV:-production}"
-SERVICE_ASSETS_BUCKET="${SERVICE_ASSETS_BUCKET:-${PROJECT_ID}-spa-service-assets-${APP_ENV}}"
+DEPLOY_ENVIRONMENT="${DEPLOY_ENVIRONMENT:-}"
+if [[ -z "$DEPLOY_ENVIRONMENT" ]]; then
+  case "${APP_ENV:-production}" in
+    test) DEPLOY_ENVIRONMENT="test" ;;
+    prod | production) DEPLOY_ENVIRONMENT="prod" ;;
+    *)
+      echo "ERROR: APP_ENV must map to test, prod, or production."
+      exit 1
+      ;;
+  esac
+fi
+case "$DEPLOY_ENVIRONMENT" in
+  test | prod) ;;
+  *)
+    echo "ERROR: DEPLOY_ENVIRONMENT must be one of: test | prod"
+    exit 1
+    ;;
+esac
+APP_ENV="$DEPLOY_ENVIRONMENT"
+ENV_FILE="${ENV_FILE:-$SOURCE_DIR/.env-${DEPLOY_ENVIRONMENT}}"
+REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-true}"
+if [[ "$DEPLOY_ENVIRONMENT" == "test" ]]; then
+  FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-spa-test-db}"
+else
+  FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-spa-db}"
+fi
+SERVICE_ASSETS_BUCKET="${SERVICE_ASSETS_BUCKET:-${PROJECT_ID}-spa-service-assets-${DEPLOY_ENVIRONMENT}}"
 
-if [[ "$APP_ENV" == "production" ]]; then
+if [[ "$DEPLOY_ENVIRONMENT" == "prod" ]]; then
   DEFAULT_LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME="spa-line-prod-customer-messaging-channel-secret-Prod"
   DEFAULT_LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME="spa-line-prod-admin-messaging-channel-secret-Prod"
   DEFAULT_LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME="spa-line-prod-customer-login-channel-id-Prod"
@@ -31,6 +53,10 @@ LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME="${LINE_CUSTOMER_MESSAGING_CHANNEL_S
 LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME="${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME:-$DEFAULT_LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME}"
 LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME="${LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME:-$DEFAULT_LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME}"
 LINE_ADMIN_GROUP_ID_SECRET_NAME="${LINE_ADMIN_GROUP_ID_SECRET_NAME:-$DEFAULT_LINE_ADMIN_GROUP_ID_SECRET_NAME}"
+BEAM_API_KEY_SECRET_NAME="${BEAM_API_KEY_SECRET_NAME:-spa-beam-api-key-${DEPLOY_ENVIRONMENT}}"
+BEAM_MERCHANT_ID_SECRET_NAME="${BEAM_MERCHANT_ID_SECRET_NAME:-spa-beam-merchant-id-${DEPLOY_ENVIRONMENT}}"
+BEAM_WEBHOOK_HMAC_KEY_SECRET_NAME="${BEAM_WEBHOOK_HMAC_KEY_SECRET_NAME:-spa-beam-webhook-hmac-key-${DEPLOY_ENVIRONMENT}}"
+BOOKING_PHONE_PEPPER_SECRET_NAME="${BOOKING_PHONE_PEPPER_SECRET_NAME:-spa-booking-phone-pepper-${DEPLOY_ENVIRONMENT}}"
 
 ARTIFACT_REPOSITORY="${ARTIFACT_REPOSITORY:-spa}"
 IMAGE_NAME="${IMAGE_NAME:-spa-api}"
@@ -72,14 +98,14 @@ cd "$REPO_ROOT"
 if [[ "$CHECK_MAIN_BRANCH" == "true" ]]; then
   current_branch="$(git branch --show-current)"
   if [[ "$current_branch" != "main" ]]; then
-    echo "ERROR: Current branch is '$current_branch'. Production deploys are allowed only from 'main'."
+    echo "ERROR: Current branch is '$current_branch'. SPA API deploys are allowed only from 'main'."
     echo "Set CHECK_MAIN_BRANCH=false only when deliberately bypassing this safety guard."
     exit 1
   fi
 fi
 
 if [[ "$REQUIRE_CLEAN_WORKTREE" == "true" ]] && [[ -n "$(git status --porcelain -- "$SCRIPT_DIR")" ]]; then
-  echo "ERROR: SPA worktree has uncommitted changes. Production deploy requires a traceable clean source tree."
+  echo "ERROR: SPA worktree has uncommitted changes. Deployment requires a traceable clean source tree."
   echo "Set REQUIRE_CLEAN_WORKTREE=false only for an isolated Test deployment."
   exit 1
 fi
@@ -148,7 +174,7 @@ validate_secret_binding() {
     exit 1
   fi
 
-  if [[ "$APP_ENV" == "production" \
+  if [[ "$DEPLOY_ENVIRONMENT" == "prod" \
     && "$secret_name" != *-Prod \
     && "$secret_name" != *-prod \
     && "$secret_name" != *-production \
@@ -185,6 +211,14 @@ validate_secret_binding \
 validate_secret_binding \
   "LINE_ADMIN_GROUP_ID_SECRET_NAME" \
   "$LINE_ADMIN_GROUP_ID_SECRET_NAME"
+validate_secret_binding "BEAM_API_KEY_SECRET_NAME" "$BEAM_API_KEY_SECRET_NAME"
+validate_secret_binding "BEAM_MERCHANT_ID_SECRET_NAME" "$BEAM_MERCHANT_ID_SECRET_NAME"
+validate_secret_binding \
+  "BEAM_WEBHOOK_HMAC_KEY_SECRET_NAME" \
+  "$BEAM_WEBHOOK_HMAC_KEY_SECRET_NAME"
+validate_secret_binding \
+  "BOOKING_PHONE_PEPPER_SECRET_NAME" \
+  "$BOOKING_PHONE_PEPPER_SECRET_NAME"
 
 if ! gcloud "${GCLOUD_AUTH_ARGS[@]}" artifacts repositories describe "$ARTIFACT_REPOSITORY" \
   --project "$PROJECT_ID" --location "$REGION" >/dev/null 2>&1; then
@@ -254,7 +288,18 @@ for raw_line in source.read_text(encoding="utf-8").splitlines():
         continue
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         value = value[1:-1]
-    environment[key] = value
+    secret_keys = {
+        "LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET",
+        "LINE_ADMIN_MESSAGING_CHANNEL_SECRET",
+        "LINE_CUSTOMER_LOGIN_CHANNEL_ID",
+        "LINE_ADMIN_GROUP_ID",
+        "BEAM_API_KEY",
+        "BEAM_MERCHANT_ID",
+        "BEAM_WEBHOOK_HMAC_KEY",
+        "BOOKING_PHONE_PEPPER",
+    }
+    if key not in secret_keys:
+        environment[key] = value
 
 environment["FIRESTORE_DATABASE"] = firestore_database
 environment["APP_ENV"] = app_env
@@ -314,8 +359,8 @@ deploy_args=(
   --port 8080
   --ingress "$INGRESS"
   --execution-environment gen2
-  --labels "application=spa,component=api"
-  --set-secrets "LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET=${LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_ADMIN_MESSAGING_CHANNEL_SECRET=${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_CUSTOMER_LOGIN_CHANNEL_ID=${LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME}:latest,LINE_ADMIN_GROUP_ID=${LINE_ADMIN_GROUP_ID_SECRET_NAME}:latest"
+  --labels "application=spa,component=api,environment=${DEPLOY_ENVIRONMENT}"
+  --update-secrets "LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET=${LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_ADMIN_MESSAGING_CHANNEL_SECRET=${LINE_ADMIN_MESSAGING_CHANNEL_SECRET_NAME}:latest,LINE_CUSTOMER_LOGIN_CHANNEL_ID=${LINE_CUSTOMER_LOGIN_CHANNEL_ID_SECRET_NAME}:latest,LINE_ADMIN_GROUP_ID=${LINE_ADMIN_GROUP_ID_SECRET_NAME}:latest,BEAM_API_KEY=${BEAM_API_KEY_SECRET_NAME}:latest,BEAM_MERCHANT_ID=${BEAM_MERCHANT_ID_SECRET_NAME}:latest,BEAM_WEBHOOK_HMAC_KEY=${BEAM_WEBHOOK_HMAC_KEY_SECRET_NAME}:latest,BOOKING_PHONE_PEPPER=${BOOKING_PHONE_PEPPER_SECRET_NAME}:latest"
   --quiet
 )
 deploy_args+=("${env_args[@]}")

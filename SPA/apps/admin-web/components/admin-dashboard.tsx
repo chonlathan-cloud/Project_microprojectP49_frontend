@@ -55,6 +55,26 @@ function formatServiceName(booking: PreviewBooking, locale: Locale) {
   return locale === "th" ? service.nameTh : service.nameEn;
 }
 
+function formatBaht(satang: number, locale: Locale) {
+  return new Intl.NumberFormat(locale === "th" ? "th-TH" : "en-GB", {
+    style: "currency",
+    currency: "THB",
+    maximumFractionDigits: 0,
+  }).format(satang / 100);
+}
+
+type AdminPaymentOptions = {
+  paymentId: string;
+  status: string;
+  source: "BEAM" | "CASH" | null;
+  serviceAmountSatang: number;
+  eligible: boolean;
+  reason: string | null;
+  tipPresetsSatang: number[];
+  customTipMaxSatang: number | null;
+  version: number;
+};
+
 export function AdminDashboard({ user }: { user: User }) {
   const { notify, requestConfirmation } = useAdminFeedback();
   const [activeView, setActiveView] = useState<"bookings" | AdminView>("bookings");
@@ -71,6 +91,9 @@ export function AdminDashboard({ user }: { user: User }) {
   const [bookingRefresh, setBookingRefresh] = useState(0);
   const [notificationFailures, setNotificationFailures] = useState(0);
   const [notificationFilter, setNotificationFilter] = useState<"ALL" | "ACTION_REQUIRED">("ALL");
+  const [paymentOptions, setPaymentOptions] = useState<AdminPaymentOptions | null>(null);
+  const [paymentLoadState, setPaymentLoadState] = useState<"idle" | "loading" | "ready" | "saving" | "error">("idle");
+  const [cashTipSatang, setCashTipSatang] = useState(0);
   const detailDrawerRef = useRef<HTMLElement>(null);
   const closeDrawerButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -241,6 +264,49 @@ export function AdminDashboard({ user }: { user: User }) {
     }
   }
 
+  async function recordCashPayment() {
+    if (!selected || !paymentOptions?.eligible || paymentLoadState === "saving") return;
+    const grossAmount = paymentOptions.serviceAmountSatang + cashTipSatang;
+    const confirmation = await requestConfirmation({
+      title: locale === "th" ? "ยืนยันรับเงินสด?" : "Confirm cash receipt?",
+      message: locale === "th"
+        ? `${selected.bookingId} ยอด ${formatBaht(grossAmount, locale)} ระบบจะบันทึก Audit และส่งเข้าคิวบัญชี`
+        : `${selected.bookingId}, ${formatBaht(grossAmount, locale)}. This creates an audit record and accounting export.`,
+      confirmLabel: locale === "th" ? "ยืนยันรับเงินสด" : "Record cash",
+      cancelLabel: locale === "th" ? "กลับ" : "Go back",
+    });
+    if (!confirmation.confirmed) return;
+    setPaymentLoadState("saving");
+    try {
+      await adminApi(user, `/bookings/${encodeURIComponent(selected.bookingId)}/payments:record-cash`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          tipAmountSatang: cashTipSatang,
+          expectedVersion: paymentOptions.version,
+          confirmed: true,
+        }),
+      });
+      setPaymentOptions((current) => current ? { ...current, status: "PAID", source: "CASH", eligible: false, reason: "NOTHING_DUE" } : current);
+      setLiveBookings((current) => current.map((booking) => booking.bookingId === selected.bookingId
+        ? { ...booking, paymentStatus: "PAID", paidAmountSatang: grossAmount }
+        : booking));
+      setPaymentLoadState("ready");
+      notify({
+        tone: "success",
+        title: locale === "th" ? "รับเงินสดแล้ว • รอนำเข้าบัญชี" : "Cash received • awaiting deposit",
+        message: `${selected.bookingId} • ${formatBaht(grossAmount, locale)}`,
+      });
+    } catch (caught) {
+      setPaymentLoadState("error");
+      notify({
+        tone: "error",
+        title: locale === "th" ? "บันทึกรับเงินสดไม่สำเร็จ" : "Cash receipt failed",
+        message: caught instanceof Error ? caught.message : undefined,
+      });
+    }
+  }
+
   const bookings = liveBookings;
   const filtered = useMemo(() => [...bookings.filter((booking) => {
     const haystack = `${booking.bookingId} ${booking.customerName} ${booking.customerPhoneMasked}`.toLowerCase();
@@ -249,6 +315,37 @@ export function AdminDashboard({ user }: { user: User }) {
   const selected = bookings.find((booking) => booking.bookingId === selectedId);
   const pending = bookings.filter((booking) => booking.status === "PENDING").length;
   const unassigned = bookings.filter((booking) => booking.status === "CONFIRMED" && !booking.therapistName).length;
+
+  useEffect(() => {
+    if (!selected || selected.status !== "COMPLETED") return;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setPaymentLoadState("loading");
+      setPaymentOptions(null);
+      setCashTipSatang(0);
+      adminApi<AdminPaymentOptions>(
+        user,
+        `/bookings/${encodeURIComponent(selected.bookingId)}/payment-options`,
+        { method: "POST" },
+      ).then((payload) => {
+        if (active) {
+          setPaymentOptions(payload);
+          setPaymentLoadState("ready");
+        }
+      }).catch((caught) => {
+        if (active) {
+          setPaymentLoadState("error");
+          notify({
+            tone: "error",
+            title: locale === "th" ? "โหลดข้อมูลชำระเงินไม่สำเร็จ" : "Payment details unavailable",
+            message: caught instanceof Error ? caught.message : undefined,
+          });
+        }
+      });
+    });
+    return () => { active = false; };
+  }, [locale, notify, selected, user]);
 
   const text = locale === "th" ? {
     title: "คิวการจอง",
@@ -351,7 +448,40 @@ export function AdminDashboard({ user }: { user: User }) {
         </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} notificationFilter={notificationFilter} onNotificationFilterChange={setNotificationFilter} onNotificationCountChange={setNotificationFailures} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} onSelectBooking={(bookingId) => { setSelectedId(bookingId); setHealthDetails(null); }} />}
       </div>
 
-      {selected && <aside ref={detailDrawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title"><div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button ref={closeDrawerButtonRef} aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div><div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>{selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดจะแสดงเฉพาะผู้ดูแลที่มีสิทธิ์" : "Details are restricted to authorized operators"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}<dl><div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div><div><dt>{text.service}</dt><dd>{formatServiceName(selected, locale)}</dd></div><div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div><div><dt>{text.therapist}</dt><dd>{selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div><div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div></dl><div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready" || selected.status !== "PENDING"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready" || !["PENDING", "CONFIRMED"].includes(selected.status)} onClick={() => transitionBooking("cancel")}>{text.cancel}</button>{selected.status === "CONFIRMED" && <button className="confirm-button" disabled={!selected.therapistName} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button>}{selected.status === "CONFIRMED" && <button className="cancel-button" disabled={currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button>}{selected.status === "IN_SERVICE" && <button className="confirm-button" onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button>}</div>{selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}</aside>}
+      {selected && <aside ref={detailDrawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+        <div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button ref={closeDrawerButtonRef} aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div>
+        <div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>
+        {selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดจะแสดงเฉพาะผู้ดูแลที่มีสิทธิ์" : "Details are restricted to authorized operators"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}
+        <dl>
+          <div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div>
+          <div><dt>{text.service}</dt><dd>{formatServiceName(selected, locale)}</dd></div>
+          <div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div>
+          <div><dt>{text.therapist}</dt><dd>{selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div>
+          <div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div>
+          {selected.status === "COMPLETED" && <div><dt>{locale === "th" ? "การชำระเงิน" : "Payment"}</dt><dd>{paymentOptions?.status === "PAID" ? (locale === "th" ? "ชำระแล้ว" : "Paid") : (locale === "th" ? "รอชำระ" : "Payment due")}</dd></div>}
+        </dl>
+        {selected.status === "COMPLETED" && <section className="admin-cash-panel" aria-label={locale === "th" ? "บันทึกรับเงินสด" : "Record cash payment"}>
+          <div><p className="eyebrow">PAYMENT</p><h3>{locale === "th" ? "รับเงินสด" : "Cash receipt"}</h3></div>
+          {paymentLoadState === "loading" && <p role="status">{locale === "th" ? "กำลังโหลดข้อมูลชำระเงิน…" : "Loading payment details…"}</p>}
+          {paymentOptions && <>
+            <div className="admin-payment-amount"><span>{locale === "th" ? "ค่าบริการ รวม VAT" : "Service, VAT included"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang, locale)}</strong></div>
+            {paymentOptions.status !== "PAID" && <fieldset disabled={!paymentOptions.eligible || paymentLoadState === "saving"}>
+              <legend>{locale === "th" ? "ทิปเพิ่มเติม" : "Add tip"}</legend>
+              <div className="admin-tip-options">
+                {paymentOptions.tipPresetsSatang.map((tip) => <button type="button" key={tip} aria-pressed={cashTipSatang === tip} onClick={() => setCashTipSatang(tip)}>{tip === 0 ? (locale === "th" ? "ไม่มีทิป" : "No tip") : formatBaht(tip, locale)}</button>)}
+                {paymentOptions.customTipMaxSatang !== null && <label><span>{locale === "th" ? "กรอกเอง" : "Custom"}</span><input type="number" min="0" max={paymentOptions.customTipMaxSatang / 100} step="1" inputMode="decimal" onChange={(event) => setCashTipSatang(Math.round(Math.max(0, Number(event.target.value)) * 100))} /></label>}
+              </div>
+            </fieldset>}
+            <div className="admin-payment-total"><span>{locale === "th" ? "ยอดรับเงินสด" : "Cash total"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang + cashTipSatang, locale)}</strong></div>
+            {paymentOptions.status === "PAID" ? <p className="admin-payment-success">✓ {paymentOptions.source === "CASH" ? (locale === "th" ? "รับเงินสดแล้ว • รอนำเข้าบัญชี" : "Cash received • awaiting deposit") : (locale === "th" ? "ชำระผ่าน Beam แล้ว" : "Paid via Beam")}</p> : <button className="confirm-button admin-record-cash" disabled={!paymentOptions.eligible || paymentLoadState === "saving"} onClick={() => { void recordCashPayment(); }}>{paymentLoadState === "saving" ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "ยืนยันรับเงินสด" : "Record cash")}</button>}
+            {!paymentOptions.eligible && paymentOptions.status !== "PAID" && <p className="api-gate">{paymentOptions.reason}</p>}
+          </>}
+        </section>}
+        {selected.status === "PENDING" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button></div>}
+        {selected.status === "CONFIRMED" && <div className="drawer-actions"><button className="confirm-button" disabled={!selected.therapistName || actionState === "submitting"} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button><button className="cancel-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="cancel-button" disabled={actionState === "submitting" || currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button></div>}
+        {selected.status === "IN_SERVICE" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button></div>}
+        {selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}
+      </aside>}
     </div>
   );
 }

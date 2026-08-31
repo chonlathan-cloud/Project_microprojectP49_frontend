@@ -6,3 +6,6 @@ __pycache__
 .ruff_cache
 tests
 *.pyc
+.env
+.env-*
+!.env.example
