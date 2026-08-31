@@ -28,7 +28,7 @@ class ClaimedExport:
 
 
 async def _one(transaction: AsyncTransaction, reference: Any) -> Any:
-    stream = transaction.get(reference)
+    stream = await transaction.get(reference)
     snapshots = [snapshot async for snapshot in stream]
     if len(snapshots) != 1:
         raise ExportRepositoryError("Firestore returned an invalid result")
