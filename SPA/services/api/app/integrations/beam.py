@@ -42,7 +42,11 @@ class BeamAction:
     redirect_url: str | None = None
 
 
-def normalize_charge_action(payload: dict[str, Any]) -> BeamAction:
+def normalize_charge_action(
+    payload: dict[str, Any],
+    *,
+    requested_expires_at: datetime | None = None,
+) -> BeamAction:
     """Return the small provider action contract that is safe for the browser."""
     charge_id = payload.get("chargeId")
     action_required = payload.get("actionRequired")
@@ -64,12 +68,17 @@ def normalize_charge_action(payload: dict[str, Any]) -> BeamAction:
             raise BeamConfigurationError("Beam QR response is missing image data")
         if len(image_base64) > 2_000_000:
             raise BeamConfigurationError("Beam QR response image is too large")
-        if not isinstance(expiry, str) or not expiry:
+        if expiry is None:
+            expires_at = requested_expires_at
+        elif isinstance(expiry, str) and expiry:
+            try:
+                expires_at = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+            except ValueError as error:
+                raise BeamConfigurationError("Beam QR response expiry is invalid") from error
+        else:
+            raise BeamConfigurationError("Beam QR response expiry is invalid")
+        if expires_at is None:
             raise BeamConfigurationError("Beam QR response is missing expiry")
-        try:
-            expires_at = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-        except ValueError as error:
-            raise BeamConfigurationError("Beam QR response expiry is invalid") from error
         if expires_at.tzinfo is None or expires_at.utcoffset() is None:
             raise BeamConfigurationError("Beam QR response expiry must include timezone")
     elif action_required == "REDIRECT":

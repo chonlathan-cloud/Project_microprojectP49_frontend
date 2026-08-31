@@ -11,6 +11,7 @@ from app.domains.payments.models import MoneyBreakdown, Payment, ServiceLineSnap
 from app.integrations.beam import (
     BeamCharge,
     BeamClient,
+    BeamConfigurationError,
     normalize_charge_action,
     validate_authoritative_charge,
     verify_beam_webhook_signature,
@@ -115,6 +116,36 @@ def test_qr_action_is_reduced_to_browser_safe_fields() -> None:
     assert action.charge_id == "ch_001"
     assert action.image_base64 == "iVBORw0KGgo="
     assert not hasattr(action, "raw_data")
+
+
+def test_qr_action_uses_requested_expiry_when_playground_returns_null() -> None:
+    requested_expiry = datetime(2026, 8, 31, 15, 15, tzinfo=UTC)
+    action = normalize_charge_action(
+        {
+            "chargeId": "ch_001",
+            "actionRequired": "ENCODED_IMAGE",
+            "encodedImage": {
+                "expiry": None,
+                "imageBase64Encoded": "iVBORw0KGgo=",
+            },
+        },
+        requested_expires_at=requested_expiry,
+    )
+    assert action.expires_at == requested_expiry
+
+
+def test_qr_action_requires_provider_or_requested_expiry() -> None:
+    with pytest.raises(BeamConfigurationError, match="missing expiry"):
+        normalize_charge_action(
+            {
+                "chargeId": "ch_001",
+                "actionRequired": "ENCODED_IMAGE",
+                "encodedImage": {
+                    "expiry": None,
+                    "imageBase64Encoded": "iVBORw0KGgo=",
+                },
+            }
+        )
 
 
 @pytest.mark.asyncio

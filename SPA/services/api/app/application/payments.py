@@ -184,7 +184,10 @@ class PaymentService:
                     expires_at=prepared.requested_expires_at,
                     idempotency_key=prepared.provider_idempotency_key,
                 )
-            action = normalize_charge_action(raw)
+            action = normalize_charge_action(
+                raw,
+                requested_expires_at=prepared.requested_expires_at,
+            )
         except BeamRejectedError:
             await self._repository.mark_create_failed(prepared.attempt_id, datetime.now(UTC))
             raise PersistenceUnavailable("Beam rejected the payment request") from None
