@@ -69,6 +69,7 @@ const COPY = {
     paymentReview: "ตรวจสอบยอดชำระ",
     paymentLoading: "กำลังตรวจสอบสิทธิ์ชำระเงิน…",
     paymentUnavailable: "ยังไม่สามารถชำระรายการนี้ได้",
+    recheckPayment: "ตรวจสอบสถานะอีกครั้ง",
     serviceAmount: "ค่าบริการ (รวม VAT 7%)",
     tip: "ทิปเพิ่มเติม (ไม่บังคับ)",
     noTip: "ไม่มีทิป",
@@ -110,6 +111,7 @@ const COPY = {
     paymentReview: "Review payment",
     paymentLoading: "Checking payment eligibility…",
     paymentUnavailable: "This booking is not currently eligible for payment",
+    recheckPayment: "Check payment status again",
     serviceAmount: "Service amount (VAT 7% included)",
     tip: "Add a tip (optional)",
     noTip: "No tip",
@@ -124,6 +126,64 @@ const COPY = {
     closePayment: "Close"
   }
 } as const;
+
+const PAYMENT_REASON_COPY: Record<string, { th: string; en: string }> = {
+  BOOKING_NOT_COMPLETED: {
+    th: "ร้านต้องบันทึกบริการเสร็จสิ้นก่อนจึงจะชำระได้",
+    en: "The treatment must be marked completed before payment."
+  },
+  NOTHING_DUE: {
+    th: "รายการนี้ไม่มียอดค้างชำระ",
+    en: "There is no outstanding amount for this booking."
+  },
+  OUTSIDE_SERVICE_DATE: {
+    th: "ชำระได้เฉพาะวันรับบริการ หากต้องการชำระภายหลังโปรดติดต่อ Admin ที่หน้าร้าน",
+    en: "Payment is available on the service date. Ask the in-store Admin for late payment."
+  },
+  ACTIVE_ATTEMPT_EXISTS: {
+    th: "มีรายการ PromptPay เดิมที่ยังประมวลผลอยู่ โปรดรอผลหรือกดตรวจสอบอีกครั้ง",
+    en: "An earlier PromptPay attempt is still processing. Wait for the result or check again."
+  },
+  PAYMENT_ATTEMPT_RECONCILIATION_REQUIRED: {
+    th: "ระบบกำลังตรวจสอบผลของรายการชำระเดิมกับ Beam ก่อนอนุญาตให้สร้าง QR ใหม่",
+    en: "We are checking an earlier payment with Beam before allowing a new QR."
+  },
+  PAYMENT_REVIEW_REQUIRED: {
+    th: "รายการชำระนี้ต้องให้ Admin ตรวจสอบก่อน",
+    en: "This payment needs an Admin review."
+  }
+};
+
+const PAYMENT_ERROR_COPY: Record<string, { th: string; en: string }> = {
+  PAYMENT_ATTEMPT_FAILED: {
+    th: "รายการชำระไม่สำเร็จ คุณสามารถตรวจสอบสถานะแล้วลองใหม่ได้",
+    en: "The payment attempt was unsuccessful. Check the status before trying again."
+  },
+  PAYMENT_OPTIONS_UNAVAILABLE: {
+    th: "ตรวจสอบข้อมูลชำระเงินไม่ได้ในขณะนี้ โปรดลองอีกครั้ง",
+    en: "Payment details are temporarily unavailable. Please try again."
+  },
+  PAYMENT_ATTEMPT_UNAVAILABLE: {
+    th: "สร้างรายการชำระเงินไม่ได้ในขณะนี้ โปรดลองอีกครั้ง",
+    en: "The payment attempt could not be created. Please try again."
+  },
+  PAYMENT_STATUS_UNAVAILABLE: {
+    th: "ตรวจสอบผลชำระเงินไม่ได้ในขณะนี้ โปรดลองอีกครั้ง",
+    en: "The payment result is temporarily unavailable. Please try again."
+  },
+  PAYMENT_REVIEW_REQUIRED: PAYMENT_REASON_COPY.PAYMENT_REVIEW_REQUIRED
+};
+
+function paymentReason(reason: string | null, locale: Locale, fallback: string) {
+  return reason ? (PAYMENT_REASON_COPY[reason]?.[locale] ?? fallback) : fallback;
+}
+
+function paymentErrorMessage(code: string, locale: Locale) {
+  return PAYMENT_ERROR_COPY[code]?.[locale]
+    ?? (locale === "th"
+      ? "ดำเนินการชำระเงินไม่ได้ในขณะนี้ โปรดลองอีกครั้ง"
+      : "Payment is temporarily unavailable. Please try again.");
+}
 
 const STATUS_COPY: Record<string, { th: string; en: string }> = {
   PENDING: { th: "รอร้านยืนยัน", en: "Awaiting confirmation" },
@@ -459,7 +519,14 @@ export function MyBookings() {
                   </div>
                 </fieldset>
                 <div className="customer-payment-total"><span>{copy.total}</span><strong>{price(paymentOptions.serviceAmountSatang + tipAmountSatang, locale)}</strong></div>
-                {!paymentOptions.eligible && <p className="payment-message">{copy.paymentUnavailable} · {paymentOptions.reason}</p>}
+                {!paymentOptions.eligible && <div className="payment-recovery">
+                  <p className="payment-message" role="status" aria-live="polite">{paymentReason(paymentOptions.reason, locale, copy.paymentUnavailable)}</p>
+                  {(paymentOptions.reason === "PAYMENT_ATTEMPT_RECONCILIATION_REQUIRED" || paymentOptions.reason === "ACTIVE_ATTEMPT_EXISTS") && <button
+                    type="button"
+                    className="secondary-button payment-retry"
+                    onClick={() => { void openPayment(booking.bookingId); }}
+                  >{copy.recheckPayment}</button>}
+                </div>}
                 {paymentOptions.eligible && !paymentAttempt && <button
                   type="button"
                   className="primary-button payment-submit"
@@ -482,7 +549,7 @@ export function MyBookings() {
               </div>}
               {paymentAttempt?.actionRequired === "REDIRECT" && paymentAttempt.redirectUrl && <a className="primary-button payment-submit" href={paymentAttempt.redirectUrl} rel="noopener noreferrer">{copy.payment}</a>}
               {resolvedPayment?.status === "PAID" && <div className="payment-success" role="status"><strong>✓ {copy.paid}</strong>{resolvedPayment.paidAt && <time dateTime={resolvedPayment.paidAt}>{new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(resolvedPayment.paidAt))}</time>}</div>}
-              {paymentError && <p className="payment-error" role="alert">{paymentError}</p>}
+              {paymentError && <p className="payment-error" role="alert">{paymentErrorMessage(paymentError, locale)}</p>}
             </section>}
           </article>;
         })}

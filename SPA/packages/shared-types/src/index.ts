@@ -56,6 +56,8 @@ export type PreviewBooking = {
   startLocal: string;
   customerName: string;
   customerPhoneMasked: string;
+  contactMode?: "PHONE" | "NONE";
+  source?: "GUEST_WEB" | "LINE_CUSTOMER" | "ADMIN_WEB";
   serviceName: string;
   serviceId?: string;
   serviceNameTh?: string;

@@ -134,6 +134,38 @@ def test_admin_flex_uses_line_message_action() -> None:
     assert message["altText"] == "new booking"
 
 
+def test_confirmed_walk_in_without_phone_has_no_call_or_confirm_action() -> None:
+    values = admin_values()
+    values.update(
+        {
+            "status": "CONFIRMED",
+            "contact_phone_display": "ไม่มีเบอร์ติดต่อ",
+            "contact_phone_uri": None,
+            "booking_source": "ADMIN_WEB",
+        }
+    )
+    bubble = render_admin_new_booking(
+        AdminNotificationBookingView(**values, health_alert=False)
+    )
+    serialized = json.dumps(bubble, ensure_ascii=False)
+    assert "ยืนยันแล้ว • Walk-in" in serialized
+    assert "โทรหาลูกค้า" not in serialized
+    assert "ยืนยันการจอง" not in serialized
+    assert bubble["footer"]["contents"] == [
+        {
+            "type": "button",
+            "action": {
+                "type": "uri",
+                "label": "เปิดรายการจอง",
+                "uri": "https://admin.example/?booking=BK-20260815-001",
+            },
+            "style": "primary",
+            "color": "#5A4B3A",
+            "height": "sm",
+        }
+    ]
+
+
 def test_customer_flex_contains_price_and_map() -> None:
     values = {**base_values(), "status": "CONFIRMED", "map_url": "https://maps.example/spa49"}
     bubble = render_customer_confirmed(NotificationBookingView(**values))

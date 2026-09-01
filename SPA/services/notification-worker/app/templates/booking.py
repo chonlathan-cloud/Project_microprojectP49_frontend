@@ -27,7 +27,7 @@ class NotificationBookingView(BaseModel):
     status: Literal["PENDING", "CONFIRMED", "CANCELLED"]
     contact_nickname: str
     contact_phone_display: str
-    contact_phone_uri: str
+    contact_phone_uri: str | None = None
     local_date: str
     local_time: str
     participants: list[NotificationParticipantView] = Field(min_length=1, max_length=2)
@@ -42,6 +42,7 @@ class NotificationBookingView(BaseModel):
 class AdminNotificationBookingView(NotificationBookingView):
     participants: list[AdminNotificationParticipantView] = Field(min_length=1, max_length=2)
     health_alert: bool
+    booking_source: Literal["GUEST_WEB", "LINE_CUSTOMER", "ADMIN_WEB"] | None = None
 
 
 _THAI_WEEKDAYS = ("จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์")
@@ -150,6 +151,9 @@ def _admin_health_contents(view: AdminNotificationBookingView) -> list[dict[str,
 
 
 def render_admin_new_booking(view: AdminNotificationBookingView) -> dict[str, object]:
+    is_walk_in = view.booking_source == "ADMIN_WEB"
+    status_text = "✅ ยืนยันแล้ว • Walk-in" if is_walk_in else "⏳ รอการยืนยัน"
+    status_color = "#166534" if is_walk_in else "#D97706"
     body: list[dict[str, object]] = [
         {
             "type": "box",
@@ -164,9 +168,9 @@ def render_admin_new_booking(view: AdminNotificationBookingView) -> dict[str, ob
                 },
                 {
                     "type": "text",
-                    "text": "⏳ รอการยืนยัน",
+                    "text": status_text,
                     "size": "xs",
-                    "color": "#D97706",
+                    "color": status_color,
                     "weight": "bold",
                     "align": "end",
                     "flex": 1,
@@ -245,7 +249,49 @@ def render_admin_new_booking(view: AdminNotificationBookingView) -> dict[str, ob
                 "contents": _admin_health_contents(view),
             }
         )
-    return {
+    footer_contents: list[dict[str, object]] = []
+    if view.contact_phone_uri:
+        footer_contents.append(
+            {
+                "type": "button",
+                "action": {
+                    "type": "uri",
+                    "label": "📞 โทรหาลูกค้า",
+                    "uri": view.contact_phone_uri,
+                },
+                "style": "secondary",
+                "height": "sm",
+            }
+        )
+    if view.status == "PENDING":
+        footer_contents.append(
+            {
+                "type": "button",
+                "action": {
+                    "type": "message",
+                    "label": "✅ ยืนยันการจอง",
+                    "text": f"ยืนยันการจอง {view.public_booking_id}",
+                },
+                "style": "primary",
+                "color": "#5A4B3A",
+                "height": "sm",
+            }
+        )
+    elif view.admin_booking_url:
+        footer_contents.append(
+            {
+                "type": "button",
+                "action": {
+                    "type": "uri",
+                    "label": "เปิดรายการจอง",
+                    "uri": view.admin_booking_url,
+                },
+                "style": "primary",
+                "color": "#5A4B3A",
+                "height": "sm",
+            }
+        )
+    bubble: dict[str, object] = {
         "type": "bubble",
         "header": {
             "type": "box",
@@ -262,35 +308,15 @@ def render_admin_new_booking(view: AdminNotificationBookingView) -> dict[str, ob
             "backgroundColor": "#5A4B3A",
         },
         "body": {"type": "box", "layout": "vertical", "contents": body},
-        "footer": {
+    }
+    if footer_contents:
+        bubble["footer"] = {
             "type": "box",
             "layout": "horizontal",
             "spacing": "sm",
-            "contents": [
-                {
-                    "type": "button",
-                    "action": {
-                        "type": "uri",
-                        "label": "📞 โทรหาลูกค้า",
-                        "uri": view.contact_phone_uri,
-                    },
-                    "style": "secondary",
-                    "height": "sm",
-                },
-                {
-                    "type": "button",
-                    "action": {
-                        "type": "message",
-                        "label": "✅ ยืนยันการจอง",
-                        "text": f"ยืนยันการจอง {view.public_booking_id}",
-                    },
-                    "style": "primary",
-                    "color": "#5A4B3A",
-                    "height": "sm",
-                },
-            ],
-        },
-    }
+            "contents": footer_contents,
+        }
+    return bubble
 
 
 def render_customer_pending(view: NotificationBookingView) -> dict[str, object]:

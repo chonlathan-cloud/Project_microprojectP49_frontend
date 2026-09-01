@@ -1,9 +1,10 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Protocol
 
-from app.core.errors import FinancialConflict, PersistenceUnavailable
+from app.core.errors import FinancialConflict, PaymentNotEligible, PersistenceUnavailable
 from app.core.settings import Settings
 from app.core.types import PaymentSource, PaymentStatus
 from app.domains.identity.models import AdminPrincipal, LinePrincipal
@@ -38,6 +39,16 @@ class PaymentOptions:
     custom_tip_max_satang: int | None
     beam_qr_enabled: bool
     version: int
+    reconciliation: "PaymentReconciliationTarget | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentReconciliationTarget:
+    attempt_id: str
+    payment_id: str
+    provider_reference_id: str
+    provider_charge_id: str | None
+    expires_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +120,16 @@ class PaymentRepository(Protocol):
 
     async def mark_create_failed(self, attempt_id: str, now: datetime) -> None: ...
 
+    async def ensure_beam_charge_link(self, charge: BeamCharge, now: datetime) -> bool: ...
+
+    async def mark_reconciliation_missing(
+        self,
+        target: PaymentReconciliationTarget,
+        *,
+        not_before: datetime,
+        now: datetime,
+    ) -> None: ...
+
     async def accept_webhook(
         self, event_id: str, event_type: str, charge_id: str, now: datetime
     ) -> bool: ...
@@ -136,8 +157,83 @@ class PaymentService:
         self._repository = repository
         self._settings = settings
 
+    async def _reconcile_options(
+        self,
+        options: PaymentOptions,
+        *,
+        reload_options: Callable[[], Awaitable[PaymentOptions]],
+    ) -> PaymentOptions:
+        target = options.reconciliation
+        if target is None or self._settings.beam_readiness_errors():
+            return options
+        now = datetime.now(UTC)
+        try:
+            async with BeamClient(self._settings) as client:
+                if target.provider_charge_id:
+                    try:
+                        charge = await client.get_charge(target.provider_charge_id)
+                        charge_list = None
+                    except BeamRejectedError:
+                        charge = None
+                        charge_list = await client.list_charges_by_reference(
+                            target.provider_reference_id
+                        )
+                else:
+                    charge = None
+                    charge_list = await client.list_charges_by_reference(
+                        target.provider_reference_id
+                    )
+        except (BeamRetryableError, BeamRejectedError, BeamConfigurationError):
+            return options
+
+        if charge is None:
+            if charge_list is None or charge_list.total_count > 1:
+                return options
+            charge = charge_list.charges[0] if charge_list.charges else None
+        if charge is None:
+            not_before = target.expires_at + timedelta(minutes=5)
+            if now < not_before:
+                return options
+            await self._repository.mark_reconciliation_missing(
+                target,
+                not_before=not_before,
+                now=now,
+            )
+            return await reload_options()
+
+        linked = await self._repository.ensure_beam_charge_link(charge, now)
+        if not linked:
+            return options
+        event_id = sha256(
+            f"beam-reconcile:{charge.charge_id}:{charge.status}".encode()
+        ).hexdigest()
+        event_type = (
+            "charge.succeeded"
+            if charge.status == "SUCCEEDED"
+            else "charge.failed"
+            if charge.status in {"FAILED", "EXPIRED", "CANCELED", "CANCELLED"}
+            else "charge.reconcile"
+        )
+        accepted = await self._repository.accept_webhook(
+            event_id,
+            event_type,
+            charge.charge_id,
+            now,
+        )
+        if accepted:
+            await self._repository.settle_beam_charge(event_id, charge, now)
+        return await reload_options()
+
     async def options(self, booking_public_id: str, principal: LinePrincipal) -> PaymentOptions:
-        return await self._repository.get_options(booking_public_id, principal, datetime.now(UTC))
+        options = await self._repository.get_options(
+            booking_public_id, principal, datetime.now(UTC)
+        )
+        return await self._reconcile_options(
+            options,
+            reload_options=lambda: self._repository.get_options(
+                booking_public_id, principal, datetime.now(UTC)
+            ),
+        )
 
     async def admin_options(
         self, booking_public_id: str, principal: AdminPrincipal
@@ -146,8 +242,14 @@ class PaymentService:
             role=principal.role,
             action=AdminFinancialAction.RECORD_CASH,
         )
-        return await self._repository.get_admin_options(
+        options = await self._repository.get_admin_options(
             booking_public_id, principal, datetime.now(UTC)
+        )
+        return await self._reconcile_options(
+            options,
+            reload_options=lambda: self._repository.get_admin_options(
+                booking_public_id, principal, datetime.now(UTC)
+            ),
         )
 
     async def create_attempt(
@@ -164,6 +266,9 @@ class PaymentService:
         )
         if self._settings.beam_readiness_errors():
             raise PersistenceUnavailable("Beam payment is unavailable")
+        options = await self.options(booking_public_id, principal)
+        if not options.eligible:
+            raise PaymentNotEligible(options.reason or "Payment is unavailable")
         request_digest = sha256(
             f"{booking_public_id}:{principal.channel_id}:{principal.user_id}:"
             f"{tip_amount_satang}:QR_PROMPT_PAY".encode()
@@ -223,12 +328,6 @@ class PaymentService:
     async def process_webhook(self, *, event_type: str, charge_id: str, raw_body: bytes) -> bool:
         if event_type not in {"charge.succeeded", "charge.failed"}:
             return False
-        event_id = sha256(event_type.encode() + b":" + raw_body).hexdigest()
-        accepted = await self._repository.accept_webhook(
-            event_id, event_type, charge_id, datetime.now(UTC)
-        )
-        if not accepted:
-            return True
         try:
             async with BeamClient(self._settings) as client:
                 charge = await client.get_charge(charge_id)
@@ -238,7 +337,16 @@ class PaymentService:
             ) from None
         except (BeamConfigurationError, BeamRejectedError):
             raise PersistenceUnavailable("Beam webhook reconciliation is unavailable") from None
-        await self._repository.settle_beam_charge(event_id, charge, datetime.now(UTC))
+        now = datetime.now(UTC)
+        if not await self._repository.ensure_beam_charge_link(charge, now):
+            return False
+        event_id = sha256(event_type.encode() + b":" + raw_body).hexdigest()
+        accepted = await self._repository.accept_webhook(
+            event_id, event_type, charge_id, now
+        )
+        if not accepted:
+            return True
+        await self._repository.settle_beam_charge(event_id, charge, now)
         return True
 
     async def resolve_status(self, status_token: str) -> PaymentStatusResult:

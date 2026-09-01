@@ -12,6 +12,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 
 from app.application.payments import (
     PaymentOptions,
+    PaymentReconciliationTarget,
     PaymentStatusResult,
     PreparedAttempt,
     customer_tip_presets,
@@ -41,6 +42,44 @@ from app.domains.payments.eligibility import (
 from app.domains.payments.models import MoneyBreakdown, Payment, ServiceLineSnapshot
 from app.infrastructure.firestore import firestore_client
 from app.integrations.beam import BeamCharge, validate_authoritative_charge
+
+_RECONCILABLE_ATTEMPT_STATUSES = {
+    PaymentAttemptStatus.CREATING,
+    PaymentAttemptStatus.CREATE_UNKNOWN,
+    PaymentAttemptStatus.ACTIVE,
+}
+
+
+def _reconciliation_target(
+    attempt_snapshot: Any | None,
+    attempt: dict[str, Any],
+) -> PaymentReconciliationTarget | None:
+    if attempt_snapshot is None or not attempt_snapshot.exists:
+        return None
+    if attempt.get("status") not in _RECONCILABLE_ATTEMPT_STATUSES:
+        return None
+    provider_reference_id = attempt.get("providerReferenceId")
+    provider_charge_id = attempt.get("providerChargeId")
+    payment_id = attempt.get("paymentId")
+    expires_at = attempt.get("expiresAt")
+    if (
+        not isinstance(provider_reference_id, str)
+        or not provider_reference_id
+        or (provider_charge_id is not None and not isinstance(provider_charge_id, str))
+        or not isinstance(payment_id, str)
+        or not payment_id
+        or not isinstance(expires_at, datetime)
+        or expires_at.tzinfo is None
+        or expires_at.utcoffset() is None
+    ):
+        raise PersistenceUnavailable("Payment reconciliation state is invalid")
+    return PaymentReconciliationTarget(
+        attempt_id=attempt_snapshot.id,
+        payment_id=payment_id,
+        provider_reference_id=provider_reference_id,
+        provider_charge_id=provider_charge_id,
+        expires_at=expires_at,
+    )
 
 
 async def _snapshots(transaction: AsyncTransaction, reference_or_query: Any) -> list[Any]:
@@ -357,6 +396,10 @@ class FirestorePaymentRepository:
                 if guarded_attempt_snapshot is not None and guarded_attempt_snapshot.exists
                 else {}
             )
+            reconciliation = _reconciliation_target(
+                guarded_attempt_snapshot,
+                guarded_attempt,
+            )
             if not has_active and guarded_attempt.get("status") in {
                 PaymentAttemptStatus.CREATING,
                 PaymentAttemptStatus.CREATE_UNKNOWN,
@@ -391,6 +434,7 @@ class FirestorePaymentRepository:
                 custom_tip_max_satang=self._settings.tip_custom_max_satang,
                 beam_qr_enabled=not self._settings.beam_readiness_errors(),
                 version=payment.version,
+                reconciliation=reconciliation,
             )
 
         try:
@@ -418,6 +462,7 @@ class FirestorePaymentRepository:
             guard_snapshot = await _one(transaction, guard_ref)
             guard = guard_snapshot.to_dict() or {}
             guarded_attempt: dict[str, Any] = {}
+            guarded_attempt_snapshot = None
             if isinstance(guard.get("attemptId"), str):
                 guarded_attempt_snapshot = await _one(
                     transaction,
@@ -425,6 +470,10 @@ class FirestorePaymentRepository:
                 )
                 if guarded_attempt_snapshot.exists:
                     guarded_attempt = guarded_attempt_snapshot.to_dict() or {}
+            reconciliation = _reconciliation_target(
+                guarded_attempt_snapshot,
+                guarded_attempt,
+            )
             expires_at = guard.get("expiresAt")
             has_active = (
                 guard.get("active") is True
@@ -485,6 +534,7 @@ class FirestorePaymentRepository:
                 custom_tip_max_satang=self._settings.tip_custom_max_satang,
                 beam_qr_enabled=False,
                 version=payment.version,
+                reconciliation=reconciliation,
             )
 
         try:
@@ -833,6 +883,183 @@ class FirestorePaymentRepository:
             await run(self._client.transaction())
         except GoogleAPICallError as error:
             raise PersistenceUnavailable("Payment failure state is unavailable") from error
+
+    async def ensure_beam_charge_link(self, charge: BeamCharge, now: datetime) -> bool:
+        charge_ref = self._client.collection("beam_charge_links").document(charge.charge_id)
+        try:
+            existing_snapshot = await charge_ref.get()
+            if existing_snapshot.exists:
+                existing = existing_snapshot.to_dict() or {}
+                if existing.get("providerReferenceId") != charge.reference_id:
+                    raise FinancialConflict("Beam charge link reference does not match")
+                attempt_id = existing.get("attemptId")
+                if not isinstance(attempt_id, str) or not attempt_id:
+                    raise FinancialConflict("Beam charge link is incomplete")
+                attempt_ref = self._client.collection("payment_attempts").document(attempt_id)
+            else:
+                attempts_query = (
+                    self._client.collection("payment_attempts")
+                    .where(
+                        filter=FieldFilter(
+                            "providerReferenceId",
+                            "==",
+                            charge.reference_id,
+                        )
+                    )
+                    .limit(2)
+                )
+                attempts = [snapshot async for snapshot in attempts_query.stream()]
+                if not attempts:
+                    return False
+                if len(attempts) != 1:
+                    raise FinancialConflict("Beam reference matches multiple payment attempts")
+                attempt_ref = attempts[0].reference
+        except GoogleAPICallError as error:
+            raise PersistenceUnavailable("Payment reconciliation lookup is unavailable") from error
+
+        @async_transactional
+        async def run(transaction: AsyncTransaction) -> bool:
+            charge_snapshot = await _one(transaction, charge_ref)
+            attempt_snapshot = await _one(transaction, attempt_ref)
+            if not attempt_snapshot.exists:
+                return False
+            attempt = attempt_snapshot.to_dict() or {}
+            if attempt.get("providerReferenceId") != charge.reference_id:
+                raise FinancialConflict("Beam reference changed during reconciliation")
+            if charge.merchant_id != self._settings.beam_merchant_id:
+                raise FinancialConflict("Beam merchant does not match configured merchant")
+            if charge.currency != attempt.get("currency"):
+                raise FinancialConflict("Beam currency does not match payment attempt")
+            if (
+                isinstance(charge.amount, bool)
+                or not isinstance(charge.amount, int)
+                or charge.amount != attempt.get("totalAmountSatang")
+            ):
+                raise FinancialConflict("Beam amount does not match payment attempt")
+            if charge_snapshot.exists:
+                link = charge_snapshot.to_dict() or {}
+                if link.get("attemptId") != attempt_ref.id:
+                    raise FinancialConflict("Beam charge is already linked")
+                return True
+            payment_ref = self._client.collection("payments").document(
+                str(attempt.get("paymentId", ""))
+            )
+            guard_ref = self._client.collection("payment_attempt_guards").document(
+                str(attempt.get("bookingDocId", ""))
+            )
+            payment_snapshot = await _one(transaction, payment_ref)
+            guard_snapshot = await _one(transaction, guard_ref)
+            if not payment_snapshot.exists:
+                raise FinancialConflict("Payment no longer exists")
+            payment = _payment_from_data(payment_ref.id, payment_snapshot.to_dict() or {})
+            transaction.create(
+                charge_ref,
+                {
+                    "attemptId": attempt_ref.id,
+                    "paymentId": payment_ref.id,
+                    "providerReferenceId": charge.reference_id,
+                    "createdAt": now,
+                },
+            )
+            updates: dict[str, Any] = {
+                "providerChargeId": charge.charge_id,
+                "lastReconciledAt": now,
+                "updatedAt": now,
+                "version": int(attempt.get("version", 1)) + 1,
+            }
+            if (
+                charge.status == "PENDING"
+                and attempt.get("status") in _RECONCILABLE_ATTEMPT_STATUSES
+            ):
+                updates["status"] = PaymentAttemptStatus.ACTIVE
+                if payment.status is not PaymentStatus.PAID:
+                    transaction.update(
+                        payment_ref,
+                        {
+                            "status": PaymentStatus.PAYMENT_PENDING,
+                            "activeAttemptId": attempt_ref.id,
+                            "updatedAt": now,
+                            "version": payment.version + 1,
+                        },
+                    )
+                guard = guard_snapshot.to_dict() or {}
+                if guard_snapshot.exists and guard.get("attemptId") == attempt_ref.id:
+                    transaction.update(guard_ref, {"active": True, "updatedAt": now})
+            transaction.update(attempt_ref, updates)
+            return True
+
+        try:
+            return await run(self._client.transaction())
+        except GoogleAPICallError as error:
+            raise PersistenceUnavailable("Payment reconciliation link is unavailable") from error
+
+    async def mark_reconciliation_missing(
+        self,
+        target: PaymentReconciliationTarget,
+        *,
+        not_before: datetime,
+        now: datetime,
+    ) -> None:
+        attempt_ref = self._client.collection("payment_attempts").document(target.attempt_id)
+
+        @async_transactional
+        async def run(transaction: AsyncTransaction) -> None:
+            attempt_snapshot = await _one(transaction, attempt_ref)
+            if not attempt_snapshot.exists:
+                return
+            attempt = attempt_snapshot.to_dict() or {}
+            if (
+                attempt.get("providerReferenceId") != target.provider_reference_id
+                or attempt.get("paymentId") != target.payment_id
+                or attempt.get("providerChargeId") is not None
+                or attempt.get("status") not in _RECONCILABLE_ATTEMPT_STATUSES
+            ):
+                return
+            expires_at = attempt.get("expiresAt")
+            if (
+                not isinstance(expires_at, datetime)
+                or expires_at.tzinfo is None
+                or expires_at.utcoffset() is None
+                or expires_at + (not_before - target.expires_at) > now
+            ):
+                return
+            payment_ref = self._client.collection("payments").document(target.payment_id)
+            guard_ref = self._client.collection("payment_attempt_guards").document(
+                str(attempt.get("bookingDocId", ""))
+            )
+            payment_snapshot = await _one(transaction, payment_ref)
+            guard_snapshot = await _one(transaction, guard_ref)
+            if not payment_snapshot.exists:
+                raise FinancialConflict("Payment no longer exists")
+            payment = _payment_from_data(payment_ref.id, payment_snapshot.to_dict() or {})
+            transaction.update(
+                attempt_ref,
+                {
+                    "status": PaymentAttemptStatus.FAILED,
+                    "failureCode": "BEAM_CHARGE_NOT_FOUND_AFTER_EXPIRY",
+                    "lastReconciledAt": now,
+                    "updatedAt": now,
+                    "version": int(attempt.get("version", 1)) + 1,
+                },
+            )
+            if payment.status is not PaymentStatus.PAID:
+                transaction.update(
+                    payment_ref,
+                    {
+                        "status": PaymentStatus.DUE,
+                        "activeAttemptId": None,
+                        "updatedAt": now,
+                        "version": payment.version + 1,
+                    },
+                )
+            guard = guard_snapshot.to_dict() or {}
+            if guard_snapshot.exists and guard.get("attemptId") == target.attempt_id:
+                transaction.update(guard_ref, {"active": False, "updatedAt": now})
+
+        try:
+            await run(self._client.transaction())
+        except GoogleAPICallError as error:
+            raise PersistenceUnavailable("Payment reconciliation state is unavailable") from error
 
     async def accept_webhook(
         self, event_id: str, event_type: str, charge_id: str, now: datetime

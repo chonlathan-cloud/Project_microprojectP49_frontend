@@ -170,3 +170,64 @@ async def test_qr_charge_uses_satang_and_idempotency_header() -> None:
     assert captured.headers["x-beam-idempotency-key"] == "attempt_001"
     assert b'"amount":40000' in captured.content
     assert b'"paymentMethodType":"QR_PROMPT_PAY"' in captured.content
+
+
+@pytest.mark.asyncio
+async def test_list_charges_filters_by_exact_reference() -> None:
+    captured: httpx.Request | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured
+        captured = request
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "chargeId": "ch_001",
+                        "merchantId": "merchant-test",
+                        "referenceId": "SPA-PAY-pay_001-pat_001",
+                        "status": "FAILED",
+                        "currency": "THB",
+                        "amount": 40_000,
+                        "transactionTime": None,
+                        "failureCode": "CH_PROCESSING_FAILED",
+                    }
+                ],
+                "totalCount": 1,
+            },
+        )
+
+    async with BeamClient(settings(), httpx.MockTransport(handler)) as client:
+        result = await client.list_charges_by_reference("SPA-PAY-pay_001-pat_001")
+
+    assert captured is not None
+    assert captured.url.params["referenceId"] == "SPA-PAY-pay_001-pat_001"
+    assert captured.url.params["limit"] == "2"
+    assert result.total_count == 1
+    assert result.charges[0].failure_code == "CH_PROCESSING_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_list_charges_rejects_provider_reference_mismatch() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "chargeId": "ch_001",
+                        "merchantId": "merchant-test",
+                        "referenceId": "another-reference",
+                        "status": "FAILED",
+                        "currency": "THB",
+                        "amount": 40_000,
+                    }
+                ],
+                "totalCount": 1,
+            },
+        )
+
+    async with BeamClient(settings(), httpx.MockTransport(handler)) as client:
+        with pytest.raises(BeamConfigurationError, match="reference"):
+            await client.list_charges_by_reference("SPA-PAY-pay_001-pat_001")

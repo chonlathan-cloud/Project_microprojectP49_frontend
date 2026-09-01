@@ -132,6 +132,12 @@ class BeamCharge:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class BeamChargeList:
+    charges: tuple[BeamCharge, ...]
+    total_count: int
+
+
 def verify_beam_webhook_signature(raw_body: bytes, signature: str, encoded_key: str) -> bool:
     try:
         key = b64decode(encoded_key, validate=True)
@@ -237,6 +243,40 @@ class BeamClient:
     async def get_charge(self, charge_id: str) -> BeamCharge:
         payload = await self._request("GET", f"/api/v1/charges/{charge_id}")
         return BeamCharge.from_provider(payload)
+
+    async def list_charges_by_reference(
+        self,
+        reference_id: str,
+        *,
+        limit: int = 2,
+    ) -> BeamChargeList:
+        if not reference_id or len(reference_id) > 200:
+            raise FinancialInvariantError("Beam referenceId is invalid")
+        if not 1 <= limit <= 20:
+            raise FinancialInvariantError("Beam charge list limit is invalid")
+        payload = await self._request(
+            "GET",
+            "/api/v1/charges",
+            params={"referenceId": reference_id, "limit": limit},
+        )
+        raw_charges = payload.get("data")
+        total_count = payload.get("totalCount")
+        if (
+            not isinstance(raw_charges, list)
+            or isinstance(total_count, bool)
+            or not isinstance(total_count, int)
+            or total_count < len(raw_charges)
+        ):
+            raise BeamConfigurationError("Beam charge list response is invalid")
+        charges: list[BeamCharge] = []
+        for item in raw_charges:
+            if not isinstance(item, dict):
+                raise BeamConfigurationError("Beam charge list item is invalid")
+            charge = BeamCharge.from_provider(item)
+            if charge.reference_id != reference_id:
+                raise BeamConfigurationError("Beam charge list reference does not match filter")
+            charges.append(charge)
+        return BeamChargeList(tuple(charges), total_count)
 
     async def _request(
         self,

@@ -123,15 +123,15 @@ def _render_admin_message(event: dict[str, object], booking: dict[str, object]) 
     )
 
 
-def _phone_view(booking: dict[str, object]) -> tuple[str, str]:
+def _phone_view(booking: dict[str, object]) -> tuple[str, str | None]:
     contact = booking.get("contact")
     contact = contact if isinstance(contact, dict) else {}
     e164 = str(contact.get("phoneE164", ""))
     if e164.startswith("+66") and len(e164) == 12:
         local = f"0{e164[3:]}"
         return f"{local[:3]}-{local[3:6]}-{local[6:]}", f"tel:{local}"
-    display = str(contact.get("phoneMasked", "ไม่ระบุ"))
-    return display, f"tel:{e164}" if e164 else "tel:0643654949"
+    display = str(contact.get("phoneMasked") or "ไม่มีเบอร์ติดต่อ")
+    return display, f"tel:{e164}" if e164 else None
 
 
 def _booking_view(
@@ -248,6 +248,7 @@ def _booking_view(
         return AdminNotificationBookingView(
             **values,
             health_alert=bool(booking.get("healthAlert")),
+            booking_source=booking.get("source"),
         )
     return NotificationBookingView(**values)
 

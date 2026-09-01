@@ -4,7 +4,7 @@
 | --- | --- |
 | Surface | SPA Admin Web — desktop-first |
 | ผู้ใช้หลัก | Reception / `STAFF` และ Branch Manager / `ADMIN` |
-| งานหลัก | ตรวจ Booking ใหม่, ยืนยัน, มอบหมายหมอนวด, เปลี่ยนสถานะ และแก้ Notification Failure |
+| งานหลัก | สร้าง Walk-in, ตรวจ Booking ใหม่, ยืนยัน, มอบหมายหมอนวด, เปลี่ยนสถานะ และแก้ Notification Failure |
 | Primary visual anchor | Pending Booking Queue และรายการที่ต้องดำเนินการตามเวลา |
 
 เอกสารนี้กำหนด operational journey ของ Admin Web โดยเชื่อมกับ LINE flow ใน [LINE-NOTIFICATION-JOURNEY.md](./LINE-NOTIFICATION-JOURNEY.md)
@@ -47,6 +47,21 @@ Notification delivery ทำงานขนาน:
                               └─ FAILED → Admin Notification Queue → Retry/โทรติดตาม
 ```
 
+### Walk-in journey
+
+```text
+Booking Queue / Calendar
+  → กด “จองลูกค้า Walk-in”
+  → เลือก Service/Pax และ Slot วันนี้ที่ยังมี Capacity
+  → ระบุชื่อเล่นและเบอร์ติดต่อ (ถ้ามี)
+  → บันทึก Health Declaration และหลักฐานยินยอมแบบ Verbal/Paper
+  → Review ราคา เวลา Capacity และคำเตือนไม่มีช่องทางติดต่อ
+  → สร้างเป็น CONFIRMED
+  → เปิด Booking Detail และมอบหมายหมอนวดก่อน Start
+```
+
+Drawer ต้องรักษาข้อมูลที่กรอกเมื่อ API ตอบ validation/conflict, focus trap, ปิดด้วย Escape และคืน focus ไปยังปุ่มเปิด Drawer. เมื่อ Capacity เปลี่ยนระหว่างกรอก ให้คงข้อมูลลูกค้าไว้และบังคับเลือก Slot ใหม่.
+
 ### Journey map
 
 | Stage | Staff goal | Screen / touchpoint | Information hierarchy | Primary action | Recovery |
@@ -84,12 +99,15 @@ Notification badge ต้องหมายถึง **จำนวนราย�
 
 Metric หรือ analytics ไม่ควรแย่ง visual weight จาก operational queue
 
+Primary action `+ จองลูกค้า Walk-in` อยู่ใน Page Heading ของ Booking Queue และ Calendar ไม่ใช้ Summary Card หรือเมนูซ่อน
+
 ## 5. Booking detail UX
 
 Detail drawer ควรรักษา context ของรายการเดิมและมีส่วนดังนี้:
 
 1. Booking ID, status และ appointment time
 2. Customer contact และ source (`LINE` / `Guest Web`)
+   สำหรับ `ADMIN_WEB` แสดง `Walk-in`; หากไม่มีเบอร์ให้แสดงข้อความ `ไม่มีเบอร์ติดต่อ` แทนพื้นที่ว่างหรือเบอร์ placeholder
 3. Participant cards เฉพาะเมื่อช่วยแยกข้อมูลของ 2 คน ไม่ควรสร้าง nested card เกินจำเป็น
 4. Service, Duration, Pax และราคาประเมิน
 5. Health Alert แบบ collapsed-by-default พร้อม action “เปิดดูข้อมูลสุขภาพ” และ audit เมื่อเปิด
@@ -234,4 +252,3 @@ Retry เป็นการขอ enqueue ใหม่ ไม่ใช่กา�
 - [LLD.md](../LLD.md) — Firestore/outbox fields และ worker contracts
 - [Admin DESIGN.md](../DESING/Side-Admin/DESIGN.md) — desktop design system
 - [Admin FLOW_STITCH.md](../DESING/Side-Admin/FLOW_STITCH.md) — navigation and screen intent
-

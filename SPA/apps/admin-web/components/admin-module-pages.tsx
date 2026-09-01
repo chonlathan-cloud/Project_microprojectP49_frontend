@@ -35,7 +35,7 @@ function PageState({ loading, error, empty, locale }: { loading: boolean; error:
   return null;
 }
 
-export function AdminModulePage({ view, locale, user, bookings, notificationFilter, onNotificationFilterChange, onNotificationCountChange, onBookingsChanged, onSelectBooking }: {
+export function AdminModulePage({ view, locale, user, bookings, notificationFilter, onNotificationFilterChange, onNotificationCountChange, onBookingsChanged, onSelectBooking, onOpenWalkIn }: {
   view: AdminView;
   locale: Locale;
   user: User;
@@ -45,8 +45,9 @@ export function AdminModulePage({ view, locale, user, bookings, notificationFilt
   onNotificationCountChange: (count: number) => void;
   onBookingsChanged: () => void;
   onSelectBooking: (bookingId: string) => void;
+  onOpenWalkIn?: () => void;
 }) {
-  if (view === "calendar") return <CalendarPage locale={locale} bookings={bookings} onSelectBooking={onSelectBooking} />;
+  if (view === "calendar") return <CalendarPage locale={locale} bookings={bookings} onSelectBooking={onSelectBooking} onOpenWalkIn={onOpenWalkIn} />;
   if (view === "capacity") return <CapacityPage locale={locale} user={user} />;
   if (view === "services") return <ServicesPage locale={locale} user={user} />;
   if (view === "therapists") return <TherapistsPage locale={locale} user={user} bookings={bookings} onBookingsChanged={onBookingsChanged} />;
@@ -101,12 +102,12 @@ function localizedServiceName(booking: PreviewBooking, locale: Locale): string {
   return locale === "th" ? service.nameTh : service.nameEn;
 }
 
-function CalendarPage({ locale, bookings, onSelectBooking }: { locale: Locale; bookings: PreviewBooking[]; onSelectBooking: (bookingId: string) => void }) {
+function CalendarPage({ locale, bookings, onSelectBooking, onOpenWalkIn }: { locale: Locale; bookings: PreviewBooking[]; onSelectBooking: (bookingId: string) => void; onOpenWalkIn?: () => void }) {
   const firstDate = bookings[0] ? bangkokDate(bookings[0].startLocal) : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date());
   const [date, setDate] = useState(firstDate);
   const dayBookings = useMemo(() => bookings.filter((item) => bangkokDate(item.startLocal) === date), [bookings, date]);
   return <main className="dashboard-content">
-    <ModuleHeading eyebrow="BOOKING CALENDAR • ASIA/BANGKOK" title={locale === "th" ? "ปฏิทินการจอง" : "Booking calendar"} subtitle={locale === "th" ? "ดูตารางการให้บริการตามวันและเวลา" : "Review the daily service schedule"} />
+    <div className="module-heading-action"><ModuleHeading eyebrow="BOOKING CALENDAR • ASIA/BANGKOK" title={locale === "th" ? "ปฏิทินการจอง" : "Booking calendar"} subtitle={locale === "th" ? "ดูตารางการให้บริการตามวันและเวลา" : "Review the daily service schedule"} />{onOpenWalkIn && <button className="new-booking" type="button" onClick={onOpenWalkIn}>{locale === "th" ? "+ จองลูกค้า Walk-in" : "+ Walk-in booking"}</button>}</div>
     <section className="module-panel"><div className="module-toolbar"><label>{locale === "th" ? "วันที่" : "Date"}<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><strong>{dayBookings.length} {locale === "th" ? "รายการ" : "bookings"}</strong></div>
       <div className="calendar-grid">{Array.from({ length: 13 }, (_, index) => `${String(index + 10).padStart(2, "0")}:00`).map((time) => {
         const items = dayBookings.filter((item) => bangkokHour(item.startLocal) === time.slice(0, 2));

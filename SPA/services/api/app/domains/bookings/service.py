@@ -53,6 +53,52 @@ def _validate_advance_window(
         )
 
 
+def _validate_walk_in_window(
+    start_at: datetime,
+    *,
+    now: datetime | None = None,
+    bucket_minutes: int = 15,
+) -> None:
+    local_now = (now or datetime.now(UTC)).astimezone(BRANCH_TIMEZONE)
+    current_bucket = local_now.replace(
+        minute=(local_now.minute // bucket_minutes) * bucket_minutes,
+        second=0,
+        microsecond=0,
+    )
+    if start_at.date() != local_now.date():
+        raise AdvanceWindowViolation("Walk-in bookings must be for the current branch-local date")
+    if start_at < current_bucket:
+        raise AdvanceWindowViolation("Walk-in booking time cannot be in the past")
+
+
+def _validate_operating_hours(
+    start_at: datetime,
+    duration_minutes: int,
+    branch: dict[str, object],
+) -> None:
+    operating_hours = branch.get("operatingHours") or {}
+    if not isinstance(operating_hours, dict):
+        operating_hours = {}
+    hours = operating_hours.get(str(start_at.weekday()), {"open": "10:00", "close": "22:00"})
+    if not isinstance(hours, dict):
+        hours = {"open": "10:00", "close": "22:00"}
+    try:
+        opens_at = datetime.combine(
+            start_at.date(),
+            datetime.strptime(str(hours.get("open", "10:00")), "%H:%M").time(),
+            BRANCH_TIMEZONE,
+        )
+        closes_at = datetime.combine(
+            start_at.date(),
+            datetime.strptime(str(hours.get("close", "22:00")), "%H:%M").time(),
+            BRANCH_TIMEZONE,
+        )
+    except ValueError as error:
+        raise ValidationDomainError("Branch operating hours are invalid") from error
+    if start_at < opens_at or start_at + timedelta(minutes=duration_minutes) > closes_at:
+        raise ValidationDomainError("The selected service falls outside branch operating hours")
+
+
 def _variant(client: firestore.Client, variant_id: str):
     for snapshot in client.collection("services").where("active", "==", True).stream():
         service = snapshot.to_dict() or {}
@@ -92,10 +138,15 @@ def create_booking(
     branch_id: str,
     date: str,
     time: str,
-    phone: str,
+    phone: str | None,
     participants: list[dict[str, object]],
     idempotency_key: str | None,
     line_identity: dict[str, object] | None = None,
+    source: str = "GUEST_WEB",
+    initial_status: str = "PENDING",
+    actor_id: str | None = None,
+    consent_capture_method: str = "SELF_SERVICE",
+    booking_privacy_acknowledged: bool = False,
 ) -> dict[str, object]:
     settings = get_settings()
     if not idempotency_key or not 8 <= len(idempotency_key) <= 128:
@@ -109,7 +160,30 @@ def create_booking(
     if start_at.minute % settings.capacity_bucket_minutes:
         raise ValidationDomainError("Booking time must align to a 15-minute interval")
 
-    e164 = normalize_thai_phone(phone)
+    if source not in {"GUEST_WEB", "LINE_CUSTOMER", "ADMIN_WEB"}:
+        raise ValidationDomainError("Unsupported booking source")
+    if initial_status not in {"PENDING", "CONFIRMED"}:
+        raise ValidationDomainError("Unsupported initial booking status")
+    if source == "ADMIN_WEB":
+        if not actor_id:
+            raise ValidationDomainError("Admin actor is required for a Walk-in booking")
+        if initial_status != "CONFIRMED":
+            raise ValidationDomainError("Admin Walk-in bookings must start confirmed")
+        if consent_capture_method not in {"VERBAL", "PAPER"}:
+            raise ValidationDomainError("Walk-in consent must be captured verbally or on paper")
+        if not booking_privacy_acknowledged:
+            raise ValidationDomainError("Booking privacy acknowledgement is required")
+        _validate_walk_in_window(
+            start_at,
+            bucket_minutes=settings.capacity_bucket_minutes,
+        )
+    elif initial_status != "PENDING":
+        raise ValidationDomainError("Customer bookings must start pending")
+
+    normalized_phone = (phone or "").strip()
+    e164 = normalize_thai_phone(normalized_phone) if normalized_phone else None
+    if source != "ADMIN_WEB" and not e164:
+        raise ValidationDomainError("A valid Thai phone number is required")
     selections = []
     for participant in participants:
         if not participant.get("healthConsent"):
@@ -121,10 +195,6 @@ def create_booking(
         raise ValidationDomainError("A two-person package must be selected for both participants")
 
     max_duration = max(variant.duration_minutes for _, _, variant in selections)
-    if start_at + timedelta(minutes=max_duration) > datetime.combine(
-        start_at.date(), datetime.strptime("22:00", "%H:%M").time(), BRANCH_TIMEZONE
-    ):
-        raise ValidationDomainError("The selected service ends after branch closing time")
 
     request_payload: dict[str, object] = {
         "branchId": branch_id,
@@ -132,6 +202,10 @@ def create_booking(
         "time": time,
         "phone": e164,
         "participants": participants,
+        "source": source,
+        "initialStatus": initial_status,
+        "consentCaptureMethod": consent_capture_method,
+        "bookingPrivacyAcknowledged": booking_privacy_acknowledged,
         "lineUserIdHash": (
             hashlib.sha256(str(line_identity["sub"]).encode()).hexdigest()
             if line_identity and line_identity.get("sub")
@@ -139,8 +213,11 @@ def create_booking(
         ),
     }
     digest = _request_hash(request_payload)
+    idempotency_scope = (
+        f"ADMIN_WEB:{actor_id}:{idempotency_key}" if source == "ADMIN_WEB" else idempotency_key
+    )
     idem_ref = client.collection("booking_idempotency").document(
-        hashlib.sha256(idempotency_key.encode()).hexdigest()
+        hashlib.sha256(str(idempotency_scope).encode()).hexdigest()
     )
     branch_ref = client.collection("branches").document(branch_id)
     booking_ref = client.collection("bookings").document()
@@ -156,8 +233,8 @@ def create_booking(
         for index, (_, _, variant) in enumerate(selections)
         if variant.pricing_mode == "PER_PARTICIPANT" or index == 0
     )
-    status_token = token_urlsafe(32)
-    status_token_hash = hashlib.sha256(status_token.encode()).hexdigest()
+    status_token = token_urlsafe(32) if source != "ADMIN_WEB" else None
+    status_token_hash = hashlib.sha256(status_token.encode()).hexdigest() if status_token else None
     transaction = client.transaction()
 
     @firestore.transactional
@@ -167,19 +244,29 @@ def create_booking(
             existing = idem_snapshot.to_dict() or {}
             if existing.get("requestHash") != digest:
                 raise IdempotencyConflict("Idempotency-Key was already used with different data")
-            return {
+            replay = {
                 "bookingId": existing["publicBookingId"],
                 "status": existing["status"],
-                "statusToken": existing["statusToken"],
                 "estimatedAmountSatang": existing["estimatedAmountSatang"],
                 "idempotentReplay": True,
             }
+            if existing.get("statusToken"):
+                replay["statusToken"] = existing["statusToken"]
+            return replay
 
         branch_snapshot = branch_ref.get(transaction=tx)
         if not branch_snapshot.exists:
             raise ValidationDomainError("Branch is not configured")
         branch = branch_snapshot.to_dict() or {}
-        _validate_advance_window(start_at, branch)
+        if source == "ADMIN_WEB":
+            _validate_walk_in_window(
+                start_at,
+                now=now,
+                bucket_minutes=settings.capacity_bucket_minutes,
+            )
+        else:
+            _validate_advance_window(start_at, branch)
+        _validate_operating_hours(start_at, max_duration, branch)
         capacity = int(branch.get("activeCapacityUnits", branch.get("capacityUnits", 0)))
         if capacity <= 0:
             raise ValidationDomainError("Branch resource configuration is incomplete")
@@ -192,18 +279,33 @@ def create_booking(
         if closure_refs:
             raise CapacityUnavailable("The branch is closed on the selected date")
 
-        pending = list(
-            client.collection("bookings")
-            .where("branchId", "==", branch_id)
-            .where("contact.phoneE164", "==", e164)
-            .where("status", "==", "PENDING")
-            .limit(3)
-            .stream(transaction=tx)
-        )
-        if any((item.to_dict() or {}).get("startAt") == start_at for item in pending):
-            raise DuplicateBooking("An active booking already exists for this phone and time")
-        if len(pending) >= 2:
-            raise ActivePendingLimit("This phone already has two active pending bookings")
+        if e164 and source == "ADMIN_WEB":
+            same_slot = list(
+                client.collection("bookings")
+                .where("branchId", "==", branch_id)
+                .where("startAt", "==", start_at)
+                .limit(20)
+                .stream(transaction=tx)
+            )
+            if any(
+                (item.to_dict() or {}).get("status") in {"PENDING", "CONFIRMED", "IN_SERVICE"}
+                and ((item.to_dict() or {}).get("contact") or {}).get("phoneE164") == e164
+                for item in same_slot
+            ):
+                raise DuplicateBooking("An active booking already exists for this phone and time")
+        elif e164:
+            pending = list(
+                client.collection("bookings")
+                .where("branchId", "==", branch_id)
+                .where("contact.phoneE164", "==", e164)
+                .where("status", "==", "PENDING")
+                .limit(3)
+                .stream(transaction=tx)
+            )
+            if any((item.to_dict() or {}).get("startAt") == start_at for item in pending):
+                raise DuplicateBooking("An active booking already exists for this phone and time")
+            if len(pending) >= 2:
+                raise ActivePendingLimit("This phone already has two active pending bookings")
 
         bucket_snapshots = [ref.get(transaction=tx) for ref in bucket_refs]
         units = len(selections)
@@ -216,18 +318,25 @@ def create_booking(
 
         result = {
             "bookingId": public_id,
-            "status": "PENDING",
-            "statusToken": status_token,
+            "status": initial_status,
             "estimatedAmountSatang": total,
+            "version": 1,
             "idempotentReplay": False,
         }
+        if status_token:
+            result["statusToken"] = status_token
+        contact = (
+            {"mode": "PHONE", "phoneMasked": mask_phone(e164), "phoneE164": e164}
+            if e164
+            else {"mode": "NONE"}
+        )
         booking_data = {
             "publicBookingId": public_id,
             "branchId": branch_id,
-            "source": "LINE_CUSTOMER" if line_identity else "GUEST_WEB",
-            "status": "PENDING",
+            "source": source,
+            "status": initial_status,
             "customerListBucket": "UPCOMING",
-            "contact": {"phoneMasked": mask_phone(e164), "phoneE164": e164},
+            "contact": contact,
             "customerName": str(selections[0][0].get("nickname", "Guest")),
             "serviceName": selections[0][1].name_en,
             "serviceId": selections[0][1].id,
@@ -250,8 +359,12 @@ def create_booking(
             "version": 1,
             "createdAt": now,
             "updatedAt": now,
-            "statusTokenHash": status_token_hash,
         }
+        if status_token_hash:
+            booking_data["statusTokenHash"] = status_token_hash
+        if source == "ADMIN_WEB":
+            booking_data["confirmedAt"] = now
+            booking_data["confirmedBy"] = actor_id
         if line_identity:
             booking_data["lineIdentityHash"] = line_identity_hash(
                 str(line_identity["sub"]), str(line_identity.get("aud", ""))
@@ -363,9 +476,43 @@ def create_booking(
                     "purpose": "HEALTH_DATA_EXPLICIT",
                     "accepted": True,
                     "version": settings.health_consent_version,
+                    "captureMethod": consent_capture_method,
+                    "capturedByActorId": actor_id,
                     "acceptedAt": now,
                 },
             )
+
+        if booking_privacy_acknowledged:
+            privacy_consent_ref = client.collection("consent_evidence").document()
+            tx.set(
+                privacy_consent_ref,
+                {
+                    "bookingDocId": booking_ref.id,
+                    "purpose": "BOOKING_PRIVACY_ACK",
+                    "accepted": True,
+                    "version": settings.privacy_notice_version,
+                    "termsVersion": settings.booking_terms_version,
+                    "captureMethod": consent_capture_method,
+                    "capturedByActorId": actor_id,
+                    "acceptedAt": now,
+                },
+            )
+
+        audit_ref = client.collection("audit_events").document()
+        audit_data: dict[str, object] = {
+            "eventType": "BOOKING_CREATED",
+            "bookingDocId": booking_ref.id,
+            "publicBookingId": public_id,
+            "actorType": "ADMIN_USER" if source == "ADMIN_WEB" else (
+                "LINE_CUSTOMER" if line_identity else "GUEST"
+            ),
+            "source": source,
+            "toStatus": initial_status,
+            "createdAt": now,
+        }
+        if actor_id:
+            audit_data["actorId"] = actor_id
+        tx.set(audit_ref, audit_data)
 
         event_ref = client.collection("notification_outbox").document()
         tx.set(
@@ -375,6 +522,7 @@ def create_booking(
                 "eventType": "BOOKING_CREATED",
                 "aggregateId": booking_ref.id,
                 "publicBookingId": public_id,
+                "bookingStatus": initial_status,
                 "state": "PENDING",
                 "enqueueGeneration": 0,
                 "createdAt": now,
@@ -396,19 +544,18 @@ def create_booking(
                     "updatedAt": now,
                 },
             )
-        tx.set(
-            idem_ref,
-            {
-                "requestHash": digest,
-                "publicBookingId": public_id,
-                "status": "PENDING",
-                "statusToken": status_token,
-                "estimatedAmountSatang": total,
-                "bookingDocId": booking_ref.id,
-                "expiresAt": now + timedelta(hours=24),
-                "createdAt": now,
-            },
-        )
+        idempotency_data: dict[str, object] = {
+            "requestHash": digest,
+            "publicBookingId": public_id,
+            "status": initial_status,
+            "estimatedAmountSatang": total,
+            "bookingDocId": booking_ref.id,
+            "expiresAt": now + timedelta(hours=24),
+            "createdAt": now,
+        }
+        if status_token:
+            idempotency_data["statusToken"] = status_token
+        tx.set(idem_ref, idempotency_data)
         return result
 
     return write(transaction)
@@ -427,6 +574,7 @@ def serialize_booking(snapshot: firestore.DocumentSnapshot) -> dict[str, object]
     data["bookingId"] = data.pop("publicBookingId", snapshot.id)
     contact = data.pop("contact", {}) or {}
     data["customerPhoneMasked"] = contact.get("phoneMasked", "")
+    data["contactMode"] = contact.get("mode", "PHONE" if contact.get("phoneE164") else "NONE")
     data["startLocal"] = data.get("startAt")
     data["durationMinutes"] = (
         int((end_at - start_at).total_seconds() // 60)

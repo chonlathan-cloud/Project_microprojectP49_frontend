@@ -178,6 +178,7 @@ Responsibilities:
 - Authenticate invited users with Firebase Authentication
 - Present calendars, lists, schedules, Pending Queue, and Unassigned Queue
 - Support booking confirmation, cancellation, status progression, and capacity-safe edits
+- Create same-day staff-assisted Walk-in Bookings with optional phone contact, explicit verbal/paper consent evidence, and an audited initial `CONFIRMED` state
 - Manage services, duration variants, prices, resources, blocked periods, therapists, and the Phase 1 branch
 - Display health details only to authorized `ADMIN` or `STAFF` users
 - Restrict user, role, and security configuration screens to `ADMIN`
@@ -425,7 +426,8 @@ Concurrent submissions contend on the relevant reservation records. The first tr
 
 ### 11.3 `PENDING` Policy
 
-- A newly committed Booking is always `PENDING`.
+- A newly committed Customer Web or LIFF Booking is always `PENDING`.
+- An authenticated Admin Web Walk-in Booking is the sole Phase 1 exception: it commits directly as `CONFIRMED` after the creating `ADMIN`/`STAFF` reviews the summary. The transaction records `source=ADMIN_WEB`, creator identity, confirmation time, and audit evidence.
 - `PENDING` consumes capacity immediately.
 - There is no automatic expiration or scheduled release.
 - Capacity is released only when the Booking moves to a non-consuming terminal state.
@@ -439,6 +441,7 @@ This is an accepted operational risk and must be measured with Pending age and c
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING
+    [*] --> CONFIRMED: Admin Web Walk-in
     PENDING --> CONFIRMED: Group approver or Admin Web
     PENDING --> CANCELLED: ADMIN or STAFF
     CONFIRMED --> IN_SERVICE: Therapists assigned

@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminModulePage, type AdminView } from "@/components/admin-module-pages";
 import { useAdminFeedback } from "@/components/admin-feedback";
+import { WalkInBookingDrawer } from "@/components/walk-in-booking-drawer";
 import { adminApi } from "@/lib/admin-api";
 import { countNotificationsRequiringAction } from "@/lib/notification-state";
 
@@ -94,6 +95,7 @@ export function AdminDashboard({ user }: { user: User }) {
   const [paymentOptions, setPaymentOptions] = useState<AdminPaymentOptions | null>(null);
   const [paymentLoadState, setPaymentLoadState] = useState<"idle" | "loading" | "ready" | "saving" | "error">("idle");
   const [cashTipSatang, setCashTipSatang] = useState(0);
+  const [walkInOpen, setWalkInOpen] = useState(false);
   const detailDrawerRef = useRef<HTMLElement>(null);
   const closeDrawerButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -419,7 +421,7 @@ export function AdminDashboard({ user }: { user: User }) {
         </header>
 
         {activeView === "bookings" ? <main className="dashboard-content">
-          <div className="page-heading"><div><p className="eyebrow">FRONT DESK • ASIA/BANGKOK</p><h1>{text.title}</h1><p>{text.subtitle}</p></div></div>
+          <div className="page-heading"><div><p className="eyebrow">FRONT DESK • ASIA/BANGKOK</p><h1>{text.title}</h1><p>{text.subtitle}</p></div><button className="new-booking" type="button" onClick={() => { setSelectedId(""); setWalkInOpen(true); }}>{locale === "th" ? "+ จองลูกค้า Walk-in" : "+ Walk-in booking"}</button></div>
 
           {bookingState === "error" && <div className="module-state error" role="alert">{locale === "th" ? "โหลดรายการจองไม่สำเร็จ กรุณาลองเข้าสู่ระบบใหม่หรือตรวจสอบสิทธิ์" : "Bookings could not be loaded. Sign in again or check your permissions."}</div>}
 
@@ -437,7 +439,7 @@ export function AdminDashboard({ user }: { user: User }) {
                 <tbody>
                   {filtered.map((booking) => <tr key={booking.bookingId} className={selectedId === booking.bookingId ? "selected-row" : undefined}>
                     <td><strong className="date-cell">{formatDate(booking.startLocal, locale)}</strong><span className="time-cell">{formatTime(booking.startLocal)}</span><small>{booking.bookingId}</small></td>
-                    <td><strong>{booking.customerName}</strong><small>{booking.customerPhoneMasked}</small>{booking.healthAlert && <span className="health-alert">⚠ {locale === "th" ? "ตรวจสุขภาพ" : "Health review"}</span>}</td>
+                    <td><strong>{booking.customerName}</strong><small>{booking.customerPhoneMasked || (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</small>{booking.source === "ADMIN_WEB" && <span className="walk-in-source">Walk-in</span>}{booking.healthAlert && <span className="health-alert">⚠ {locale === "th" ? "ตรวจสุขภาพ" : "Health review"}</span>}</td>
                     <td>{formatServiceName(booking, locale)}</td><td>{booking.pax}</td><td>{booking.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</td><td><span className={`status status-${booking.status.toLowerCase()}`}>{statusLabel[booking.status][locale]}</span></td><td><button className="row-action" onClick={() => setSelectedId(booking.bookingId)} aria-label={`${text.detail} ${booking.bookingId}`}>→</button></td>
                   </tr>)}
                 </tbody>
@@ -445,12 +447,12 @@ export function AdminDashboard({ user }: { user: User }) {
             </div>
             {filtered.length === 0 && <div className="empty-state">{locale === "th" ? "ไม่พบรายการที่ตรงกับตัวกรอง" : "No bookings match these filters"}</div>}
           </section>
-        </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} notificationFilter={notificationFilter} onNotificationFilterChange={setNotificationFilter} onNotificationCountChange={setNotificationFailures} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} onSelectBooking={(bookingId) => { setSelectedId(bookingId); setHealthDetails(null); }} />}
+        </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} notificationFilter={notificationFilter} onNotificationFilterChange={setNotificationFilter} onNotificationCountChange={setNotificationFailures} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} onSelectBooking={(bookingId) => { setSelectedId(bookingId); setHealthDetails(null); }} onOpenWalkIn={() => { setSelectedId(""); setWalkInOpen(true); }} />}
       </div>
 
       {selected && <aside ref={detailDrawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title">
         <div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button ref={closeDrawerButtonRef} aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div>
-        <div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked}</p></div></div>
+        <div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked || (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</p>{selected.source === "ADMIN_WEB" && <span className="walk-in-source">Walk-in</span>}</div></div>
         {selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดจะแสดงเฉพาะผู้ดูแลที่มีสิทธิ์" : "Details are restricted to authorized operators"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}
         <dl>
           <div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div>
@@ -482,6 +484,7 @@ export function AdminDashboard({ user }: { user: User }) {
         {selected.status === "IN_SERVICE" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button></div>}
         {selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}
       </aside>}
+      {walkInOpen && <WalkInBookingDrawer user={user} locale={locale} onClose={() => setWalkInOpen(false)} onCreated={(bookingId) => { setWalkInOpen(false); setBookingRefresh((value) => value + 1); setSelectedId(bookingId); notify({ tone: "success", title: locale === "th" ? "สร้างและยืนยัน Walk-in แล้ว" : "Walk-in booking confirmed", message: bookingId }); }} />}
     </div>
   );
 }

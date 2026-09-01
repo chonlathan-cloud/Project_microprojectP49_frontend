@@ -4,9 +4,9 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Business Logic |
-| Version | 1.3 |
+| Version | 1.4 |
 | Status | Approved business baseline |
-| Last updated | 18 สิงหาคม 2026 |
+| Last updated | 31 สิงหาคม 2026 |
 | Initial branch scope | 1 สาขา |
 | Timezone / Currency | Asia/Bangkok / THB |
 
@@ -91,6 +91,12 @@ Google Stitch ที่อนุญาตให้ใช้อ้างอิง
 
 ### 5.2 Admin Operations
 
+- สร้างและยืนยัน Booking สำหรับลูกค้า Walk-in จาก Admin Web
+- Walk-in ต้องเข้ารับบริการในวันเดียวกับวันที่สร้าง Booking และยังต้องตรวจ Operating Hours, Slot Block และ Capacity แบบ Transaction
+- Walk-in ใช้ชื่อเล่นเป็นข้อมูลขั้นต่ำ เบอร์โทรศัพท์เป็นข้อมูลทางเลือก และห้ามใช้เบอร์ร้านหรือเบอร์ปลอมแทนลูกค้าที่ไม่มีช่องทางติดต่อ
+- เมื่อไม่มีเบอร์โทร ระบบไม่สร้าง Phone Guard, Phone Duplicate Key, Customer LINE Link หรือ Secure Status Link และต้องแสดงว่า `ไม่มีเบอร์ติดต่อ` ใน Admin Web
+- Booking ที่สร้างโดย `ADMIN`/`STAFF` สำหรับ Walk-in เริ่มต้นเป็น `CONFIRMED` ได้ เพราะผู้สร้างเป็นผู้ตรวจสอบและยืนยันรายการใน interaction เดียวกัน โดยต้องบันทึก Actor และ Audit Trail
+- พนักงานต้องอ่าน Privacy Notice/Booking Terms และข้อความขอความยินยอมด้านข้อมูลสุขภาพให้ลูกค้ารับทราบ แล้วบันทึกวิธีรับหลักฐานเป็น `VERBAL` หรือ `PAPER`; ห้ามพนักงานให้ความยินยอมแทนลูกค้า
 - ดู Booking แบบปฏิทิน รายการ และตารางเวลา
 - ค้นหาด้วย Booking ID, ชื่อลูกค้า หรือเบอร์โทรศัพท์
 - ดูรายละเอียดลูกค้าและข้อมูลสุขภาพในระบบ Admin
@@ -228,6 +234,7 @@ Website Guest ไม่ใช้ OTP ใน Phase 1 จึงต้องมี�
 - การคำนวณใช้วันและเวลาของสาขาใน `Asia/Bangkok`
 - ลูกค้าเลือก Slot ได้เฉพาะช่วงเวลาทำการที่ไม่ถูก Block และมี Capacity เพียงพอ
 - เมื่อ Admin เปลี่ยนกฎ ค่าใหม่ใช้กับการจองใหม่ ไม่ยกเลิก Booking ที่มีอยู่โดยอัตโนมัติ
+- กฎ Min/Max Advance Booking ใช้กับ Customer Web และ LIFF; Admin Walk-in เป็นข้อยกเว้นเฉพาะวันปัจจุบันของสาขาและต้องไม่ใช้เพื่อสร้าง Booking ย้อนหลัง
 
 ## 10. Availability และ Capacity Logic
 
@@ -281,7 +288,8 @@ PENDING ───────→ CONFIRMED ───────→ IN_SERVICE �
 
 ### 11.1 Transition Rules
 
-- Booking ใหม่เริ่มต้นเป็น `PENDING` เสมอ
+- Booking ใหม่จาก Customer Web หรือ LIFF เริ่มต้นเป็น `PENDING` เสมอ
+- ข้อยกเว้นคือ Walk-in ที่สร้างโดย `ADMIN`/`STAFF` ผ่าน Admin Web เริ่มต้นเป็น `CONFIRMED` และ Audit ต้องระบุ `source=ADMIN_WEB`, ผู้สร้าง และการยืนยันใน interaction เดียวกัน
 - `PENDING → CONFIRMED` ทำได้ครั้งเดียว
 - `PENDING → CANCELLED` ทำได้โดย `ADMIN`/`STAFF` พร้อมเหตุผล
 - `CONFIRMED → IN_SERVICE` ต้องมีหมอนวดถูกมอบหมายแล้ว

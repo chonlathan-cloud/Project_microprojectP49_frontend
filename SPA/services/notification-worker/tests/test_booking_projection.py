@@ -151,3 +151,19 @@ def test_admin_projection_does_not_join_detail_without_explicit_render_scope() -
     assert isinstance(view, AdminNotificationBookingView)
     assert view.participants[0].has_health_information is True
     assert view.participants[0].health_details is None
+
+
+def test_admin_projection_does_not_fabricate_phone_for_walk_in() -> None:
+    walk_in = {
+        **booking(),
+        "status": "CONFIRMED",
+        "source": "ADMIN_WEB",
+        "contact": {"mode": "NONE"},
+    }
+    view = _booking_view(
+        FakeClient(), booking_doc_id="booking-1", booking=walk_in, admin=True  # type: ignore[arg-type]
+    )
+    assert isinstance(view, AdminNotificationBookingView)
+    assert view.contact_phone_display == "ไม่มีเบอร์ติดต่อ"
+    assert view.contact_phone_uri is None
+    assert view.booking_source == "ADMIN_WEB"

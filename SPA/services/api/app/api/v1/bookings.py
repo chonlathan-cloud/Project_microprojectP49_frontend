@@ -58,6 +58,17 @@ class CreateBookingRequest(ApiModel):
     line_id_token: str | None = Field(default=None, min_length=20, max_length=4096)
 
 
+class CreateAdminWalkInBookingRequest(ApiModel):
+    booking_mode: Literal["WALK_IN"] = "WALK_IN"
+    branch_id: str = "branch_001"
+    date: str
+    time: str
+    phone: str | None = Field(default=None, max_length=30)
+    participants: list[ParticipantInput] = Field(min_length=1, max_length=2)
+    booking_privacy_acknowledged: bool
+    consent_capture_method: Literal["VERBAL", "PAPER"]
+
+
 class TransitionRequest(ApiModel):
     reason: str | None = Field(default=None, max_length=500)
     expected_version: int = Field(ge=1)
@@ -201,6 +212,7 @@ async def create_public_booking(
         participants=[p.model_dump(by_alias=True) for p in request.participants],
         idempotency_key=idempotency_key,
         line_identity=line_identity,
+        source="LINE_CUSTOMER" if line_identity else "GUEST_WEB",
     )
 
 
@@ -384,6 +396,35 @@ async def list_admin_bookings(
         query = query.where("localDate", "==", local_date)
     query = query.order_by("startAt").limit(min(max(limit, 1), 200))
     return {"items": [serialize_booking(snapshot) for snapshot in query.stream()]}
+
+
+@router.post("/api/v1/admin/bookings", status_code=status.HTTP_201_CREATED)
+async def create_admin_walk_in_booking(
+    request: CreateAdminWalkInBookingRequest,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+    idempotency_key: Annotated[str | None, Header()] = None,
+) -> dict[str, object]:
+    if any(p.has_health_information and not p.health_details for p in request.participants):
+        raise ValidationDomainError(
+            "Health details are required when health information is declared"
+        )
+    if not request.booking_privacy_acknowledged:
+        raise ValidationDomainError("Booking privacy acknowledgement is required")
+    return create_booking(
+        client,
+        branch_id=request.branch_id,
+        date=request.date,
+        time=request.time,
+        phone=request.phone,
+        participants=[p.model_dump(by_alias=True) for p in request.participants],
+        idempotency_key=idempotency_key,
+        source="ADMIN_WEB",
+        initial_status="CONFIRMED",
+        actor_id=str(actor["uid"]),
+        consent_capture_method=request.consent_capture_method,
+        booking_privacy_acknowledged=request.booking_privacy_acknowledged,
+    )
 
 
 @router.get("/api/v1/admin/bookings/{booking_id}/health")

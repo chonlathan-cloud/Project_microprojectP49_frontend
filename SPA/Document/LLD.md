@@ -1110,6 +1110,20 @@ function createBooking(command, context):
     return response with status URL fragment
 ```
 
+### 11.1 Admin Walk-in Variant
+
+`POST /api/v1/admin/bookings` accepts `bookingMode=WALK_IN`, branch/date/time, an optional phone, one or two participants, `bookingPrivacyAcknowledged=true`, and `consentCaptureMethod=VERBAL|PAPER`. The authenticated Firebase actor is authoritative; the client cannot supply creator identity or source.
+
+The shared creation transaction applies these differences:
+
+1. Require the appointment date to equal the current `Asia/Bangkok` date and reject buckets earlier than the current 15-minute bucket.
+2. Reuse active service, operating-hours, closure, duration, pricing, and capacity validation.
+3. Skip public CAPTCHA, IP/phone abuse counters, active-`PENDING` phone guards, LINE linking, and Guest status-token creation.
+4. When phone is absent, write `contact={"mode":"NONE"}` without `phoneE164`, `phoneMasked`, or a fabricated value.
+5. Commit `source=ADMIN_WEB`, `status=CONFIRMED`, `confirmedAt`, `confirmedBy`, and append a privacy/health consent receipt with the capture method and staff actor.
+6. Append a safe `BOOKING_CREATED` audit and outbox event. Admin notification rendering must show the committed status, omit the call action when no phone exists, and never offer a confirm action for an already confirmed Walk-in.
+7. Scope idempotency by the authenticated actor and endpoint so another staff member cannot replay the key.
+
 All transaction reads are issued before the first write. Any missing expected document or failed capacity condition aborts the transaction without partial records.
 
 Booking ID formatting uses the branch-local appointment date at creation and pads to at least three digits. Sequence 1,000 becomes `1000`; it is never truncated. The public ID remains unchanged if the appointment is later rescheduled.

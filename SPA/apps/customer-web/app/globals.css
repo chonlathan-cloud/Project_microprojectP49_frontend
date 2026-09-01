@@ -286,6 +286,8 @@ textarea { min-height: 110px; resize: vertical; }
 .payment-submit { width: 100%; display: flex; align-items: center; justify-content: center; text-decoration: none; }
 .payment-cash-hint, .payment-message { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; text-align: center; }
 .payment-message { padding: 12px; border-left: 3px solid var(--amber); background: var(--amber-soft); color: #684300; text-align: left; }
+.payment-recovery { display: grid; gap: 10px; }
+.payment-retry { width: 100%; min-height: 48px; cursor: pointer; }
 .beam-qr { margin-top: 18px; padding-top: 18px; display: grid; justify-items: center; border-top: 1px solid var(--gold-soft); text-align: center; }
 .beam-qr h3 { margin: 0 0 14px; color: var(--forest-deep); }
 .beam-qr img { width: min(260px, 100%); height: auto; padding: 10px; border: 1px solid #ded7c8; background: white; }
