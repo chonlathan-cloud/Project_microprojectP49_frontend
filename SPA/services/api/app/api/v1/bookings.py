@@ -587,6 +587,8 @@ async def transition_admin_booking(
                 "cancelledAt": now,
                 "cancelledBy": actor["uid"],
             }
+            if current is BookingStatus.RECORDED:
+                update["financiallyExcluded"] = True
         if target in {
             BookingStatus.CANCELLED,
             BookingStatus.COMPLETED,
@@ -627,20 +629,21 @@ async def transition_admin_booking(
                 "createdAt": now,
             },
         )
-        event_ref = client.collection("notification_outbox").document()
-        tx.set(
-            event_ref,
-            {
-                "eventId": event_ref.id,
-                "eventType": f"BOOKING_{target.value}",
-                "aggregateId": booking_ref.id,
-                "publicBookingId": booking_id,
-                "state": "PENDING",
-                "enqueueGeneration": 0,
-                "createdAt": now,
-                "updatedAt": now,
-            },
-        )
+        if current is not BookingStatus.RECORDED:
+            event_ref = client.collection("notification_outbox").document()
+            tx.set(
+                event_ref,
+                {
+                    "eventId": event_ref.id,
+                    "eventType": f"BOOKING_{target.value}",
+                    "aggregateId": booking_ref.id,
+                    "publicBookingId": booking_id,
+                    "state": "PENDING",
+                    "enqueueGeneration": 0,
+                    "createdAt": now,
+                    "updatedAt": now,
+                },
+            )
         tx.set(
             command_ref, {"bookingDocId": booking_ref.id, "status": target.value, "createdAt": now}
         )

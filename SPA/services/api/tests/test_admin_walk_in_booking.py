@@ -17,10 +17,16 @@ client = TestClient(app)
 
 
 class Snapshot:
-    def __init__(self, document_id: str, data: dict[str, object] | None) -> None:
+    def __init__(
+        self,
+        document_id: str,
+        data: dict[str, object] | None,
+        reference: Document | None = None,
+    ) -> None:
         self.id = document_id
         self._data = data
         self.exists = data is not None
+        self.reference = reference
 
     def to_dict(self) -> dict[str, object]:
         return dict(self._data or {})
@@ -34,15 +40,21 @@ class Document:
 
     def get(self, transaction: object | None = None) -> Snapshot:
         del transaction
-        return Snapshot(self.id, self.database.documents.get((self.collection_name, self.id)))
+        return Snapshot(
+            self.id,
+            self.database.documents.get((self.collection_name, self.id)),
+            self,
+        )
 
 
 class Query:
     def __init__(self, database: WalkInFirestore, collection: str) -> None:
         self.database = database
         self.collection_name = collection
+        self.filters: list[tuple[str, str, object]] = []
 
-    def where(self, *_args: object, **_kwargs: object) -> Query:
+    def where(self, field: str, operator: str, value: object) -> Query:
+        self.filters.append((field, operator, value))
         return self
 
     def limit(self, _value: int) -> Query:
@@ -50,7 +62,18 @@ class Query:
 
     def stream(self, transaction: object | None = None) -> list[Snapshot]:
         del transaction
-        return []
+        snapshots: list[Snapshot] = []
+        for (collection, document_id), data in self.database.documents.items():
+            if collection != self.collection_name:
+                continue
+            if any(
+                operator != "==" or data.get(field) != value
+                for field, operator, value in self.filters
+            ):
+                continue
+            reference = Document(self.database, collection, document_id)
+            snapshots.append(Snapshot(document_id, data, reference))
+        return snapshots
 
     def document(self, document_id: str | None = None) -> Document:
         if document_id is None:
@@ -67,6 +90,13 @@ class Transaction:
         current = self.database.documents.get((reference.collection_name, reference.id), {})
         stored = {**current, **value} if merge else dict(value)
         self.database.documents[(reference.collection_name, reference.id)] = stored
+
+    def update(self, reference: Document, value: dict[str, object]) -> None:
+        current = self.database.documents.get((reference.collection_name, reference.id), {})
+        self.database.documents[(reference.collection_name, reference.id)] = {
+            **current,
+            **value,
+        }
 
 
 class WalkInFirestore:
@@ -605,6 +635,64 @@ def test_historical_record_accepts_admin_discount_and_preserves_net_amount(
         and value.get("eventType") == "BOOKING_DISCOUNT_APPLIED"
     )
     assert discount_audit["finalAmountSatang"] == 28_000
+
+
+def test_historical_record_can_be_cancelled_without_capacity_or_notification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    database.documents[("bookings", "booking-history-001")] = {
+        "publicBookingId": "BK-20260820-001",
+        "status": "RECORDED",
+        "version": 1,
+        "customerListBucket": "HISTORY",
+        "adminEntryMode": "HISTORICAL_RECORD",
+        "historicalFinancialRecord": True,
+        "financiallyExcluded": False,
+        "capacityReleased": True,
+        "subtotalAmountSatang": 30_000,
+        "discountAmountSatang": 2_000,
+        "estimatedAmountSatang": 28_000,
+    }
+    monkeypatch.setattr(booking_routes.firestore, "transactional", lambda function: function)
+    previous_auth, previous_firestore = _override_dependencies(database)
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260820-001:cancel",
+            json={
+                "reason": "บันทึกผิดรายการ",
+                "expectedVersion": 1,
+                "commandId": "cancel-history-001",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "CANCELLED"
+    booking = database.documents[("bookings", "booking-history-001")]
+    assert booking["status"] == "CANCELLED"
+    assert booking["financiallyExcluded"] is True
+    assert booking["capacityReleased"] is True
+    assert booking["subtotalAmountSatang"] == 30_000
+    assert booking["discountAmountSatang"] == 2_000
+    assert booking["estimatedAmountSatang"] == 28_000
+    assert booking["cancellation"]["reason"] == "บันทึกผิดรายการ"  # type: ignore[index]
+    assert not any(
+        collection == "capacity_buckets" for collection, _ in database.documents
+    )
+    assert not any(
+        collection == "notification_outbox" for collection, _ in database.documents
+    )
+    status_audit = next(
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "audit_events"
+        and value.get("eventType") == "BOOKING_STATUS_CHANGED"
+    )
+    assert status_audit["fromStatus"] == "RECORDED"
+    assert status_audit["toStatus"] == "CANCELLED"
+    assert status_audit["reason"] == "บันทึกผิดรายการ"
 
 
 def test_admin_historical_endpoint_maps_to_recorded_status(

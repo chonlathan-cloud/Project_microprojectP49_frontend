@@ -10,6 +10,7 @@ class BookingStateMachine:
         (BookingStatus.CONFIRMED, "CANCEL"): BookingStatus.CANCELLED,
         (BookingStatus.CONFIRMED, "NO_SHOW"): BookingStatus.NO_SHOW,
         (BookingStatus.IN_SERVICE, "COMPLETE"): BookingStatus.COMPLETED,
+        (BookingStatus.RECORDED, "CANCEL"): BookingStatus.CANCELLED,
     }
 
     @classmethod

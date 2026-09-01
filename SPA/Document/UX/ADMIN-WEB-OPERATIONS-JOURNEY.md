@@ -61,7 +61,7 @@ Booking Queue / Calendar
   → `ADMIN` ระบุส่วนลดเงินบาทและเหตุผลได้ทั้งรายการปัจจุบัน ล่วงหน้า และย้อนหลัง
   → Review วัน เวลา Capacity/ผลของโหมด ราคาปกติ ส่วนลด ยอดสุทธิ และคำเตือนไม่มีช่องทางติดต่อ
   → วันนี้/อนาคตสร้างเป็น CONFIRMED; ย้อนหลังสร้างเป็น RECORDED
-  → Active Booking เปิด Detail และมอบหมายหมอนวดก่อน Start; Historical record จบที่ History
+  → Active Booking เปิด Detail และมอบหมายหมอนวดก่อน Start; Historical record อยู่ใน History และยกเลิกพร้อมเหตุผลได้เมื่อบันทึกผิด
 ```
 
 Centered modal ต้องมี `aria-modal`, focus trap, ปิดด้วย Escape, คืน focus ไปยังปุ่มเปิด, และรักษาข้อมูลที่กรอกเมื่อ API ตอบ validation/conflict. Header และ action footer ต้องคงมองเห็นได้เมื่อเนื้อหาภายใน scroll. เมื่อ Capacity เปลี่ยนระหว่างกรอก ให้คงข้อมูลลูกค้าไว้และบังคับเลือก Slot ใหม่.
@@ -125,6 +125,7 @@ Action priority:
 | `PENDING` | Confirm | โทรหาลูกค้า, Cancel พร้อมเหตุผล |
 | `CONFIRMED` | Assign therapist / Start เมื่อครบ | แก้ไข, Cancel, No-show เมื่อถึงเงื่อนไข |
 | `IN_SERVICE` | Complete | ไม่มี transition ย้อนกลับใน flow ปกติ |
+| `RECORDED` | ไม่มี | Cancel พร้อมเหตุผลเมื่อบันทึกย้อนหลังผิด; แจ้งชัดว่าไม่นับยอดและไม่กระทบ Capacity |
 | Terminal | ไม่มี | แสดง audit/history เท่านั้น |
 
 ## 6. Notification Center specification
@@ -228,7 +229,7 @@ Retry เป็นการขอ enqueue ใหม่ ไม่ใช่กา�
 
 1. หลัง Sign in พนักงานเห็น Pending, Unassigned และ Failed notification count โดยไม่ต้องค้นหาเอง
 2. Booking detail แสดงข้อมูลที่ใช้ตัดสินใจก่อน Confirm และไม่เปิด Health details โดยไม่เกิด audit
-3. Confirm/Cancel/Start/Complete/No-show แสดงเฉพาะ transition ที่ถูกต้อง
+3. Confirm/Cancel/Start/Complete/No-show แสดงเฉพาะ transition ที่ถูกต้อง และ `RECORDED` แสดง Cancel พร้อมเหตุผลได้หนึ่งทางเท่านั้น
 4. Notification badge นับเฉพาะรายการที่ต้องให้คนดำเนินการตามนิยามที่อนุมัติ
 5. `RETRYABLE` สื่อว่าระบบกำลังลองใหม่; `FAILED` มี Retry และ fallback action
 6. Retry success เปลี่ยนเป็น queued/retryable ไม่แสดงว่า LINE ส่งสำเร็จก่อน state เป็น `SENT`

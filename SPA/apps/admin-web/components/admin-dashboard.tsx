@@ -208,9 +208,15 @@ export function AdminDashboard({ user }: { user: User }) {
 
     const confirmation = action === "cancel"
       ? await requestConfirmation({
-          title: locale === "th" ? "ยกเลิกการจองนี้?" : "Cancel this booking?",
-          message: locale === "th" ? `${booking.bookingId} จะถูกยกเลิกและคืน Capacity ให้ระบบ` : `${booking.bookingId} will be cancelled and its capacity released.`,
-          confirmLabel: locale === "th" ? "ยืนยันยกเลิก" : "Cancel booking",
+          title: booking.status === "RECORDED"
+            ? (locale === "th" ? "ยกเลิกรายการย้อนหลังนี้?" : "Cancel this historical record?")
+            : (locale === "th" ? "ยกเลิกการจองนี้?" : "Cancel this booking?"),
+          message: booking.status === "RECORDED"
+            ? (locale === "th" ? `${booking.bookingId} จะเปลี่ยนเป็นยกเลิกและไม่นับยอดทางการเงิน โดยไม่กระทบ Capacity` : `${booking.bookingId} will be cancelled and excluded from financial totals without changing capacity.`)
+            : (locale === "th" ? `${booking.bookingId} จะถูกยกเลิกและคืน Capacity ให้ระบบ` : `${booking.bookingId} will be cancelled and its capacity released.`),
+          confirmLabel: booking.status === "RECORDED"
+            ? (locale === "th" ? "ยืนยันยกเลิกรายการ" : "Cancel record")
+            : (locale === "th" ? "ยืนยันยกเลิก" : "Cancel booking"),
           cancelLabel: locale === "th" ? "กลับ" : "Go back",
           tone: "danger",
           input: {
@@ -245,7 +251,9 @@ export function AdminDashboard({ user }: { user: User }) {
         : item));
       notify({
         tone: "success",
-        title: locale === "th" ? "อัปเดตสถานะการจองแล้ว" : "Booking status updated",
+        title: action === "cancel" && booking.status === "RECORDED"
+          ? (locale === "th" ? "ยกเลิกรายการย้อนหลังแล้ว" : "Historical record cancelled")
+          : (locale === "th" ? "อัปเดตสถานะการจองแล้ว" : "Booking status updated"),
         message: booking.bookingId
       });
     } catch (caught) {
@@ -446,7 +454,7 @@ export function AdminDashboard({ user }: { user: User }) {
                   {filtered.map((booking) => <tr key={booking.bookingId} className={selectedId === booking.bookingId ? "selected-row" : undefined}>
                     <td><strong className="date-cell">{formatDate(booking.startLocal, locale)}</strong><span className="time-cell">{formatTime(booking.startLocal)}</span><small>{booking.bookingId}</small></td>
                     <td><strong>{booking.customerName}</strong><small>{booking.customerPhoneMasked || (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</small>{booking.source === "ADMIN_WEB" && <span className="walk-in-source">{adminEntryLabel(booking, locale)}</span>}{booking.healthAlert && <span className="health-alert">⚠ {locale === "th" ? "ตรวจสุขภาพ" : "Health review"}</span>}</td>
-                    <td>{formatServiceName(booking, locale)}</td><td>{booking.pax}</td><td>{booking.status === "RECORDED" ? <span className="not-applicable">{locale === "th" ? "ไม่เกี่ยวข้อง" : "Not applicable"}</span> : booking.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</td><td><span className={`status status-${booking.status.toLowerCase()}`}>{statusLabel[booking.status][locale]}</span></td><td><button className="row-action" onClick={() => setSelectedId(booking.bookingId)} aria-label={`${text.detail} ${booking.bookingId}`}>→</button></td>
+                    <td>{formatServiceName(booking, locale)}</td><td>{booking.pax}</td><td>{booking.adminEntryMode === "HISTORICAL_RECORD" ? <span className="not-applicable">{locale === "th" ? "ไม่เกี่ยวข้อง" : "Not applicable"}</span> : booking.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</td><td><span className={`status status-${booking.status.toLowerCase()}`}>{statusLabel[booking.status][locale]}</span></td><td><button className="row-action" onClick={() => setSelectedId(booking.bookingId)} aria-label={`${text.detail} ${booking.bookingId}`}>→</button></td>
                   </tr>)}
                 </tbody>
               </table>
@@ -465,7 +473,7 @@ export function AdminDashboard({ user }: { user: User }) {
           <div><dt>{text.service}</dt><dd>{formatServiceName(selected, locale)}</dd></div>
           {!!selected.discountAmountSatang && <><div><dt>{locale === "th" ? "ราคาปกติ" : "Regular price"}</dt><dd>{formatBaht(selected.subtotalAmountSatang ?? 0, locale)}</dd></div><div><dt>{locale === "th" ? "ส่วนลด" : "Discount"}</dt><dd>−{formatBaht(selected.discountAmountSatang, locale)}<small>{selected.discountReason}</small></dd></div><div><dt>{locale === "th" ? "ยอดสุทธิ" : "Net total"}</dt><dd>{formatBaht(selected.estimatedAmountSatang ?? 0, locale)}</dd></div></>}
           <div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div>
-          <div><dt>{text.therapist}</dt><dd>{selected.status === "RECORDED" ? <span className="not-applicable">{locale === "th" ? "ไม่เกี่ยวข้อง" : "Not applicable"}</span> : selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div>
+          <div><dt>{text.therapist}</dt><dd>{selected.adminEntryMode === "HISTORICAL_RECORD" ? <span className="not-applicable">{locale === "th" ? "ไม่เกี่ยวข้อง" : "Not applicable"}</span> : selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div>
           <div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div>
           {selected.status === "COMPLETED" && <div><dt>{locale === "th" ? "การชำระเงิน" : "Payment"}</dt><dd>{paymentOptions?.status === "PAID" ? (locale === "th" ? "ชำระแล้ว" : "Paid") : (locale === "th" ? "รอชำระ" : "Payment due")}</dd></div>}
         </dl>
@@ -489,6 +497,7 @@ export function AdminDashboard({ user }: { user: User }) {
         {selected.status === "PENDING" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button></div>}
         {selected.status === "CONFIRMED" && <div className="drawer-actions"><button className="confirm-button" disabled={!selected.therapistName || actionState === "submitting"} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button><button className="cancel-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="cancel-button" disabled={actionState === "submitting" || currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button></div>}
         {selected.status === "IN_SERVICE" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button></div>}
+        {selected.status === "RECORDED" && <div className="drawer-actions"><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{locale === "th" ? "ยกเลิกรายการย้อนหลัง" : "Cancel historical record"}</button></div>}
         {selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}
       </aside>}
       {walkInOpen && <WalkInBookingDrawer user={user} locale={locale} onClose={() => setWalkInOpen(false)} onCreated={(bookingId, status) => { setWalkInOpen(false); setBookingRefresh((value) => value + 1); setSelectedId(bookingId); notify({ tone: "success", title: status === "RECORDED" ? (locale === "th" ? "บันทึกรายการย้อนหลังแล้ว" : "Historical record saved") : (locale === "th" ? "สร้างและยืนยัน Booking แล้ว" : "Booking created and confirmed"), message: bookingId }); }} />}

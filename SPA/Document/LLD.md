@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Low-Level Design (LLD) |
-| Version | 1.4 |
+| Version | 1.5 |
 | Status | Implementation baseline |
 | Last updated | 1 September 2026 |
-| Business baseline | [Business Logic v1.7](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.4](./HLD.md) |
-| Technical baseline | [TDD v1.4](./TDD.md) |
+| Business baseline | [Business Logic v1.8](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.5](./HLD.md) |
+| Technical baseline | [TDD v1.5](./TDD.md) |
 
 ## 1. Purpose
 
@@ -1126,7 +1126,7 @@ The shared creation transaction applies these differences:
 2. Active modes reuse service, operating-hours, closure, duration, duplicate, and capacity validation. Historical mode snapshots the selected service but does not read or write Capacity buckets and does not apply current closure/operating-hours configuration retroactively.
 3. Skip public CAPTCHA, IP/phone abuse counters, active-`PENDING` phone guards, LINE linking, and Guest status-token creation.
 4. When phone is absent, write `contact={"mode":"NONE"}` without `phoneE164`, `phoneMasked`, or a fabricated value.
-5. Active mode commits `status=CONFIRMED`, `confirmedAt`, and `confirmedBy`. Historical mode commits terminal `status=RECORDED`, `recordedAt`, `recordedBy`, `financiallyExcluded=false`, `historicalFinancialRecord=true`, the immutable service subtotal, optional Admin discount, net `estimatedAmountSatang`, `paymentStatus=UNAVAILABLE`, and no capacity reservation.
+5. Active mode commits `status=CONFIRMED`, `confirmedAt`, and `confirmedBy`. Historical mode commits `status=RECORDED`, `recordedAt`, `recordedBy`, `financiallyExcluded=false`, `historicalFinancialRecord=true`, the immutable service subtotal, optional Admin discount, net `estimatedAmountSatang`, `paymentStatus=UNAVAILABLE`, and no capacity reservation. Its only subsequent command is reason-required `CANCEL` for correcting an erroneous record.
 6. Both modes append privacy/health consent receipts with the capture method and staff actor. Active mode emits `BOOKING_CREATED` audit/outbox events; historical mode emits only a safe `BOOKING_HISTORY_RECORDED` audit and no notification outbox event.
 7. Scope idempotency by the authenticated actor and endpoint so another staff member cannot replay the key.
 8. A non-zero discount is accepted for active or historical modes only from authenticated Role `ADMIN`, must be whole THB, must be less than the service subtotal, and requires a trimmed reason. Store `subtotalAmountSatang`, `discountAmountSatang`, `discountType=ADMIN_FIXED`, reason, actor, time, and final `estimatedAmountSatang` atomically; append `BOOKING_DISCOUNT_APPLIED` without changing service line snapshots.
@@ -1161,14 +1161,20 @@ Admin Web confirmation supplies `expectedVersion`; group confirmation compares o
 ```text
 transaction:
     read Booking, reservations, buckets, guards
-    require status in PENDING or CONFIRMED
+    require status in PENDING, CONFIRMED, or RECORDED
     require reason
-    decrement each active reservation bucket
-    mark each reservation inactive and released
+    if previous status in PENDING or CONFIRMED:
+        decrement each active reservation bucket
+        mark each reservation inactive and released
     if previous status PENDING: decrement activePendingCount
     remove duplicate guard
     set CANCELLED, capacityReleased=true, version+1
-    append audit and customer-safe cancellation outbox
+    if previous status RECORDED:
+        set financiallyExcluded=true
+        preserve subtotal, discount, net, and historicalFinancialRecord snapshots
+        append audit only; do not append notification outbox
+    else:
+        append audit and customer-safe cancellation outbox
 ```
 
 ### 12.3 Start

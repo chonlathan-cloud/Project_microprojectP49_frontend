@@ -34,6 +34,17 @@ def test_cancellation_requires_reason() -> None:
         BookingStateMachine.transition(BookingStatus.PENDING, "cancel")
 
 
+def test_recorded_history_can_be_cancelled_with_reason() -> None:
+    assert (
+        BookingStateMachine.transition(
+            BookingStatus.RECORDED,
+            "cancel",
+            cancellation_reason="บันทึกผิดรายการ",
+        )
+        is BookingStatus.CANCELLED
+    )
+
+
 def test_no_show_requires_fifteen_minute_gate_from_caller() -> None:
     with pytest.raises(InvalidStateTransition, match="threshold"):
         BookingStateMachine.transition(BookingStatus.CONFIRMED, "no_show")

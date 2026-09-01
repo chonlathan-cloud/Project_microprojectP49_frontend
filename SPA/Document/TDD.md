@@ -4,11 +4,11 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Technical Design (TDD) |
-| Version | 1.4 |
+| Version | 1.5 |
 | Status | Approved technical baseline |
 | Last updated | 1 September 2026 |
-| Business baseline | [Business Logic v1.7](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.4](./HLD.md) |
+| Business baseline | [Business Logic v1.8](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.5](./HLD.md) |
 | Initial branch scope | One branch, multi-branch-ready data ownership |
 | Runtime location | `asia-southeast1` |
 
@@ -468,7 +468,7 @@ The transaction:
 2. Revalidates advance window and service/resource active states.
 3. Confirms the complete allocation for all participants.
 4. Reads and increments the branch-local appointment-date Booking counter.
-5. Creates Customer Web/LIFF Bookings as `PENDING`; creates an authenticated active Admin Booking as `CONFIRMED`, or a historical record as terminal `RECORDED`, with trusted actor timestamps in the same transaction.
+5. Creates Customer Web/LIFF Bookings as `PENDING`; creates an authenticated active Admin Booking as `CONFIRMED`, or a historical record as `RECORDED`, with trusted actor timestamps in the same transaction. `RECORDED` permits only the audited correction to `CANCELLED`.
 6. Creates immutable price-bearing Booking line items; a `PER_BOOKING` item is written and charged once. The Booking separately stores subtotal, Admin discount, and net estimated amount.
 7. Creates participant and immutable Booking Health Snapshot documents linked to the appropriate line item.
 8. Resolves or creates the verified/provisional Customer Profile, updates the current Health Profile, and writes versioned consent receipts.
@@ -504,7 +504,7 @@ If new capacity is unavailable, no old capacity is released and the Booking rema
 
 ### 15.2 Cancellation and Terminal States
 
-`CANCELLED`, `COMPLETED`, and `NO_SHOW` do not consume capacity. The transition transaction decrements every active reservation bucket exactly once and marks reservation documents released. Repeated transitions cannot decrement again.
+`CANCELLED`, `COMPLETED`, `NO_SHOW`, and `RECORDED` do not consume capacity. Active Booking transitions decrement every active reservation bucket exactly once and mark reservation documents released. `RECORDED → CANCELLED` has no reservation to release and must not read or mutate Capacity. Repeated transitions cannot decrement again.
 
 `IN_SERVICE` continues consuming capacity until `COMPLETED`.
 
@@ -522,8 +522,9 @@ Reducing resource capacity or adding a block never auto-cancels an existing Book
 | `CONFIRMED` | Cancel | `CANCELLED` | Reason required |
 | `CONFIRMED` | No-show | `NO_SHOW` | Appointment has reached the operational no-show window |
 | `IN_SERVICE` | Complete | `COMPLETED` | Authorized Admin Web user |
+| `RECORDED` | Cancel | `CANCELLED` | Reason required; set `financiallyExcluded=true`; no Capacity or notification write |
 
-Terminal states cannot be reopened in Phase 1 through ordinary endpoints. Administrative correction requires a future explicit recovery command and is not part of Phase 1.
+`COMPLETED`, `CANCELLED`, and `NO_SHOW` cannot be reopened in Phase 1 through ordinary endpoints. `RECORDED` supports only the reason-required correction to `CANCELLED`; no other transition is valid.
 
 ## 17. Guest Abuse Protection
 

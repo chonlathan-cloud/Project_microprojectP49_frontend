@@ -4,7 +4,7 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Business Logic |
-| Version | 1.7 |
+| Version | 1.8 |
 | Status | Approved business baseline |
 | Last updated | 1 กันยายน 2026 |
 | Initial branch scope | 1 สาขา |
@@ -279,6 +279,8 @@ PENDING ───────→ CONFIRMED ───────→ IN_SERVICE �
    │                 │
    └──→ CANCELLED ←──┘
                      └──→ NO_SHOW
+
+RECORDED ───────→ CANCELLED
 ```
 
 | Status | ความหมาย | Capacity | ผู้เปลี่ยนสถานะ |
@@ -287,7 +289,7 @@ PENDING ───────→ CONFIRMED ───────→ IN_SERVICE �
 | `CONFIRMED` | ร้านรับรองวัน เวลา Service และ Capacity แล้ว | ใช้ | LINE Group Approver, `ADMIN` หรือ `STAFF` |
 | `IN_SERVICE` | ลูกค้าเริ่มรับบริการ | ใช้ | `ADMIN`/`STAFF` |
 | `COMPLETED` | ให้บริการเสร็จแล้ว | ไม่ใช้ | `ADMIN`/`STAFF` |
-| `RECORDED` | ประวัติบริการย้อนหลังพร้อมยอดทางการเงิน | ไม่ใช้ | `ADMIN`/`STAFF` ขณะสร้าง record |
+| `RECORDED` | ประวัติบริการย้อนหลังพร้อมยอดทางการเงิน | ไม่ใช้ | `ADMIN`/`STAFF` สร้างหรือยกเลิกเมื่อบันทึกผิด |
 | `CANCELLED` | ร้านหรือลูกค้าติดต่อให้ยกเลิก โดยผู้ใช้ Admin Web บันทึกเหตุผล | ไม่ใช้ | `ADMIN`/`STAFF` |
 | `NO_SHOW` | Booking ที่ Confirm แล้วแต่ลูกค้าไม่มาตามนัด | ไม่ใช้ | `ADMIN`/`STAFF` |
 
@@ -295,14 +297,15 @@ PENDING ───────→ CONFIRMED ───────→ IN_SERVICE �
 
 - Booking ใหม่จาก Customer Web หรือ LIFF เริ่มต้นเป็น `PENDING` เสมอ
 - Staff-assisted Booking วันนี้หรืออนาคตที่สร้างโดย `ADMIN`/`STAFF` ผ่าน Admin Web เริ่มต้นเป็น `CONFIRMED` และ Audit ต้องระบุ `source=ADMIN_WEB`, ผู้สร้าง และการยืนยันใน interaction เดียวกัน
-- Historical record เริ่มต้นและจบที่ `RECORDED`; ต้องระบุ `financiallyExcluded=false`, `historicalFinancialRecord=true`, ผู้บันทึก ราคาปกติ ส่วนลด ยอดสุทธิ และเวลาที่บันทึกใน Audit
+- Historical record เริ่มต้นที่ `RECORDED`; ต้องระบุ `financiallyExcluded=false`, `historicalFinancialRecord=true`, ผู้บันทึก ราคาปกติ ส่วนลด ยอดสุทธิ และเวลาที่บันทึกใน Audit
 - `PENDING → CONFIRMED` ทำได้ครั้งเดียว
 - `PENDING → CANCELLED` ทำได้โดย `ADMIN`/`STAFF` พร้อมเหตุผล
 - `CONFIRMED → IN_SERVICE` ต้องมีหมอนวดถูกมอบหมายแล้ว
 - `CONFIRMED → CANCELLED` ต้องมีเหตุผล
 - `CONFIRMED → NO_SHOW` ใช้เมื่อลูกค้าไม่มาตามนัดเท่านั้น
 - `IN_SERVICE → COMPLETED` ใช้เมื่อจบการให้บริการ
-- `COMPLETED`, `RECORDED`, `CANCELLED` และ `NO_SHOW` เป็นสถานะปลายทาง การเปิด Booking กลับมาใหม่ต้องเป็นการดำเนินการที่มี Audit Trail
+- `RECORDED → CANCELLED` ทำได้โดย `ADMIN`/`STAFF` เฉพาะเพื่อแก้รายการย้อนหลังที่บันทึกผิด ต้องมีเหตุผล ตั้ง `financiallyExcluded=true`, ไม่เปลี่ยน Capacity และไม่สร้าง Notification Outbox
+- `COMPLETED`, `CANCELLED` และ `NO_SHOW` เป็นสถานะปลายทาง การเปิด Booking กลับมาใหม่ต้องเป็นการดำเนินการที่มี Audit Trail
 - คำสั่งซ้ำหรือคำสั่งที่ขัดกับสถานะปัจจุบันต้องไม่เปลี่ยนข้อมูลซ้ำ
 
 ## 12. Therapist Assignment
