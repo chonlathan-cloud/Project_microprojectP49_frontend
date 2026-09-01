@@ -163,7 +163,7 @@ def test_admin_booking_list_is_newest_first_and_cursor_paginated(monkeypatch) ->
             booking("d4", 4, "PENDING", customer_name="Four"),
             booking(
                 "d3",
-                3,
+                4,
                 "CONFIRMED",
                 customer_name="Pinyada",
                 assignment_state="UNASSIGNED",

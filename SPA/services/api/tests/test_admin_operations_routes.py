@@ -186,6 +186,97 @@ def test_staff_can_create_service_with_initial_variant() -> None:
     assert database.audits[-1]["eventType"] == "SERVICE_CREATED"
 
 
+def test_staff_can_create_service_with_multiple_duration_variants() -> None:
+    database = ServiceFirestore()
+    previous_auth, previous_firestore = _with_service_dependencies(database)
+    try:
+        response = client.post(
+            "/api/v1/admin/services",
+            json={
+                "category": "MASSAGE",
+                "nameTh": "นวดคอ บ่า ไหล่",
+                "nameEn": "Neck and Shoulder Massage",
+                "variants": [
+                    {"durationMinutes": 60, "priceSatang": 50000},
+                    {"durationMinutes": 30, "priceSatang": 30000},
+                ],
+                "pricingMode": "PER_PARTICIPANT",
+                "requiredPax": 1,
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 201
+    payload = response.json()
+    created = database.services[payload["serviceId"]]
+    assert [variant["durationMinutes"] for variant in created["variants"]] == [30, 60]
+    assert [variant["priceSatang"] for variant in created["variants"]] == [30000, 50000]
+    assert payload["variantIds"] == [
+        f"{payload['serviceId']}-30",
+        f"{payload['serviceId']}-60",
+    ]
+
+
+def test_service_create_rejects_duplicate_durations() -> None:
+    database = ServiceFirestore()
+    previous_auth, previous_firestore = _with_service_dependencies(database)
+    try:
+        response = client.post(
+            "/api/v1/admin/services",
+            json={
+                "category": "MASSAGE",
+                "nameTh": "บริการใหม่",
+                "nameEn": "New Service",
+                "variants": [
+                    {"durationMinutes": 60, "priceSatang": 50000},
+                    {"durationMinutes": 60, "priceSatang": 60000},
+                ],
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Service durations must be unique"
+
+
+def test_staff_can_add_duration_variant_to_existing_service() -> None:
+    database = ServiceFirestore()
+    database.services["existing"].update(
+        {
+            "version": 1,
+            "variants": [
+                {
+                    "variantId": "existing-30",
+                    "durationMinutes": 30,
+                    "priceSatang": 30000,
+                    "pricingMode": "PER_PARTICIPANT",
+                    "requiredPax": 1,
+                    "active": True,
+                    "resourceRequirements": [{"resourceId": "bed", "quantity": 1}],
+                }
+            ],
+        }
+    )
+    previous_auth, previous_firestore = _with_service_dependencies(database)
+    try:
+        response = client.post(
+            "/api/v1/admin/services/existing/variants",
+            json={"durationMinutes": 60, "priceSatang": 50000, "expectedVersion": 1},
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 201
+    assert response.json()["variantId"] == "existing-60"
+    assert database.services["existing"]["version"] == 2
+    variants = database.services["existing"]["variants"]
+    assert [variant["durationMinutes"] for variant in variants] == [30, 60]
+    assert variants[1]["resourceRequirements"] == [{"resourceId": "bed", "quantity": 1}]
+    assert database.audits[-1]["eventType"] == "SERVICE_VARIANT_CREATED"
+
+
 def test_staff_can_change_service_category() -> None:
     database = ServiceFirestore()
     database.services["existing"].update({"version": 1, "category": "MASSAGE"})

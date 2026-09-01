@@ -65,6 +65,11 @@ class ServiceUpdate(ApiModel):
     expected_version: int = Field(ge=1)
 
 
+class ServiceVariantCreate(ApiModel):
+    duration_minutes: int = Field(ge=15, le=480, multiple_of=15)
+    price_satang: int = Field(ge=0)
+
+
 class ServiceCreate(ApiModel):
     branch_id: Literal["branch_001"] = "branch_001"
     category: Literal["SIGNATURE", "MASSAGE", "STANDALONE"]
@@ -72,10 +77,17 @@ class ServiceCreate(ApiModel):
     name_en: str = Field(min_length=1, max_length=160)
     description_th: str = Field(default="", max_length=500)
     description_en: str = Field(default="", max_length=500)
-    duration_minutes: int = Field(ge=15, le=480, multiple_of=15)
-    price_satang: int = Field(ge=0)
+    duration_minutes: int | None = Field(default=None, ge=15, le=480, multiple_of=15)
+    price_satang: int | None = Field(default=None, ge=0)
+    variants: list[ServiceVariantCreate] | None = Field(
+        default=None, min_length=1, max_length=20
+    )
     pricing_mode: Literal["PER_PARTICIPANT", "PER_BOOKING"] = "PER_PARTICIPANT"
     required_pax: Literal[1, 2] = 1
+
+
+class VariantCreate(ServiceVariantCreate):
+    expected_version: int = Field(ge=1)
 
 
 class VariantUpdate(ApiModel):
@@ -317,8 +329,26 @@ async def create_service(
             "Two-person services must use PER_BOOKING pricing; "
             "other services must use PER_PARTICIPANT"
         )
+    if request.variants is not None:
+        if request.duration_minutes is not None or request.price_satang is not None:
+            raise ValidationDomainError(
+                "Use variants or the legacy duration and price fields, not both"
+            )
+        variant_inputs = request.variants
+    else:
+        if request.duration_minutes is None or request.price_satang is None:
+            raise ValidationDomainError("At least one service duration and price are required")
+        variant_inputs = [
+            ServiceVariantCreate(
+                duration_minutes=request.duration_minutes,
+                price_satang=request.price_satang,
+            )
+        ]
+    durations = [variant.duration_minutes for variant in variant_inputs]
+    if len(set(durations)) != len(durations):
+        raise ValidationDomainError("Service durations must be unique")
+
     service_id = f"service-{uuid4().hex}"
-    variant_id = f"{service_id}-{request.duration_minutes}"
     existing = [snapshot.to_dict() or {} for snapshot in client.collection("services").stream()]
     display_order = max((int(item.get("displayOrder", 0)) for item in existing), default=0) + 10
     now = datetime.now(UTC)
@@ -334,14 +364,15 @@ async def create_service(
         "displayOrder": display_order,
         "variants": [
             {
-                "variantId": variant_id,
-                "durationMinutes": request.duration_minutes,
-                "priceSatang": request.price_satang,
+                "variantId": f"{service_id}-{variant.duration_minutes}",
+                "durationMinutes": variant.duration_minutes,
+                "priceSatang": variant.price_satang,
                 "pricingMode": request.pricing_mode,
                 "requiredPax": request.required_pax,
                 "active": True,
                 "resourceRequirements": [],
             }
+            for variant in sorted(variant_inputs, key=lambda item: item.duration_minutes)
         ],
         "version": 1,
         "createdAt": now,
@@ -351,7 +382,10 @@ async def create_service(
     _audit(client, actor=actor, event_type="SERVICE_CREATED", target_id=service_id)
     return {
         "serviceId": service_id,
-        "variantId": variant_id,
+        "variantIds": [
+            f"{service_id}-{variant.duration_minutes}"
+            for variant in sorted(variant_inputs, key=lambda item: item.duration_minutes)
+        ],
         "version": 1,
         "active": True,
     }
@@ -518,6 +552,57 @@ async def delete_service_image(
         logger.warning("Failed to remove deleted service image", extra={"objectPath": object_path})
     _audit(client, actor=actor, event_type="SERVICE_IMAGE_DELETED", target_id=service_id)
     return {"serviceId": service_id, "version": next_version, "imageVersion": None}
+
+
+@router.post(
+    "/services/{service_id}/variants",
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_service_variant(
+    service_id: str,
+    request: VariantCreate,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> dict[str, object]:
+    ref = client.collection("services").document(service_id)
+    snapshot = ref.get()
+    if not snapshot.exists:
+        raise NotFoundDomainError("Service not found")
+    data = snapshot.to_dict() or {}
+    version = int(data.get("version", 1))
+    if version != request.expected_version:
+        raise ConflictDomainError("Service changed; reload before trying again")
+    variants = list(data.get("variants", []))
+    if any(
+        int(variant.get("durationMinutes", 0)) == request.duration_minutes
+        for variant in variants
+    ):
+        raise ConflictDomainError("A service variant with this duration already exists")
+    if not variants:
+        raise ValidationDomainError("Service requires an existing pricing configuration")
+
+    pricing_source = variants[0]
+    variant_id = f"{service_id}-{request.duration_minutes}"
+    new_variant = {
+        "variantId": variant_id,
+        "durationMinutes": request.duration_minutes,
+        "priceSatang": request.price_satang,
+        "pricingMode": pricing_source.get("pricingMode", "PER_PARTICIPANT"),
+        "requiredPax": int(pricing_source.get("requiredPax", 1)),
+        "active": True,
+        "resourceRequirements": list(pricing_source.get("resourceRequirements", [])),
+    }
+    variants.append(new_variant)
+    variants.sort(key=lambda variant: int(variant.get("durationMinutes", 0)))
+    next_version = version + 1
+    ref.update({"variants": variants, "version": next_version, "updatedAt": datetime.now(UTC)})
+    _audit(client, actor=actor, event_type="SERVICE_VARIANT_CREATED", target_id=variant_id)
+    return {
+        "serviceId": service_id,
+        "variantId": variant_id,
+        "version": next_version,
+        **new_variant,
+    }
 
 
 @router.patch("/services/{service_id}/variants/{variant_id}")
