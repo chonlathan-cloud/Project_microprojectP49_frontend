@@ -17,7 +17,8 @@ type Closure = { closureId: string; localDate: string; reason: string };
 type Variant = { variantId: string; durationMinutes: number; priceSatang: number; active: boolean };
 type ServiceCategory = "SIGNATURE" | "MASSAGE" | "STANDALONE";
 type Service = { serviceId: string; category?: ServiceCategory; nameTh: string; nameEn: string; descriptionTh?: string; descriptionEn?: string; active: boolean; version?: number; imageVersion?: string | null; updatedAt?: string; variants: Variant[] };
-type NewServiceDraft = { nameTh: string; nameEn: string; descriptionTh: string; descriptionEn: string; category: ServiceCategory; durationMinutes: string; priceBaht: string; packageType: "SINGLE" | "COUPLE" };
+type ServiceVariantDraft = { draftId: number; durationMinutes: string; priceBaht: string };
+type NewServiceDraft = { nameTh: string; nameEn: string; descriptionTh: string; descriptionEn: string; category: ServiceCategory; variants: ServiceVariantDraft[]; packageType: "SINGLE" | "COUPLE" };
 type Therapist = { therapistId: string; displayName: string; active: boolean };
 type NotificationEvent = { eventId: string; publicBookingId?: string; eventType: string; state: string; attemptCount?: number; lastErrorCode?: string; createdAt?: string };
 
@@ -181,11 +182,13 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
   const [category, setCategory] = useState<"ALL" | ServiceCategory>("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  const [newService, setNewService] = useState<NewServiceDraft>({ nameTh: "", nameEn: "", descriptionTh: "", descriptionEn: "", category: "MASSAGE", durationMinutes: "60", priceBaht: "", packageType: "SINGLE" });
+  const [newService, setNewService] = useState<NewServiceDraft>({ nameTh: "", nameEn: "", descriptionTh: "", descriptionEn: "", category: "MASSAGE", variants: [{ draftId: 1, durationMinutes: "60", priceBaht: "" }], packageType: "SINGLE" });
   const [categoryDraft, setCategoryDraft] = useState<ServiceCategory>("MASSAGE");
   const [descriptionTh, setDescriptionTh] = useState("");
   const [descriptionEn, setDescriptionEn] = useState("");
   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
+  const [newVariantDuration, setNewVariantDuration] = useState("");
+  const [newVariantPrice, setNewVariantPrice] = useState("");
   const [saving, setSaving] = useState(false);
   const [canManageImages, setCanManageImages] = useState(false);
   const [pendingImage, setPendingImage] = useState<File | null>(null);
@@ -195,6 +198,7 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
   const createDrawerRef = useRef<HTMLElement>(null);
   const createCloseButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const nextVariantDraftIdRef = useRef(2);
 
   const load = async () => {
     setLoading(true);
@@ -290,6 +294,8 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
     setDescriptionTh(service.descriptionTh ?? "");
     setDescriptionEn(service.descriptionEn ?? "");
     setPriceDrafts(Object.fromEntries(service.variants.map((variant) => [variant.variantId, String(variant.priceSatang / 100)])));
+    setNewVariantDuration("");
+    setNewVariantPrice("");
     setPendingImage(null);
     setImagePreviewUrl("");
     setFormError("");
@@ -297,20 +303,50 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
 
   const openCreator = () => {
     setSelectedId(null);
-    setNewService({ nameTh: "", nameEn: "", descriptionTh: "", descriptionEn: "", category: "MASSAGE", durationMinutes: "60", priceBaht: "", packageType: "SINGLE" });
+    nextVariantDraftIdRef.current = 2;
+    setNewService({ nameTh: "", nameEn: "", descriptionTh: "", descriptionEn: "", category: "MASSAGE", variants: [{ draftId: 1, durationMinutes: "60", priceBaht: "" }], packageType: "SINGLE" });
     setFormError("");
     setIsCreating(true);
   };
 
+  const addNewServiceVariantDraft = () => {
+    setNewService((current) => ({
+      ...current,
+      variants: [...current.variants, { draftId: nextVariantDraftIdRef.current++, durationMinutes: "", priceBaht: "" }]
+    }));
+    setFormError("");
+  };
+
+  const updateNewServiceVariantDraft = (draftId: number, changes: Partial<Omit<ServiceVariantDraft, "draftId">>) => {
+    setNewService((current) => ({
+      ...current,
+      variants: current.variants.map((variant) => variant.draftId === draftId ? { ...variant, ...changes } : variant)
+    }));
+  };
+
+  const removeNewServiceVariantDraft = (draftId: number) => {
+    setNewService((current) => ({
+      ...current,
+      variants: current.variants.filter((variant) => variant.draftId !== draftId)
+    }));
+    setFormError("");
+  };
+
   const createService = async () => {
-    const durationMinutes = Number(newService.durationMinutes);
-    const priceBaht = Number(newService.priceBaht);
     if (!newService.nameTh.trim() || !newService.nameEn.trim()) return;
-    if (!Number.isInteger(durationMinutes) || durationMinutes < 15 || durationMinutes > 480 || durationMinutes % 15 !== 0) {
+    const variants = newService.variants.map((variant) => ({
+      durationMinutes: Number(variant.durationMinutes),
+      priceBaht: Number(variant.priceBaht)
+    }));
+    if (variants.some((variant) => !Number.isInteger(variant.durationMinutes) || variant.durationMinutes < 15 || variant.durationMinutes > 480 || variant.durationMinutes % 15 !== 0)) {
       setFormError(locale === "th" ? "ระยะเวลาต้องเป็นช่วงละ 15 นาที ระหว่าง 15–480 นาที" : "Duration must be a 15-minute increment between 15 and 480 minutes.");
       return;
     }
-    if (!Number.isFinite(priceBaht) || priceBaht < 0) {
+    if (new Set(variants.map((variant) => variant.durationMinutes)).size !== variants.length) {
+      setFormError(locale === "th" ? "แต่ละระยะเวลาต้องไม่ซ้ำกัน" : "Each duration must be unique.");
+      return;
+    }
+    if (variants.some((variant) => !Number.isFinite(variant.priceBaht) || variant.priceBaht < 0)) {
       setFormError(locale === "th" ? "กรุณาระบุราคาเป็นตัวเลขตั้งแต่ 0 บาทขึ้นไป" : "Enter a valid price of THB 0 or more.");
       return;
     }
@@ -326,8 +362,10 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
           nameEn: newService.nameEn.trim(),
           descriptionTh: newService.descriptionTh.trim(),
           descriptionEn: newService.descriptionEn.trim(),
-          durationMinutes,
-          priceSatang: Math.round(priceBaht * 100),
+          variants: variants.map((variant) => ({
+            durationMinutes: variant.durationMinutes,
+            priceSatang: Math.round(variant.priceBaht * 100)
+          })),
           pricingMode: newService.packageType === "COUPLE" ? "PER_BOOKING" : "PER_PARTICIPANT",
           requiredPax: newService.packageType === "COUPLE" ? 2 : 1
         })
@@ -423,6 +461,44 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
     }
   };
 
+  const addServiceVariant = async (service: Service) => {
+    const durationMinutes = Number(newVariantDuration);
+    const priceBaht = Number(newVariantPrice);
+    if (!Number.isInteger(durationMinutes) || durationMinutes < 15 || durationMinutes > 480 || durationMinutes % 15 !== 0) {
+      setFormError(locale === "th" ? "ระยะเวลาต้องเป็นช่วงละ 15 นาที ระหว่าง 15–480 นาที" : "Duration must be a 15-minute increment between 15 and 480 minutes.");
+      return;
+    }
+    if (service.variants.some((variant) => variant.durationMinutes === durationMinutes)) {
+      setFormError(locale === "th" ? `มีตัวเลือก ${durationMinutes} นาทีอยู่แล้ว` : `A ${durationMinutes}-minute option already exists.`);
+      return;
+    }
+    if (!Number.isFinite(priceBaht) || priceBaht < 0) {
+      setFormError(locale === "th" ? "กรุณาระบุราคาเป็นตัวเลขตั้งแต่ 0 บาทขึ้นไป" : "Enter a valid price of THB 0 or more.");
+      return;
+    }
+    setSaving(true);
+    setFormError("");
+    try {
+      const payload = await api<{ variantId: string }>(user, `/services/${service.serviceId}/variants`, {
+        method: "POST",
+        body: JSON.stringify({
+          durationMinutes,
+          priceSatang: Math.round(priceBaht * 100),
+          expectedVersion: service.version ?? 1
+        })
+      });
+      setPriceDrafts((current) => ({ ...current, [payload.variantId]: String(priceBaht) }));
+      setNewVariantDuration("");
+      setNewVariantPrice("");
+      notify({ tone: "success", title: locale === "th" ? `เพิ่มตัวเลือก ${durationMinutes} นาทีแล้ว` : `${durationMinutes}-minute option added`, message: money(Math.round(priceBaht * 100)) });
+      await load();
+    } catch (caught) {
+      notify({ tone: "error", title: locale === "th" ? "เพิ่มระยะเวลาไม่สำเร็จ" : "Duration option could not be added", message: caught instanceof Error ? caught.message : undefined });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const selectImage = (file?: File) => {
     if (!file) return;
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
@@ -511,10 +587,10 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
         <div className="service-editor-scroll">
           <section className="service-editor-section"><div className="service-section-heading"><div><h3>{locale === "th" ? "ข้อมูลบริการ" : "Service details"}</h3><p>{locale === "th" ? "ชื่อจะแสดงบน Customer Web ทั้งสองภาษา" : "Names are published to Customer Web in both languages"}</p></div></div><div className="service-field-grid"><label>{locale === "th" ? "ชื่อภาษาไทย" : "Thai name"}<input required maxLength={160} value={newService.nameTh} onChange={(event) => setNewService((current) => ({ ...current, nameTh: event.target.value }))} /></label><label>{locale === "th" ? "ชื่อภาษาอังกฤษ" : "English name"}<input required maxLength={160} value={newService.nameEn} onChange={(event) => setNewService((current) => ({ ...current, nameEn: event.target.value }))} /></label><label>{locale === "th" ? "หมวดหมู่" : "Category"}<select value={newService.category} onChange={(event) => setNewService((current) => ({ ...current, category: event.target.value as ServiceCategory }))}>{(["SIGNATURE", "MASSAGE", "STANDALONE"] as const).map((value) => <option value={value} key={value}>{categoryLabel(value)}</option>)}</select></label></div></section>
           <section className="service-editor-section"><div className="service-section-heading"><div><h3>{locale === "th" ? "รายละเอียดสองภาษา" : "Bilingual descriptions"}</h3><p>{locale === "th" ? "เพิ่มภายหลังก็ได้ แต่ควรกรอกก่อนเผยแพร่" : "Optional now, recommended before publishing"}</p></div></div><div className="service-copy-form"><label>{locale === "th" ? "คำอธิบายภาษาไทย" : "Thai description"}<textarea maxLength={500} rows={4} value={newService.descriptionTh} onChange={(event) => setNewService((current) => ({ ...current, descriptionTh: event.target.value }))} /></label><label>{locale === "th" ? "คำอธิบายภาษาอังกฤษ" : "English description"}<textarea maxLength={500} rows={4} value={newService.descriptionEn} onChange={(event) => setNewService((current) => ({ ...current, descriptionEn: event.target.value }))} /></label></div></section>
-          <section className="service-editor-section"><div className="service-section-heading"><div><h3>{locale === "th" ? "ราคาเริ่มต้น" : "Initial price"}</h3><p>{locale === "th" ? "สร้างพร้อมหนึ่งระยะเวลา ราคาเป็นบาทรวม VAT" : "Create with one duration; THB, VAT inclusive"}</p></div></div><div className="service-field-grid two-columns"><label>{locale === "th" ? "ระยะเวลา (นาที)" : "Duration (minutes)"}<input required type="number" min="15" max="480" step="15" value={newService.durationMinutes} onChange={(event) => setNewService((current) => ({ ...current, durationMinutes: event.target.value }))} /></label><label>{locale === "th" ? "ราคา (บาท)" : "Price (THB)"}<input required type="number" min="0" step="1" value={newService.priceBaht} onChange={(event) => setNewService((current) => ({ ...current, priceBaht: event.target.value }))} /></label><label>{locale === "th" ? "รูปแบบบริการ" : "Service type"}<select value={newService.packageType} onChange={(event) => setNewService((current) => ({ ...current, packageType: event.target.value as NewServiceDraft["packageType"] }))}><option value="SINGLE">{locale === "th" ? "ต่อผู้รับบริการ 1 คน" : "Per participant (1 guest)"}</option><option value="COUPLE">{locale === "th" ? "แพ็กเกจคู่ 2 คน" : "Couple package (2 guests)"}</option></select></label></div></section>
+          <section className="service-editor-section" aria-labelledby="new-service-variants-title"><div className="service-section-heading"><div><h3 id="new-service-variants-title">{locale === "th" ? "ระยะเวลาและราคา" : "Duration and prices"}</h3><p>{locale === "th" ? "เพิ่มได้หลายช่วงเวลา ราคาเป็นบาทรวม VAT" : "Add multiple duration options; THB, VAT inclusive"}</p></div><button type="button" className="variant-add-button" onClick={addNewServiceVariantDraft}>+ {locale === "th" ? "เพิ่มช่วงเวลา" : "Add duration"}</button></div><div className="service-create-variant-list">{newService.variants.map((variant, index) => <div className="service-create-variant-row" key={variant.draftId}><span className="variant-row-number" aria-hidden="true">{index + 1}</span><label>{locale === "th" ? "ระยะเวลา (นาที)" : "Duration (minutes)"}<input required type="number" min="15" max="480" step="15" value={variant.durationMinutes} onChange={(event) => updateNewServiceVariantDraft(variant.draftId, { durationMinutes: event.target.value })} /></label><label>{locale === "th" ? "ราคา (บาท)" : "Price (THB)"}<input required type="number" min="0" step="1" value={variant.priceBaht} onChange={(event) => updateNewServiceVariantDraft(variant.draftId, { priceBaht: event.target.value })} /></label><button type="button" className="variant-remove-button" disabled={newService.variants.length === 1} aria-label={locale === "th" ? `ลบช่วงเวลาลำดับ ${index + 1}` : `Remove duration option ${index + 1}`} onClick={() => removeNewServiceVariantDraft(variant.draftId)}>{locale === "th" ? "ลบ" : "Remove"}</button></div>)}</div><div className="service-package-type"><label>{locale === "th" ? "รูปแบบบริการ" : "Service type"}<select value={newService.packageType} onChange={(event) => setNewService((current) => ({ ...current, packageType: event.target.value as NewServiceDraft["packageType"] }))}><option value="SINGLE">{locale === "th" ? "ต่อผู้รับบริการ 1 คน" : "Per participant (1 guest)"}</option><option value="COUPLE">{locale === "th" ? "แพ็กเกจคู่ 2 คน" : "Couple package (2 guests)"}</option></select></label></div></section>
         </div>
         {formError && <div className="drawer-feedback error" role="alert">{formError}</div>}
-        <div className="service-create-actions"><button type="button" onClick={() => setIsCreating(false)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button type="submit" className="save-button" disabled={saving || !newService.nameTh.trim() || !newService.nameEn.trim() || !newService.priceBaht}>{saving ? (locale === "th" ? "กำลังเพิ่ม…" : "Creating…") : (locale === "th" ? "เพิ่มและเปิดขาย" : "Create and publish")}</button></div>
+        <div className="service-create-actions"><button type="button" onClick={() => setIsCreating(false)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button type="submit" className="save-button" disabled={saving || !newService.nameTh.trim() || !newService.nameEn.trim() || newService.variants.some((variant) => !variant.durationMinutes || !variant.priceBaht)}>{saving ? (locale === "th" ? "กำลังเพิ่ม…" : "Creating…") : (locale === "th" ? "เพิ่มและเปิดขาย" : "Create and publish")}</button></div>
       </form>
     </aside>}
 
@@ -530,7 +606,7 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
 
         <section className="service-editor-section" aria-labelledby="copy-title"><div className="service-section-heading"><div><h3 id="copy-title">{locale === "th" ? "รายละเอียดสองภาษา" : "Bilingual descriptions"}</h3><p>{locale === "th" ? "ตรวจข้อความก่อนเผยแพร่ทุกครั้ง" : "Review customer-facing copy before saving"}</p></div></div><div className="service-copy-form"><label>{locale === "th" ? "คำอธิบายภาษาไทย" : "Thai description"}<textarea value={descriptionTh} onChange={(event) => setDescriptionTh(event.target.value)} maxLength={500} rows={4} /><small>{descriptionTh.length}/500</small></label><label>{locale === "th" ? "คำอธิบายภาษาอังกฤษ" : "English description"}<textarea value={descriptionEn} onChange={(event) => setDescriptionEn(event.target.value)} maxLength={500} rows={4} /><small>{descriptionEn.length}/500</small></label><div className="service-copy-actions"><button type="button" className="save-button" onClick={() => { void saveDescriptions(selected); }} disabled={saving || !descriptionTh.trim() || !descriptionEn.trim()}>{saving ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "บันทึกรายละเอียด" : "Save descriptions")}</button></div></div></section>
 
-        <section className="service-editor-section" aria-labelledby="price-title"><div className="service-section-heading"><div><h3 id="price-title">{locale === "th" ? "ระยะเวลาและราคา" : "Duration and prices"}</h3><p>{locale === "th" ? "ราคาเป็นบาท รวม VAT และมีผลกับ Booking ใหม่" : "THB, VAT inclusive; applies to new bookings"}</p></div></div><div className="variant-editor-list">{selected.variants.map((variant) => <div className="variant-editor-row" key={variant.variantId}><div><strong>{variant.durationMinutes} {locale === "th" ? "นาที" : "minutes"}</strong><small>{variant.variantId}</small></div><label><span>{locale === "th" ? "ราคา (บาท)" : "Price (THB)"}</span><input type="number" min="0" step="1" inputMode="decimal" value={priceDrafts[variant.variantId] ?? ""} onChange={(event) => setPriceDrafts((current) => ({ ...current, [variant.variantId]: event.target.value }))} /></label><button disabled={saving || Number(priceDrafts[variant.variantId]) === variant.priceSatang / 100} onClick={() => { void savePrice(selected, variant); }}>{locale === "th" ? "บันทึกราคา" : "Save price"}</button></div>)}</div></section>
+        <section className="service-editor-section" aria-labelledby="price-title"><div className="service-section-heading"><div><h3 id="price-title">{locale === "th" ? "ระยะเวลาและราคา" : "Duration and prices"}</h3><p>{locale === "th" ? "ราคาเป็นบาท รวม VAT และมีผลกับ Booking ใหม่" : "THB, VAT inclusive; applies to new bookings"}</p></div></div><div className="variant-editor-list">{selected.variants.map((variant) => <div className="variant-editor-row" key={variant.variantId}><div><strong>{variant.durationMinutes} {locale === "th" ? "นาที" : "minutes"}</strong><small>{variant.variantId}</small></div><label><span>{locale === "th" ? "ราคา (บาท)" : "Price (THB)"}</span><input type="number" min="0" step="1" inputMode="decimal" value={priceDrafts[variant.variantId] ?? ""} onChange={(event) => setPriceDrafts((current) => ({ ...current, [variant.variantId]: event.target.value }))} /></label><button disabled={saving || Number(priceDrafts[variant.variantId]) === variant.priceSatang / 100} onClick={() => { void savePrice(selected, variant); }}>{locale === "th" ? "บันทึกราคา" : "Save price"}</button></div>)}</div><div className="variant-create-inline" aria-labelledby="add-variant-title"><div><strong id="add-variant-title">{locale === "th" ? "เพิ่มช่วงเวลาใหม่" : "Add duration option"}</strong><small>{locale === "th" ? "ใช้รูปแบบราคาและทรัพยากรเดียวกับบริการนี้" : "Uses this service’s pricing and resource rules"}</small></div><label><span>{locale === "th" ? "นาที" : "Minutes"}</span><input type="number" min="15" max="480" step="15" value={newVariantDuration} onChange={(event) => setNewVariantDuration(event.target.value)} /></label><label><span>{locale === "th" ? "ราคา (บาท)" : "Price (THB)"}</span><input type="number" min="0" step="1" value={newVariantPrice} onChange={(event) => setNewVariantPrice(event.target.value)} /></label><button type="button" disabled={saving || !newVariantDuration || !newVariantPrice} onClick={() => { void addServiceVariant(selected); }}>+ {locale === "th" ? "เพิ่ม" : "Add"}</button></div></section>
         <section className="service-editor-section service-danger-zone" aria-labelledby="remove-service-title"><div className="service-section-heading"><div><h3 id="remove-service-title">{locale === "th" ? "นำบริการออก" : "Remove service"}</h3><p>{locale === "th" ? "ปิดบริการแบบย้อนกลับได้ ประวัติ Booking เดิมยังคงอยู่" : "Reversible deactivation; existing booking history is preserved"}</p></div></div><button type="button" className="danger-link service-remove-button" disabled={saving || !selected.active} onClick={() => { void removeService(selected); }}>{selected.active ? (locale === "th" ? "นำออกจากหน้าจอง" : "Remove from booking") : (locale === "th" ? "บริการนี้ปิดอยู่แล้ว" : "Service already inactive")}</button></section>
       </div>
       {formError && <div className="drawer-feedback error" role="alert">{formError}</div>}

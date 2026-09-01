@@ -336,6 +336,21 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .service-category-editor button:not(:disabled), .service-create-actions .save-button { border-color: var(--forest); background: var(--forest); color: white; }
 .service-category-editor button:disabled, .service-create-actions button:disabled, .service-remove-button:disabled { cursor: not-allowed; opacity: .55; }
 .service-create-actions { padding: 12px 18px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); background: white; }
+.variant-add-button { min-height: 38px; padding: 0 11px; flex: 0 0 auto; border: 1px solid var(--forest); border-radius: 8px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 11px; font-weight: 800; }
+.service-create-variant-list { display: grid; gap: 8px; }
+.service-create-variant-row { padding: 10px; display: grid; grid-template-columns: 24px minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 8px; border: 1px solid #e1e5df; border-radius: 8px; background: #fafbf9; }
+.variant-row-number { width: 24px; height: 38px; display: grid; place-items: center; align-self: end; color: var(--muted); font-size: 11px; font-weight: 800; }
+.service-create-variant-row label, .service-package-type label, .variant-create-inline label { display: grid; gap: 4px; color: var(--muted); font-size: 10px; font-weight: 700; }
+.service-create-variant-row input, .service-package-type select, .variant-create-inline input { width: 100%; min-height: 38px; padding: 0 9px; border: 1px solid #aeb6aa; border-radius: 7px; background: white; color: var(--text); }
+.variant-remove-button { min-height: 38px; padding: 0 9px; border: 1px solid #d89999; border-radius: 7px; background: white; color: #a31d1d; cursor: pointer; font-size: 11px; font-weight: 800; }
+.variant-remove-button:disabled { cursor: not-allowed; opacity: .35; }
+.service-package-type { margin-top: 12px; }
+.variant-create-inline { margin-top: 12px; padding: 11px; display: grid; grid-template-columns: minmax(120px, 1fr) 82px 120px auto; align-items: end; gap: 8px; border-left: 3px solid var(--gold); background: #fffaf0; }
+.variant-create-inline > div strong, .variant-create-inline > div small { display: block; }
+.variant-create-inline > div strong { font-size: 12px; }
+.variant-create-inline > div small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.variant-create-inline button { min-height: 38px; padding: 0 11px; border: 1px solid var(--forest); border-radius: 7px; background: var(--forest); color: white; cursor: pointer; font-size: 11px; font-weight: 800; }
+.variant-create-inline button:disabled { cursor: not-allowed; opacity: .5; }
 .service-danger-zone { background: #fffafa; }
 .variant-editor-row button { min-height: 38px; padding: 0 12px; border: 1px solid #cfd4cc; border-radius: 8px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 12px; font-weight: 800; }
 .variant-editor-list { display: grid; gap: 8px; }
@@ -556,6 +571,11 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .campaign-search, .campaign-editor-grid { grid-template-columns: 1fr; }
   .page-heading { align-items: stretch; flex-direction: column; }
   .new-booking { width: 100%; }
+  .service-create-variant-row { grid-template-columns: 24px 1fr auto; }
+  .service-create-variant-row label:nth-of-type(2) { grid-column: 2 / -1; }
+  .variant-create-inline { grid-template-columns: 1fr 1fr; }
+  .variant-create-inline > div { grid-column: 1 / -1; }
+  .variant-create-inline button { align-self: end; }
   .booking-pagination { align-items: stretch; flex-direction: column; gap: 10px; }
   .booking-pagination p { margin: 0; }
   .booking-pagination label { justify-content: space-between; }
