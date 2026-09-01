@@ -4,11 +4,11 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Technical Design (TDD) |
-| Version | 1.5 |
+| Version | 1.6 |
 | Status | Approved technical baseline |
 | Last updated | 1 September 2026 |
-| Business baseline | [Business Logic v1.8](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.5](./HLD.md) |
+| Business baseline | [Business Logic v1.9](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.6](./HLD.md) |
 | Initial branch scope | One branch, multi-branch-ready data ownership |
 | Runtime location | `asia-southeast1` |
 
@@ -457,7 +457,7 @@ The creation operation has a pre-transaction validation stage and one Firestore 
 - Accept optional `discountAmountSatang` and `discountReason`; require whole-baht, non-negative input, require `ADMIN` and a non-empty reason when the amount is greater than zero, and require the discount to be less than the service subtotal
 - Keep Coupon lookup/redeem independent. A reason such as `คูปองสมัครครั้งแรก` records why the Booking was discounted but never marks a coupon code redeemed implicitly
 - `STAFF_ASSISTED` accepts the current non-past bucket or a future date and performs operating-hours, closure, duplicate, and capacity validation
-- `HISTORICAL_RECORD` requires a past appointment time, commits `RECORDED`, preserves the immutable subtotal/discount/net financial snapshot, and skips operating-hours/closure/capacity reservations, automatic payment/accounting creation, and notification outbox writes
+- `HISTORICAL_RECORD` requires a past appointment time, commits `RECORDED`, preserves immutable subtotal/discount/net-service/tip/gross financial snapshots, and skips operating-hours/closure/capacity reservations, automatic payment/accounting creation, and notification outbox writes; non-historical creation rejects any positive tip
 - Normalize the optional Admin-entered phone only when provided; never synthesize a placeholder number
 
 ### 14.2 Transaction

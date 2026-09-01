@@ -489,6 +489,56 @@ def test_admin_discount_rejects_invalid_financial_input(
         )
 
 
+@pytest.mark.parametrize(
+    ("booking_mode", "tip_amount_satang", "message"),
+    [
+        ("STAFF_ASSISTED", 2_000, "only be recorded for historical"),
+        ("HISTORICAL_RECORD", 50, "whole-baht"),
+    ],
+)
+def test_admin_tip_rejects_non_historical_or_fractional_amount(
+    monkeypatch: pytest.MonkeyPatch,
+    booking_mode: str,
+    tip_amount_satang: int,
+    message: str,
+) -> None:
+    database = WalkInFirestore()
+    monkeypatch.setattr(
+        booking_service, "_validate_staff_assisted_window", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        booking_service, "_validate_historical_record_window", lambda *args, **kwargs: None
+    )
+
+    with pytest.raises(ValidationDomainError, match=message):
+        booking_service.create_booking(
+            database,  # type: ignore[arg-type]
+            branch_id="branch_001",
+            date="2026-08-20",
+            time="14:00",
+            phone=None,
+            participants=[
+                {
+                    "nickname": "Som",
+                    "serviceVariantId": "traditional-thai-60",
+                    "hasHealthInformation": False,
+                    "healthDetails": None,
+                    "healthConsent": True,
+                }
+            ],
+            idempotency_key=f"tip-invalid-{tip_amount_satang}-{booking_mode}",
+            source="ADMIN_WEB",
+            initial_status=(
+                "RECORDED" if booking_mode == "HISTORICAL_RECORD" else "CONFIRMED"
+            ),
+            actor_id="staff-001",
+            admin_booking_mode=booking_mode,
+            consent_capture_method="VERBAL",
+            booking_privacy_acknowledged=True,
+            tip_amount_satang=tip_amount_satang,
+        )
+
+
 def test_staff_assisted_and_historical_windows_are_mutually_exclusive() -> None:
     now = datetime(2026, 9, 1, 7, 7, tzinfo=UTC)  # 14:07 in Bangkok
     future = datetime.fromisoformat("2026-09-05T14:00:00+07:00")
@@ -535,12 +585,15 @@ def test_historical_record_is_financial_history_and_skips_capacity_and_outbox(
         admin_booking_mode="HISTORICAL_RECORD",
         consent_capture_method="VERBAL",
         booking_privacy_acknowledged=True,
+        tip_amount_satang=5_000,
     )
 
     assert result["status"] == "RECORDED"
     assert result["subtotalAmountSatang"] == 30_000
     assert result["discountAmountSatang"] == 0
     assert result["estimatedAmountSatang"] == 30_000
+    assert result["tipAmountSatang"] == 5_000
+    assert result["grossAmountSatang"] == 35_000
     booking = next(
         value
         for (collection, _), value in database.documents.items()
@@ -551,6 +604,8 @@ def test_historical_record_is_financial_history_and_skips_capacity_and_outbox(
     assert booking["historicalFinancialRecord"] is True
     assert booking["subtotalAmountSatang"] == 30_000
     assert booking["estimatedAmountSatang"] == 30_000
+    assert booking["tipAmountSatang"] == 5_000
+    assert booking["grossAmountSatang"] == 35_000
     assert booking["paymentStatus"] == "UNAVAILABLE"
     assert booking["capacityReleased"] is True
     assert "capacityReservation" not in booking
@@ -577,6 +632,8 @@ def test_historical_record_is_financial_history_and_skips_capacity_and_outbox(
     assert audit["subtotalAmountSatang"] == 30_000
     assert audit["discountAmountSatang"] == 0
     assert audit["estimatedAmountSatang"] == 30_000
+    assert audit["tipAmountSatang"] == 5_000
+    assert audit["grossAmountSatang"] == 35_000
 
 
 def test_historical_record_accepts_admin_discount_and_preserves_net_amount(
@@ -653,6 +710,8 @@ def test_historical_record_can_be_cancelled_without_capacity_or_notification(
         "subtotalAmountSatang": 30_000,
         "discountAmountSatang": 2_000,
         "estimatedAmountSatang": 28_000,
+        "tipAmountSatang": 5_000,
+        "grossAmountSatang": 33_000,
     }
     monkeypatch.setattr(booking_routes.firestore, "transactional", lambda function: function)
     previous_auth, previous_firestore = _override_dependencies(database)
@@ -677,6 +736,8 @@ def test_historical_record_can_be_cancelled_without_capacity_or_notification(
     assert booking["subtotalAmountSatang"] == 30_000
     assert booking["discountAmountSatang"] == 2_000
     assert booking["estimatedAmountSatang"] == 28_000
+    assert booking["tipAmountSatang"] == 5_000
+    assert booking["grossAmountSatang"] == 33_000
     assert booking["cancellation"]["reason"] == "บันทึกผิดรายการ"  # type: ignore[index]
     assert not any(
         collection == "capacity_buckets" for collection, _ in database.documents
@@ -717,6 +778,7 @@ def test_admin_historical_endpoint_maps_to_recorded_status(
                 "phone": None,
                 "bookingPrivacyAcknowledged": True,
                 "consentCaptureMethod": "PAPER",
+                "tipAmountSatang": 5_000,
                 "participants": [
                     {
                         "nickname": "Som",
@@ -734,6 +796,39 @@ def test_admin_historical_endpoint_maps_to_recorded_status(
     assert response.status_code == 201, response.text
     assert captured["initial_status"] == "RECORDED"
     assert captured["admin_booking_mode"] == "HISTORICAL_RECORD"
+    assert captured["tip_amount_satang"] == 5_000
+
+
+def test_admin_endpoint_rejects_tip_for_non_historical_booking() -> None:
+    previous_auth, previous_firestore = _override_dependencies(object())
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings",
+            headers={"Idempotency-Key": "active-tip-rejected-001"},
+            json={
+                "bookingMode": "STAFF_ASSISTED",
+                "date": "2026-09-05",
+                "time": "14:00",
+                "phone": None,
+                "bookingPrivacyAcknowledged": True,
+                "consentCaptureMethod": "PAPER",
+                "tipAmountSatang": 5_000,
+                "participants": [
+                    {
+                        "nickname": "Som",
+                        "serviceVariantId": "traditional-thai-60",
+                        "hasHealthInformation": False,
+                        "healthDetails": None,
+                        "healthConsent": True,
+                    }
+                ],
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 422
+    assert "historical records" in response.text
 
 
 def test_admin_availability_uses_authenticated_admin_mode(

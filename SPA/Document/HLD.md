@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | High-Level Design (HLD) |
-| Version | 1.5 |
+| Version | 1.6 |
 | Status | Approved architecture baseline |
 | Last updated | 1 September 2026 |
 | Initial branch scope | One branch |
 | Timezone / currency | Asia/Bangkok / THB |
-| Business baseline | [Business Logic v1.8](./BusinessLogic.md) |
+| Business baseline | [Business Logic v1.9](./BusinessLogic.md) |
 
 ## 1. Purpose
 
@@ -180,7 +180,7 @@ Responsibilities:
 - Support booking confirmation, cancellation, status progression, and capacity-safe edits
 - Create staff-assisted Bookings for today or a future date with optional phone contact, capacity validation, explicit verbal/paper consent evidence, and an audited initial `CONFIRMED` state
 - Allow only `ADMIN` to apply an optional whole-THB Booking discount with a required reason, while keeping immutable service prices, subtotal, discount, and net total distinct
-- Record past appointments as financial `RECORDED` history with immutable subtotal, Admin discount, and net amount; allow an audited reason-required correction to `CANCELLED`, but never reserve/release capacity or deliver notifications for this historical path
+- Record past appointments as financial `RECORDED` history with immutable subtotal, Admin discount, net service amount, separate optional tip, and gross amount; allow an audited reason-required correction to `CANCELLED`, but never reserve/release capacity or deliver notifications for this historical path
 - Manage services, duration variants, prices, resources, blocked periods, therapists, and the Phase 1 branch
 - Display health details only to authorized `ADMIN` or `STAFF` users
 - Restrict user, role, and security configuration screens to `ADMIN`
@@ -432,7 +432,7 @@ Concurrent submissions contend on the relevant reservation records. The first tr
 
 - A newly committed Customer Web or LIFF Booking is always `PENDING`.
 - An authenticated Admin Web staff-assisted Booking for today or a future date commits directly as `CONFIRMED` after the creating `ADMIN`/`STAFF` reviews the summary. The transaction records `source=ADMIN_WEB`, creator identity, confirmation time, and audit evidence.
-- A past appointment is accepted only as `HISTORICAL_RECORD`; it commits directly to `RECORDED`, sets `financiallyExcluded=false` and `historicalFinancialRecord=true`, preserves price/discount/net snapshots, and skips reservations, automatic payment/accounting creation, and notification outbox writes. Its only ordinary transition is reason-required cancellation of an erroneous record.
+- A past appointment is accepted only as `HISTORICAL_RECORD`; it commits directly to `RECORDED`, sets `financiallyExcluded=false` and `historicalFinancialRecord=true`, preserves price/discount/net-service/tip/gross snapshots, and skips reservations, automatic payment/accounting creation, and notification outbox writes. Tip input is rejected for every non-historical booking. Its only ordinary transition is reason-required cancellation of an erroneous record.
 - `PENDING` consumes capacity immediately.
 - There is no automatic expiration or scheduled release.
 - Capacity is released only when the Booking moves to a non-consuming terminal state.

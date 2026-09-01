@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Low-Level Design (LLD) |
-| Version | 1.5 |
+| Version | 1.6 |
 | Status | Implementation baseline |
 | Last updated | 1 September 2026 |
-| Business baseline | [Business Logic v1.8](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.5](./HLD.md) |
-| Technical baseline | [TDD v1.5](./TDD.md) |
+| Business baseline | [Business Logic v1.9](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.6](./HLD.md) |
+| Technical baseline | [TDD v1.6](./TDD.md) |
 
 ## 1. Purpose
 
@@ -1118,7 +1118,7 @@ function createBooking(command, context):
 
 ### 11.1 Admin Staff-assisted and Historical Variants
 
-`POST /api/v1/admin/bookings` accepts `bookingMode=STAFF_ASSISTED|HISTORICAL_RECORD` plus the legacy-compatible `WALK_IN`, branch/date/time, an optional phone, one or two participants, `bookingPrivacyAcknowledged=true`, `consentCaptureMethod=VERBAL|PAPER`, optional `discountAmountSatang` (default `0`), and optional `discountReason`. The authenticated Firebase actor is authoritative; the client cannot supply creator identity, role, or source.
+`POST /api/v1/admin/bookings` accepts `bookingMode=STAFF_ASSISTED|HISTORICAL_RECORD` plus the legacy-compatible `WALK_IN`, branch/date/time, an optional phone, one or two participants, `bookingPrivacyAcknowledged=true`, `consentCaptureMethod=VERBAL|PAPER`, optional `discountAmountSatang` (default `0`), optional `discountReason`, and optional `tipAmountSatang` (default `0`). The authenticated Firebase actor is authoritative; the client cannot supply creator identity, role, or source.
 
 The shared creation transaction applies these differences:
 
@@ -1126,8 +1126,8 @@ The shared creation transaction applies these differences:
 2. Active modes reuse service, operating-hours, closure, duration, duplicate, and capacity validation. Historical mode snapshots the selected service but does not read or write Capacity buckets and does not apply current closure/operating-hours configuration retroactively.
 3. Skip public CAPTCHA, IP/phone abuse counters, active-`PENDING` phone guards, LINE linking, and Guest status-token creation.
 4. When phone is absent, write `contact={"mode":"NONE"}` without `phoneE164`, `phoneMasked`, or a fabricated value.
-5. Active mode commits `status=CONFIRMED`, `confirmedAt`, and `confirmedBy`. Historical mode commits `status=RECORDED`, `recordedAt`, `recordedBy`, `financiallyExcluded=false`, `historicalFinancialRecord=true`, the immutable service subtotal, optional Admin discount, net `estimatedAmountSatang`, `paymentStatus=UNAVAILABLE`, and no capacity reservation. Its only subsequent command is reason-required `CANCEL` for correcting an erroneous record.
-6. Both modes append privacy/health consent receipts with the capture method and staff actor. Active mode emits `BOOKING_CREATED` audit/outbox events; historical mode emits only a safe `BOOKING_HISTORY_RECORDED` audit and no notification outbox event.
+5. Active mode commits `status=CONFIRMED`, `confirmedAt`, and `confirmedBy`. Historical mode commits `status=RECORDED`, `recordedAt`, `recordedBy`, `financiallyExcluded=false`, `historicalFinancialRecord=true`, the immutable service subtotal, optional Admin discount, net-service `estimatedAmountSatang`, separate optional whole-THB `tipAmountSatang`, `grossAmountSatang = estimatedAmountSatang + tipAmountSatang`, `paymentStatus=UNAVAILABLE`, and no capacity reservation. Positive tip input is rejected unless mode is `HISTORICAL_RECORD`. Its only subsequent command is reason-required `CANCEL` for correcting an erroneous record.
+6. Both modes append privacy/health consent receipts with the capture method and staff actor. Active mode emits `BOOKING_CREATED` audit/outbox events; historical mode emits only a safe `BOOKING_HISTORY_RECORDED` audit containing subtotal, discount, net service, tip, and gross snapshots, with no notification outbox event.
 7. Scope idempotency by the authenticated actor and endpoint so another staff member cannot replay the key.
 8. A non-zero discount is accepted for active or historical modes only from authenticated Role `ADMIN`, must be whole THB, must be less than the service subtotal, and requires a trimmed reason. Store `subtotalAmountSatang`, `discountAmountSatang`, `discountType=ADMIN_FIXED`, reason, actor, time, and final `estimatedAmountSatang` atomically; append `BOOKING_DISCOUNT_APPLIED` without changing service line snapshots.
 9. Coupon code validation/redeem remains under `/api/v1/admin/coupons`; a Booking discount reason may reference a Coupon but does not transition Coupon state.
