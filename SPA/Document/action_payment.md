@@ -22,6 +22,7 @@ Recommended implementation:
 8. Support Admin-recorded cash payment, but keep the customer's cash settlement separate from the later movement of branch cash into the merchant bank account.
 9. Add an Admin **นำเงินสดเข้าบัญชี / Deposit cash via QR** workflow: enter or confirm the amount, upload cash-photo evidence to a private GCS bucket, create a Beam PromptPay QR, and wait for server-verified success or failure.
 10. A cash-deposit QR is a treasury/reconciliation operation, not a second customer sale. It must never create another Booking payment, tip, receipt, or FlowAccount sales export.
+11. A `HISTORICAL_RECORD` preserves subtotal, authorized discount, and net financial history but does not infer a payment method or create a paid transaction automatically. Payment/accounting records require separate authoritative payment evidence to avoid duplicate or misclassified revenue.
 
 This design deliberately does not add `PAID` to `BookingStatus`.
 
@@ -107,13 +108,16 @@ This preserves the full approved 15-minute attempt window when a service complet
 At `IN_SERVICE → COMPLETED`, atomically freeze a final payable snapshot:
 
 ```text
-serviceAmountSatang = sum(final booking line-item snapshots)
+subtotalAmountSatang = sum(final booking line-item snapshots)
+discountAmountSatang = immutable approved Booking discount
+serviceAmountSatang = subtotalAmountSatang - discountAmountSatang
 tipAmountSatang     = customer-selected optional amount, initially 0
 totalAmountSatang   = serviceAmountSatang + tipAmountSatang
 currency            = THB
 ```
 
 - Never calculate the provider amount from mutable catalog prices.
+- Preserve original service lines and explicit discount evidence; never rewrite catalogue unit prices to conceal a Booking discount.
 - `PER_BOOKING` items remain charge-once; the Couple Package must not be multiplied by pax.
 - Once an attempt is created, its tip and total are immutable.
 - To change a tip before paying, disable/expire the active attempt and create a new attempt.

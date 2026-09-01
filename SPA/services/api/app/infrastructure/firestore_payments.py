@@ -25,6 +25,7 @@ from app.core.errors import (
 )
 from app.core.settings import Settings
 from app.core.types import (
+    BeamPaymentMethod,
     BookingStatus,
     CashSettlementStatus,
     PaymentAttemptStatus,
@@ -132,6 +133,16 @@ def _payment_from_data(payment_id: str, data: dict[str, Any]) -> Payment:
     if not isinstance(raw_lines, list):
         raise PersistenceUnavailable("Payment service snapshot is invalid")
     try:
+        service_lines = tuple(
+            ServiceLineSnapshot(
+                sku=str(line["sku"]),
+                name=str(line["name"]),
+                quantity=int(line["quantity"]),
+                unit_price_satang=int(line["unitPriceSatang"]),
+            )
+            for line in raw_lines
+        )
+        line_subtotal = sum(line.line_total_satang for line in service_lines)
         source_value = data.get("paymentMethod")
         return Payment(
             payment_id=payment_id,
@@ -144,15 +155,10 @@ def _payment_from_data(payment_id: str, data: dict[str, Any]) -> Payment:
                 int(data["grossAmountSatang"]),
                 str(data.get("currency", "THB")),
             ),
-            service_lines=tuple(
-                ServiceLineSnapshot(
-                    sku=str(line["sku"]),
-                    name=str(line["name"]),
-                    quantity=int(line["quantity"]),
-                    unit_price_satang=int(line["unitPriceSatang"]),
-                )
-                for line in raw_lines
-            ),
+            service_lines=service_lines,
+            subtotal_amount_satang=int(data.get("subtotalAmountSatang", line_subtotal)),
+            discount_amount_satang=int(data.get("discountAmountSatang", 0)),
+            discount_reason=data.get("discountReason"),
             status=PaymentStatus(data["status"]),
             source=PaymentSource(source_value) if source_value else None,
             paid_at=data.get("paidAt"),
@@ -176,6 +182,9 @@ def _payment_data(payment: Payment, now: datetime) -> dict[str, Any]:
         "status": payment.status,
         "currency": payment.amounts.currency,
         "serviceAmountSatang": payment.amounts.service_amount_satang,
+        "subtotalAmountSatang": payment.subtotal_amount_satang,
+        "discountAmountSatang": payment.discount_amount_satang,
+        "discountReason": payment.discount_reason,
         "tipAmountSatang": payment.amounts.tip_amount_satang,
         "grossAmountSatang": payment.amounts.gross_amount_satang,
         "paidAmountSatang": (
@@ -195,7 +204,7 @@ def _payment_data(payment: Payment, now: datetime) -> dict[str, Any]:
             }
             for line in payment.service_lines
         ],
-        "payableSnapshotVersion": 1,
+        "payableSnapshotVersion": 2,
         "version": payment.version,
         "updatedAt": now,
     }
@@ -206,17 +215,36 @@ def _new_payment(
     booking: dict[str, Any],
     lines: tuple[ServiceLineSnapshot, ...],
 ) -> Payment:
-    service_amount = sum(line.line_total_satang for line in lines)
+    line_subtotal = sum(line.line_total_satang for line in lines)
+    subtotal = booking.get("subtotalAmountSatang", line_subtotal)
+    discount = booking.get("discountAmountSatang", 0)
     expected = booking.get("estimatedAmountSatang")
-    if isinstance(expected, bool) or not isinstance(expected, int) or expected != service_amount:
+    if (
+        isinstance(subtotal, bool)
+        or not isinstance(subtotal, int)
+        or subtotal != line_subtotal
+        or isinstance(discount, bool)
+        or not isinstance(discount, int)
+        or discount < 0
+        or discount >= subtotal
+        or isinstance(expected, bool)
+        or not isinstance(expected, int)
+        or expected != subtotal - discount
+    ):
         raise FinancialConflict("Booking payable snapshot does not match line items")
+    discount_reason = booking.get("discountReason")
+    if discount and (not isinstance(discount_reason, str) or not discount_reason.strip()):
+        raise FinancialConflict("Booking discount reason is missing")
     return Payment(
         payment_id=_payment_id(booking_doc_id),
         booking_doc_id=booking_doc_id,
         booking_public_id=str(booking["publicBookingId"]),
         branch_id=str(booking["branchId"]),
-        amounts=MoneyBreakdown(service_amount, 0, service_amount),
+        amounts=MoneyBreakdown(expected, 0, expected),
         service_lines=lines,
+        subtotal_amount_satang=subtotal,
+        discount_amount_satang=discount,
+        discount_reason=discount_reason if discount else None,
     )
 
 
@@ -232,6 +260,9 @@ def _with_tip(payment: Payment, tip_amount_satang: int) -> Payment:
             payment.amounts.service_amount_satang + tip_amount_satang,
         ),
         service_lines=payment.service_lines,
+        subtotal_amount_satang=payment.subtotal_amount_satang,
+        discount_amount_satang=payment.discount_amount_satang,
+        discount_reason=payment.discount_reason,
         status=payment.status,
         source=payment.source,
         paid_at=payment.paid_at,
@@ -270,6 +301,9 @@ def _export_data(export: AccountingExport, now: datetime) -> dict[str, Any]:
         "paymentSource": export.payment_source,
         "paymentStrategy": export.payment_strategy,
         "serviceAmountSatang": export.service_amount_satang,
+        "subtotalAmountSatang": export.subtotal_amount_satang,
+        "discountAmountSatang": export.discount_amount_satang,
+        "discountReason": export.discount_reason,
         "tipAmountSatang": export.tip_amount_satang,
         "grossAmountSatang": export.gross_amount_satang,
         "currency": export.currency,
@@ -432,7 +466,11 @@ class FirestorePaymentRepository:
                 reason=eligibility.reason,
                 tip_presets_satang=customer_tip_presets(self._settings),
                 custom_tip_max_satang=self._settings.tip_custom_max_satang,
-                beam_qr_enabled=not self._settings.beam_readiness_errors(),
+                enabled_methods=(
+                    self._settings.configured_beam_payment_methods
+                    if not self._settings.beam_readiness_errors()
+                    else ()
+                ),
                 version=payment.version,
                 reconciliation=reconciliation,
             )
@@ -532,7 +570,7 @@ class FirestorePaymentRepository:
                 reason=reason,
                 tip_presets_satang=customer_tip_presets(self._settings),
                 custom_tip_max_satang=self._settings.tip_custom_max_satang,
-                beam_qr_enabled=False,
+                enabled_methods=(),
                 version=payment.version,
                 reconciliation=reconciliation,
             )
@@ -548,6 +586,7 @@ class FirestorePaymentRepository:
         booking_public_id: str,
         principal: LinePrincipal,
         tip_amount_satang: int,
+        payment_method: BeamPaymentMethod,
         idempotency_key: str,
         request_digest: str,
         now: datetime,
@@ -680,7 +719,7 @@ class FirestorePaymentRepository:
                     "providerChargeId": None,
                     "providerReferenceId": prepared.provider_reference_id,
                     "providerIdempotencyKey": provider_key,
-                    "paymentMethod": "QR_PROMPT_PAY",
+                    "paymentMethod": payment_method,
                     "actionRequired": None,
                     "status": PaymentAttemptStatus.CREATING,
                     "serviceAmountSatang": payment.amounts.service_amount_satang,

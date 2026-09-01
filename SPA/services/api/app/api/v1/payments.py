@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request, Response, status
@@ -11,7 +11,13 @@ from app.application.payments import PaymentService, PaymentStatusResult
 from app.core.auth import require_admin_user
 from app.core.errors import AuthenticationInvalid, ValidationDomainError
 from app.core.settings import get_settings
-from app.core.types import AppRole, PaymentSource, PaymentStatus
+from app.core.types import (
+    AppRole,
+    BeamDeviceType,
+    BeamPaymentMethod,
+    PaymentSource,
+    PaymentStatus,
+)
 from app.domains.identity.models import AdminPrincipal, LinePrincipal
 from app.infrastructure.firestore_payments import FirestorePaymentRepository
 from app.integrations.beam import verify_beam_webhook_signature
@@ -80,11 +86,12 @@ def _idempotency_key(value: Annotated[str, Header(alias="Idempotency-Key")]) -> 
 
 class LinePaymentRequest(StrictModel):
     line_id_token: SecretStr = Field(min_length=1, max_length=8192)
+    device_type: BeamDeviceType = BeamDeviceType.WEB
 
 
 class CreateAttemptRequest(LinePaymentRequest):
     tip_amount_satang: int = Field(ge=0)
-    payment_method: Literal["QR_PROMPT_PAY"] = "QR_PROMPT_PAY"
+    payment_method: BeamPaymentMethod = BeamPaymentMethod.QR_PROMPT_PAY
 
 
 class PaymentOptionsResponse(StrictModel):
@@ -106,6 +113,7 @@ class PaymentAttemptResponse(StrictModel):
     attempt_id: str
     payment_id: str
     status: str
+    payment_method: BeamPaymentMethod
     action_required: str
     expires_at: datetime | None
     status_token: str
@@ -149,7 +157,7 @@ async def payment_options(
     payments: Annotated[PaymentService, Depends(get_payment_service)],
 ) -> PaymentOptionsResponse:
     principal = _line_principal(request.line_id_token)
-    result = await payments.options(booking_id, principal)
+    result = await payments.options(booking_id, principal, request.device_type)
     response.headers["Cache-Control"] = "no-store, private"
     return PaymentOptionsResponse(
         booking_id=result.booking_id,
@@ -162,7 +170,7 @@ async def payment_options(
         reason=result.reason,
         tip_presets_satang=result.tip_presets_satang,
         custom_tip_max_satang=result.custom_tip_max_satang,
-        methods=("QR_PROMPT_PAY",) if result.beam_qr_enabled else (),
+        methods=tuple(method.value for method in result.enabled_methods),
         version=result.version,
     )
 
@@ -190,7 +198,7 @@ async def admin_payment_options(
         reason=result.reason,
         tip_presets_satang=result.tip_presets_satang,
         custom_tip_max_satang=result.custom_tip_max_satang,
-        methods=(),
+        methods=tuple(method.value for method in result.enabled_methods),
         version=result.version,
     )
 
@@ -212,6 +220,8 @@ async def create_payment_attempt(
         booking_public_id=booking_id,
         principal=principal,
         tip_amount_satang=request.tip_amount_satang,
+        payment_method=request.payment_method,
+        device_type=request.device_type,
         idempotency_key=idempotency_key,
     )
     response.headers["Cache-Control"] = "no-store, private"

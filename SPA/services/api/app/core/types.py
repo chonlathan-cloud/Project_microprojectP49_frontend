@@ -88,6 +88,20 @@ class PaymentPurpose(StrEnum):
     CASH_DEPOSIT = "CASH_DEPOSIT"
 
 
+class BeamPaymentMethod(StrEnum):
+    KPLUS = "KPLUS"
+    SCB_EASY = "SCB_EASY"
+    KRUNGSRI_APP = "KRUNGSRI_APP"
+    BANGKOK_BANK_APP = "BANGKOK_BANK_APP"
+    QR_PROMPT_PAY = "QR_PROMPT_PAY"
+
+
+class BeamDeviceType(StrEnum):
+    IOS = "IOS"
+    ANDROID = "ANDROID"
+    WEB = "WEB"
+
+
 class CashSettlementStatus(StrEnum):
     NOT_APPLICABLE = "NOT_APPLICABLE"
     UNSETTLED = "UNSETTLED"

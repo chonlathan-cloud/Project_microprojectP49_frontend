@@ -17,6 +17,7 @@ from app.core.errors import (
     CapacityUnavailable,
     DuplicateBooking,
     IdempotencyConflict,
+    PermissionDenied,
     ValidationDomainError,
 )
 from app.core.settings import get_settings
@@ -184,6 +185,9 @@ def create_booking(
     admin_booking_mode: str | None = None,
     consent_capture_method: str = "SELF_SERVICE",
     booking_privacy_acknowledged: bool = False,
+    actor_role: str | None = None,
+    discount_amount_satang: int = 0,
+    discount_reason: str | None = None,
 ) -> dict[str, object]:
     settings = get_settings()
     if not idempotency_key or not 8 <= len(idempotency_key) <= 128:
@@ -251,6 +255,28 @@ def create_booking(
         raise ValidationDomainError("A two-person package must be selected for both participants")
 
     max_duration = max(variant.duration_minutes for _, _, variant in selections)
+    subtotal = sum(
+        variant.price_satang
+        for index, (_, _, variant) in enumerate(selections)
+        if variant.pricing_mode == "PER_PARTICIPANT" or index == 0
+    )
+    normalized_discount_reason = (discount_reason or "").strip() or None
+    if isinstance(discount_amount_satang, bool) or not isinstance(discount_amount_satang, int):
+        raise ValidationDomainError("Discount amount must be integer satang")
+    if discount_amount_satang < 0 or discount_amount_satang % 100:
+        raise ValidationDomainError("Discount must be a non-negative whole-baht amount")
+    if discount_amount_satang:
+        if source != "ADMIN_WEB" or actor_role != "ADMIN":
+            raise PermissionDenied("Only ADMIN may apply a booking discount")
+        if not normalized_discount_reason:
+            raise ValidationDomainError("Discount reason is required")
+        if len(normalized_discount_reason) > 200:
+            raise ValidationDomainError("Discount reason must not exceed 200 characters")
+        if discount_amount_satang >= subtotal:
+            raise ValidationDomainError("Discount must be less than the booking subtotal")
+    elif normalized_discount_reason:
+        raise ValidationDomainError("Discount reason requires a discount amount")
+    total = subtotal - discount_amount_satang
 
     request_payload: dict[str, object] = {
         "branchId": branch_id,
@@ -263,6 +289,8 @@ def create_booking(
         "consentCaptureMethod": consent_capture_method,
         "bookingPrivacyAcknowledged": booking_privacy_acknowledged,
         "adminBookingMode": admin_booking_mode,
+        "discountAmountSatang": discount_amount_satang,
+        "discountReason": normalized_discount_reason,
         "lineUserIdHash": (
             hashlib.sha256(str(line_identity["sub"]).encode()).hexdigest()
             if line_identity and line_identity.get("sub")
@@ -287,11 +315,6 @@ def create_booking(
         client.collection("capacity_buckets").document(_bucket_id(branch_id, item))
         for item in bucket_starts
     ]
-    total = 0 if historical_record else sum(
-        variant.price_satang
-        for index, (_, _, variant) in enumerate(selections)
-        if variant.pricing_mode == "PER_PARTICIPANT" or index == 0
-    )
     status_token = token_urlsafe(32) if source != "ADMIN_WEB" else None
     status_token_hash = hashlib.sha256(status_token.encode()).hexdigest() if status_token else None
     transaction = client.transaction()
@@ -306,6 +329,10 @@ def create_booking(
             replay = {
                 "bookingId": existing["publicBookingId"],
                 "status": existing["status"],
+                "subtotalAmountSatang": existing.get(
+                    "subtotalAmountSatang", existing["estimatedAmountSatang"]
+                ),
+                "discountAmountSatang": existing.get("discountAmountSatang", 0),
                 "estimatedAmountSatang": existing["estimatedAmountSatang"],
                 "idempotentReplay": True,
             }
@@ -392,6 +419,8 @@ def create_booking(
         result = {
             "bookingId": public_id,
             "status": initial_status,
+            "subtotalAmountSatang": subtotal,
+            "discountAmountSatang": discount_amount_satang,
             "estimatedAmountSatang": total,
             "version": 1,
             "idempotentReplay": False,
@@ -424,10 +453,13 @@ def create_booking(
             "localStartTime": time,
             "timezone": "Asia/Bangkok",
             "pax": len(selections),
+            "subtotalAmountSatang": subtotal,
+            "discountAmountSatang": discount_amount_satang,
             "estimatedAmountSatang": total,
-            "priceIncludesVat": not historical_record,
+            "priceIncludesVat": True,
             "paymentStatus": "UNAVAILABLE",
-            "financiallyExcluded": historical_record,
+            "financiallyExcluded": False,
+            "historicalFinancialRecord": historical_record,
             "healthAlert": any(bool(p.get("hasHealthInformation")) for p, _, _ in selections),
             "assignmentState": "NOT_REQUIRED" if historical_record else "UNASSIGNED",
             "capacityReleased": historical_record,
@@ -440,6 +472,11 @@ def create_booking(
         if source == "ADMIN_WEB" and not historical_record:
             booking_data["confirmedAt"] = now
             booking_data["confirmedBy"] = actor_id
+        if discount_amount_satang:
+            booking_data["discountType"] = "ADMIN_FIXED"
+            booking_data["discountReason"] = normalized_discount_reason
+            booking_data["discountAppliedBy"] = actor_id
+            booking_data["discountAppliedAt"] = now
         if historical_record:
             booking_data["recordedAt"] = now
             booking_data["recordedBy"] = actor_id
@@ -519,14 +556,12 @@ def create_booking(
                         "unitPriceSatang": variant.price_satang,
                     },
                     "quantity": 1,
-                    "lineTotalSatang": 0
-                    if historical_record
-                    else (
+                    "lineTotalSatang": (
                         variant.price_satang
                         if variant.pricing_mode == "PER_PARTICIPANT" or index == 1
                         else 0
                     ),
-                    "financiallyExcluded": historical_record,
+                    "financiallyExcluded": False,
                     "participantIds": [participant_ref.id],
                     "createdAt": now,
                 },
@@ -598,12 +633,36 @@ def create_booking(
             ),
             "source": source,
             "toStatus": initial_status,
-            "financiallyExcluded": historical_record,
+            "financiallyExcluded": False,
+            "historicalFinancialRecord": historical_record,
+            "subtotalAmountSatang": subtotal,
+            "discountAmountSatang": discount_amount_satang,
+            "estimatedAmountSatang": total,
             "createdAt": now,
         }
         if actor_id:
             audit_data["actorId"] = actor_id
         tx.set(audit_ref, audit_data)
+
+        if discount_amount_satang:
+            discount_audit_ref = client.collection("audit_events").document()
+            tx.set(
+                discount_audit_ref,
+                {
+                    "eventType": "BOOKING_DISCOUNT_APPLIED",
+                    "bookingDocId": booking_ref.id,
+                    "publicBookingId": public_id,
+                    "actorType": "ADMIN_USER",
+                    "actorId": actor_id,
+                    "actorRole": actor_role,
+                    "discountType": "ADMIN_FIXED",
+                    "subtotalAmountSatang": subtotal,
+                    "discountAmountSatang": discount_amount_satang,
+                    "finalAmountSatang": total,
+                    "reason": normalized_discount_reason,
+                    "createdAt": now,
+                },
+            )
 
         if not historical_record:
             event_ref = client.collection("notification_outbox").document()
@@ -640,6 +699,8 @@ def create_booking(
             "requestHash": digest,
             "publicBookingId": public_id,
             "status": initial_status,
+            "subtotalAmountSatang": subtotal,
+            "discountAmountSatang": discount_amount_satang,
             "estimatedAmountSatang": total,
             "bookingDocId": booking_ref.id,
             "expiresAt": now + timedelta(hours=24),

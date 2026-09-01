@@ -67,6 +67,9 @@ class Payment:
     branch_id: str
     amounts: MoneyBreakdown
     service_lines: tuple[ServiceLineSnapshot, ...]
+    subtotal_amount_satang: int | None = None
+    discount_amount_satang: int = 0
+    discount_reason: str | None = None
     status: PaymentStatus = PaymentStatus.DUE
     purpose: PaymentPurpose = PaymentPurpose.CUSTOMER_SALE
     source: PaymentSource | None = None
@@ -79,11 +82,34 @@ class Payment:
     def __post_init__(self) -> None:
         if not self.service_lines:
             raise FinancialInvariantError("At least one immutable service line is required")
-        service_total = sum(line.line_total_satang for line in self.service_lines)
-        if service_total != self.amounts.service_amount_satang:
+        line_subtotal = sum(line.line_total_satang for line in self.service_lines)
+        subtotal = self.subtotal_amount_satang
+        if subtotal is None:
+            object.__setattr__(self, "subtotal_amount_satang", line_subtotal)
+            subtotal = line_subtotal
+        if isinstance(subtotal, bool) or not isinstance(subtotal, int) or subtotal <= 0:
+            raise FinancialInvariantError("Service subtotal must be positive integer satang")
+        if line_subtotal != subtotal:
             raise FinancialInvariantError(
-                "Service line totals must equal the service amount snapshot"
+                "Service line totals must equal the service subtotal snapshot"
             )
+        if (
+            isinstance(self.discount_amount_satang, bool)
+            or not isinstance(self.discount_amount_satang, int)
+            or self.discount_amount_satang < 0
+            or self.discount_amount_satang >= subtotal
+        ):
+            raise FinancialInvariantError("Discount must be between zero and the service subtotal")
+        if self.amounts.service_amount_satang != subtotal - self.discount_amount_satang:
+            raise FinancialInvariantError(
+                "Service amount must equal subtotal minus discount"
+            )
+        if self.discount_reason is not None and not isinstance(self.discount_reason, str):
+            raise FinancialInvariantError("Discount reason must be text")
+        if self.discount_amount_satang > 0 and not (self.discount_reason or "").strip():
+            raise FinancialInvariantError("Discount reason is required")
+        if self.discount_amount_satang == 0 and self.discount_reason is not None:
+            raise FinancialInvariantError("Discount reason requires a discount amount")
 
     def mark_paid(
         self,

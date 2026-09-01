@@ -12,7 +12,12 @@ from google.cloud import firestore
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.auth import require_admin_user
-from app.core.errors import ConflictDomainError, NotFoundDomainError, ValidationDomainError
+from app.core.errors import (
+    ConflictDomainError,
+    NotFoundDomainError,
+    PermissionDenied,
+    ValidationDomainError,
+)
 from app.core.settings import get_settings
 from app.core.types import BookingStatus
 from app.domains.bookings.service import (
@@ -71,6 +76,8 @@ class CreateAdminBookingRequest(ApiModel):
     participants: list[ParticipantInput] = Field(min_length=1, max_length=2)
     booking_privacy_acknowledged: bool
     consent_capture_method: Literal["VERBAL", "PAPER"]
+    discount_amount_satang: int = Field(default=0, ge=0)
+    discount_reason: str | None = Field(default=None, max_length=200)
 
 
 class AdminAvailabilityParticipant(ApiModel):
@@ -426,6 +433,8 @@ async def create_admin_booking(
     if not request.booking_privacy_acknowledged:
         raise ValidationDomainError("Booking privacy acknowledgement is required")
     historical_record = request.booking_mode == "HISTORICAL_RECORD"
+    if request.discount_amount_satang > 0 and actor.get("role") != "ADMIN":
+        raise PermissionDenied("Only ADMIN may apply a booking discount")
     return create_booking(
         client,
         branch_id=request.branch_id,
@@ -440,6 +449,9 @@ async def create_admin_booking(
         admin_booking_mode=request.booking_mode,
         consent_capture_method=request.consent_capture_method,
         booking_privacy_acknowledged=request.booking_privacy_acknowledged,
+        actor_role=str(actor.get("role", "")),
+        discount_amount_satang=request.discount_amount_satang,
+        discount_reason=request.discount_reason,
     )
 
 

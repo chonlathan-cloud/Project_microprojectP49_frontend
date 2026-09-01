@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | High-Level Design (HLD) |
-| Version | 1.2 |
+| Version | 1.4 |
 | Status | Approved architecture baseline |
-| Last updated | 18 August 2026 |
+| Last updated | 1 September 2026 |
 | Initial branch scope | One branch |
 | Timezone / currency | Asia/Bangkok / THB |
-| Business baseline | [Business Logic v1.3](./BusinessLogic.md) |
+| Business baseline | [Business Logic v1.7](./BusinessLogic.md) |
 
 ## 1. Purpose
 
@@ -179,13 +179,16 @@ Responsibilities:
 - Present calendars, lists, schedules, Pending Queue, and Unassigned Queue
 - Support booking confirmation, cancellation, status progression, and capacity-safe edits
 - Create staff-assisted Bookings for today or a future date with optional phone contact, capacity validation, explicit verbal/paper consent evidence, and an audited initial `CONFIRMED` state
-- Record past appointments as terminal non-financial `RECORDED` history without capacity reservation, payment eligibility, or notification delivery
+- Allow only `ADMIN` to apply an optional whole-THB Booking discount with a required reason, while keeping immutable service prices, subtotal, discount, and net total distinct
+- Record past appointments as terminal financial `RECORDED` history with immutable subtotal, Admin discount, and net amount, but without capacity reservation, automatic payment/accounting creation, or notification delivery
 - Manage services, duration variants, prices, resources, blocked periods, therapists, and the Phase 1 branch
 - Display health details only to authorized `ADMIN` or `STAFF` users
 - Restrict user, role, and security configuration screens to `ADMIN`
 - Display notification failures, audit context, and integration health
 
 The Admin Web may hide actions by role for usability, but the SPA API remains the authoritative authorization layer.
+
+An Admin-entered discount is a Booking-level financial adjustment. Coupon search/redeem remains a separate transactional domain; a discount reason may reference a coupon campaign but cannot mutate coupon lifecycle state by itself. Payment and accounting projections consume the immutable net total while preserving the original service-line subtotal and discount evidence.
 
 ### 7.3 SPA API
 
@@ -429,7 +432,7 @@ Concurrent submissions contend on the relevant reservation records. The first tr
 
 - A newly committed Customer Web or LIFF Booking is always `PENDING`.
 - An authenticated Admin Web staff-assisted Booking for today or a future date commits directly as `CONFIRMED` after the creating `ADMIN`/`STAFF` reviews the summary. The transaction records `source=ADMIN_WEB`, creator identity, confirmation time, and audit evidence.
-- A past appointment is accepted only as `HISTORICAL_RECORD`; it commits directly to terminal `RECORDED`, sets `financiallyExcluded=true`, and skips reservations, payment creation, and notification outbox writes.
+- A past appointment is accepted only as `HISTORICAL_RECORD`; it commits directly to terminal `RECORDED`, sets `financiallyExcluded=false` and `historicalFinancialRecord=true`, preserves price/discount/net snapshots, and skips reservations, automatic payment/accounting creation, and notification outbox writes.
 - `PENDING` consumes capacity immediately.
 - There is no automatic expiration or scheduled release.
 - Capacity is released only when the Booking moves to a non-consuming terminal state.

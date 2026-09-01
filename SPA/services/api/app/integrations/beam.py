@@ -10,6 +10,7 @@ import httpx
 
 from app.core.errors import FinancialConflict, FinancialInvariantError
 from app.core.settings import Settings
+from app.core.types import BeamDeviceType, BeamPaymentMethod
 from app.domains.payments.models import Payment
 
 
@@ -36,6 +37,7 @@ class BeamAmbiguousCreateError(BeamError):
 @dataclass(frozen=True, slots=True)
 class BeamAction:
     charge_id: str
+    payment_method: BeamPaymentMethod
     action_required: str
     expires_at: datetime | None
     image_base64: str | None = None
@@ -45,6 +47,7 @@ class BeamAction:
 def normalize_charge_action(
     payload: dict[str, Any],
     *,
+    requested_method: BeamPaymentMethod = BeamPaymentMethod.QR_PROMPT_PAY,
     requested_expires_at: datetime | None = None,
 ) -> BeamAction:
     """Return the small provider action contract that is safe for the browser."""
@@ -54,6 +57,19 @@ def normalize_charge_action(
         raise BeamConfigurationError("Beam charge response is missing chargeId")
     if action_required not in {"NONE", "REDIRECT", "ENCODED_IMAGE"}:
         raise BeamConfigurationError("Beam charge response has an unsupported action")
+    try:
+        response_method = BeamPaymentMethod(str(payload.get("paymentMethodType", "")))
+    except ValueError as error:
+        raise BeamConfigurationError("Beam charge response is missing paymentMethodType") from error
+    if response_method is not requested_method:
+        raise BeamConfigurationError("Beam charge response payment method does not match request")
+    expected_action = (
+        "ENCODED_IMAGE"
+        if requested_method is BeamPaymentMethod.QR_PROMPT_PAY
+        else "REDIRECT"
+    )
+    if action_required != expected_action:
+        raise BeamConfigurationError("Beam charge response action does not match payment method")
 
     expires_at: datetime | None = None
     image_base64: str | None = None
@@ -95,6 +111,7 @@ def normalize_charge_action(
 
     return BeamAction(
         charge_id=charge_id,
+        payment_method=response_method,
         action_required=action_required,
         expires_at=expires_at,
         image_base64=image_base64,
@@ -229,6 +246,49 @@ class BeamClient:
                 "qrPromptPay": {"expiryTime": expires_at.isoformat()},
                 "paymentMethodType": "QR_PROMPT_PAY",
             },
+            "referenceId": reference_id,
+            "returnUrl": self._settings.beam_return_url,
+        }
+        return await self._request(
+            "POST",
+            "/api/v1/charges",
+            json=payload,
+            headers={"x-beam-idempotency-key": idempotency_key},
+            create_request=True,
+        )
+
+    async def create_mobile_banking_charge(
+        self,
+        *,
+        amount_satang: int,
+        reference_id: str,
+        payment_method: BeamPaymentMethod,
+        device_type: BeamDeviceType,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        if amount_satang <= 0:
+            raise FinancialInvariantError("Beam charge amount must be positive")
+        if payment_method is BeamPaymentMethod.QR_PROMPT_PAY:
+            raise FinancialInvariantError("PromptPay must use the QR charge flow")
+        if device_type is BeamDeviceType.WEB:
+            raise FinancialInvariantError("Mobile banking requires an iOS or Android device")
+        method_fields = {
+            BeamPaymentMethod.KPLUS: "kPlus",
+            BeamPaymentMethod.SCB_EASY: "scbEasy",
+            BeamPaymentMethod.KRUNGSRI_APP: "krungsri",
+            BeamPaymentMethod.BANGKOK_BANK_APP: "bbl",
+        }
+        method_field = method_fields.get(payment_method)
+        if method_field is None:
+            raise FinancialInvariantError("Unsupported Beam mobile-banking method")
+        payload = {
+            "amount": amount_satang,
+            "currency": "THB",
+            "paymentMethod": {
+                method_field: {},
+                "paymentMethodType": payment_method.value,
+            },
+            "deviceType": device_type.value,
             "referenceId": reference_id,
             "returnUrl": self._settings.beam_return_url,
         }

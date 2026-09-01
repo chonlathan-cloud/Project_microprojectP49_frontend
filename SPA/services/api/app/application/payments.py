@@ -1,12 +1,18 @@
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Protocol
 
-from app.core.errors import FinancialConflict, PaymentNotEligible, PersistenceUnavailable
+from app.core.errors import (
+    FinancialConflict,
+    PaymentDeviceUnsupported,
+    PaymentMethodUnavailable,
+    PaymentNotEligible,
+    PersistenceUnavailable,
+)
 from app.core.settings import Settings
-from app.core.types import PaymentSource, PaymentStatus
+from app.core.types import BeamDeviceType, BeamPaymentMethod, PaymentSource, PaymentStatus
 from app.domains.identity.models import AdminPrincipal, LinePrincipal
 from app.domains.payments.policy import (
     TIP_PRESETS_SATANG,
@@ -37,7 +43,7 @@ class PaymentOptions:
     reason: str | None
     tip_presets_satang: tuple[int, ...]
     custom_tip_max_satang: int | None
-    beam_qr_enabled: bool
+    enabled_methods: tuple[BeamPaymentMethod, ...]
     version: int
     reconciliation: "PaymentReconciliationTarget | None" = None
 
@@ -67,6 +73,7 @@ class PaymentAttemptResult:
     attempt_id: str
     payment_id: str
     status: str
+    payment_method: BeamPaymentMethod
     action_required: str
     expires_at: datetime | None
     status_token: str
@@ -101,6 +108,7 @@ class PaymentRepository(Protocol):
         booking_public_id: str,
         principal: LinePrincipal,
         tip_amount_satang: int,
+        payment_method: BeamPaymentMethod,
         idempotency_key: str,
         request_digest: str,
         now: datetime,
@@ -224,16 +232,31 @@ class PaymentService:
             await self._repository.settle_beam_charge(event_id, charge, now)
         return await reload_options()
 
-    async def options(self, booking_public_id: str, principal: LinePrincipal) -> PaymentOptions:
+    async def options(
+        self,
+        booking_public_id: str,
+        principal: LinePrincipal,
+        device_type: BeamDeviceType = BeamDeviceType.WEB,
+    ) -> PaymentOptions:
         options = await self._repository.get_options(
             booking_public_id, principal, datetime.now(UTC)
         )
-        return await self._reconcile_options(
+        options = await self._reconcile_options(
             options,
             reload_options=lambda: self._repository.get_options(
                 booking_public_id, principal, datetime.now(UTC)
             ),
         )
+        methods = options.enabled_methods
+        if device_type is BeamDeviceType.WEB:
+            methods = tuple(
+                method
+                for method in methods
+                if method is BeamPaymentMethod.QR_PROMPT_PAY
+            )
+        if methods == options.enabled_methods:
+            return options
+        return replace(options, enabled_methods=methods)
 
     async def admin_options(
         self, booking_public_id: str, principal: AdminPrincipal
@@ -258,6 +281,8 @@ class PaymentService:
         booking_public_id: str,
         principal: LinePrincipal,
         tip_amount_satang: int,
+        payment_method: BeamPaymentMethod,
+        device_type: BeamDeviceType,
         idempotency_key: str,
     ) -> PaymentAttemptResult:
         validate_tip_amount(
@@ -266,31 +291,51 @@ class PaymentService:
         )
         if self._settings.beam_readiness_errors():
             raise PersistenceUnavailable("Beam payment is unavailable")
-        options = await self.options(booking_public_id, principal)
+        options = await self.options(booking_public_id, principal, device_type)
         if not options.eligible:
             raise PaymentNotEligible(options.reason or "Payment is unavailable")
+        if payment_method not in options.enabled_methods:
+            raise PaymentMethodUnavailable("Selected Beam payment method is not enabled")
+        if (
+            payment_method is not BeamPaymentMethod.QR_PROMPT_PAY
+            and device_type is BeamDeviceType.WEB
+        ):
+            raise PaymentDeviceUnsupported(
+                "Mobile banking requires an iOS or Android device"
+            )
         request_digest = sha256(
             f"{booking_public_id}:{principal.channel_id}:{principal.user_id}:"
-            f"{tip_amount_satang}:QR_PROMPT_PAY".encode()
+            f"{tip_amount_satang}:{payment_method.value}:{device_type.value}".encode()
         ).hexdigest()
         prepared = await self._repository.begin_attempt(
             booking_public_id=booking_public_id,
             principal=principal,
             tip_amount_satang=tip_amount_satang,
+            payment_method=payment_method,
             idempotency_key=idempotency_key,
             request_digest=request_digest,
             now=datetime.now(UTC),
         )
         try:
             async with BeamClient(self._settings) as client:
-                raw = await client.create_qr_promptpay_charge(
-                    amount_satang=prepared.total_amount_satang,
-                    reference_id=prepared.provider_reference_id,
-                    expires_at=prepared.requested_expires_at,
-                    idempotency_key=prepared.provider_idempotency_key,
-                )
+                if payment_method is BeamPaymentMethod.QR_PROMPT_PAY:
+                    raw = await client.create_qr_promptpay_charge(
+                        amount_satang=prepared.total_amount_satang,
+                        reference_id=prepared.provider_reference_id,
+                        expires_at=prepared.requested_expires_at,
+                        idempotency_key=prepared.provider_idempotency_key,
+                    )
+                else:
+                    raw = await client.create_mobile_banking_charge(
+                        amount_satang=prepared.total_amount_satang,
+                        reference_id=prepared.provider_reference_id,
+                        payment_method=payment_method,
+                        device_type=device_type,
+                        idempotency_key=prepared.provider_idempotency_key,
+                    )
             action = normalize_charge_action(
                 raw,
+                requested_method=payment_method,
                 requested_expires_at=prepared.requested_expires_at,
             )
         except BeamRejectedError:
@@ -307,19 +352,21 @@ class PaymentService:
             await self._repository.mark_create_unknown(prepared.attempt_id, datetime.now(UTC))
             raise PersistenceUnavailable("Beam payment response is invalid") from None
 
+        effective_expires_at = action.expires_at or prepared.requested_expires_at
         await self._repository.activate_attempt(
             prepared,
             provider_charge_id=action.charge_id,
             action_required=action.action_required,
-            provider_expires_at=action.expires_at,
+            provider_expires_at=effective_expires_at,
             now=datetime.now(UTC),
         )
         return PaymentAttemptResult(
             attempt_id=prepared.attempt_id,
             payment_id=prepared.payment_id,
             status="ACTIVE",
+            payment_method=payment_method,
             action_required=action.action_required,
-            expires_at=action.expires_at,
+            expires_at=effective_expires_at,
             status_token=prepared.status_token,
             image_base64=action.image_base64,
             redirect_url=action.redirect_url,

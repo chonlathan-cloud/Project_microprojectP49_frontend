@@ -28,6 +28,9 @@ class AccountingExport:
     gross_amount_satang: int
     currency: str
     service_lines: tuple[ServiceLineSnapshot, ...]
+    subtotal_amount_satang: int
+    discount_amount_satang: int
+    discount_reason: str | None
     external_reference: str
     external_document_id: str
     status: AccountingExportStatus = AccountingExportStatus.READY

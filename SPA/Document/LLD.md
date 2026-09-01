@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Low-Level Design (LLD) |
-| Version | 1.2 |
+| Version | 1.4 |
 | Status | Implementation baseline |
-| Last updated | 18 August 2026 |
-| Business baseline | [Business Logic v1.3](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.2](./HLD.md) |
-| Technical baseline | [TDD v1.2](./TDD.md) |
+| Last updated | 1 September 2026 |
+| Business baseline | [Business Logic v1.7](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.4](./HLD.md) |
+| Technical baseline | [TDD v1.4](./TDD.md) |
 
 ## 1. Purpose
 
@@ -569,7 +569,13 @@ The capacity limit is read from the latest resource document. `usedUnits` must n
   "localStartTime": "14:00",
   "timezone": "Asia/Bangkok",
   "pax": 1,
-  "estimatedAmountSatang": 60000,
+  "subtotalAmountSatang": 60000,
+  "discountAmountSatang": 5000,
+  "discountType": "ADMIN_FIXED",
+  "discountReason": "คูปองสมัครครั้งแรก",
+  "discountAppliedBy": "firebase-uid",
+  "discountAppliedAt": "timestamp",
+  "estimatedAmountSatang": 55000,
   "healthAlert": true,
   "lineLinked": false,
   "assignmentState": "UNASSIGNED",
@@ -610,7 +616,7 @@ Cancellation reason fields are added only on cancellation and have separate inte
 }
 ```
 
-For `PER_BOOKING`, `quantity` is always `1`; `participantIds` contains exactly `requiredPax` IDs. The Couple Package therefore has two participant IDs and one `lineTotalSatang=119000`. Booking totals are the sum of `lineTotalSatang`, never participant count multiplied by a `PER_BOOKING` price.
+For `PER_BOOKING`, `quantity` is always `1`; `participantIds` contains exactly `requiredPax` IDs. The Couple Package therefore has two participant IDs and one `lineTotalSatang=119000`. `subtotalAmountSatang` is the sum of `lineTotalSatang`, never participant count multiplied by a `PER_BOOKING` price. `estimatedAmountSatang` is the immutable net amount after the separate Booking discount; line-item catalogue prices are never rewritten to hide a discount.
 
 ### 6.9 `booking_participants/{participantId}`
 
@@ -1112,7 +1118,7 @@ function createBooking(command, context):
 
 ### 11.1 Admin Staff-assisted and Historical Variants
 
-`POST /api/v1/admin/bookings` accepts `bookingMode=STAFF_ASSISTED|HISTORICAL_RECORD` plus the legacy-compatible `WALK_IN`, branch/date/time, an optional phone, one or two participants, `bookingPrivacyAcknowledged=true`, and `consentCaptureMethod=VERBAL|PAPER`. The authenticated Firebase actor is authoritative; the client cannot supply creator identity or source.
+`POST /api/v1/admin/bookings` accepts `bookingMode=STAFF_ASSISTED|HISTORICAL_RECORD` plus the legacy-compatible `WALK_IN`, branch/date/time, an optional phone, one or two participants, `bookingPrivacyAcknowledged=true`, `consentCaptureMethod=VERBAL|PAPER`, optional `discountAmountSatang` (default `0`), and optional `discountReason`. The authenticated Firebase actor is authoritative; the client cannot supply creator identity, role, or source.
 
 The shared creation transaction applies these differences:
 
@@ -1120,9 +1126,11 @@ The shared creation transaction applies these differences:
 2. Active modes reuse service, operating-hours, closure, duration, duplicate, and capacity validation. Historical mode snapshots the selected service but does not read or write Capacity buckets and does not apply current closure/operating-hours configuration retroactively.
 3. Skip public CAPTCHA, IP/phone abuse counters, active-`PENDING` phone guards, LINE linking, and Guest status-token creation.
 4. When phone is absent, write `contact={"mode":"NONE"}` without `phoneE164`, `phoneMasked`, or a fabricated value.
-5. Active mode commits `status=CONFIRMED`, `confirmedAt`, and `confirmedBy`. Historical mode commits terminal `status=RECORDED`, `recordedAt`, `recordedBy`, `financiallyExcluded=true`, `estimatedAmountSatang=0`, `paymentStatus=UNAVAILABLE`, and no capacity reservation.
+5. Active mode commits `status=CONFIRMED`, `confirmedAt`, and `confirmedBy`. Historical mode commits terminal `status=RECORDED`, `recordedAt`, `recordedBy`, `financiallyExcluded=false`, `historicalFinancialRecord=true`, the immutable service subtotal, optional Admin discount, net `estimatedAmountSatang`, `paymentStatus=UNAVAILABLE`, and no capacity reservation.
 6. Both modes append privacy/health consent receipts with the capture method and staff actor. Active mode emits `BOOKING_CREATED` audit/outbox events; historical mode emits only a safe `BOOKING_HISTORY_RECORDED` audit and no notification outbox event.
 7. Scope idempotency by the authenticated actor and endpoint so another staff member cannot replay the key.
+8. A non-zero discount is accepted for active or historical modes only from authenticated Role `ADMIN`, must be whole THB, must be less than the service subtotal, and requires a trimmed reason. Store `subtotalAmountSatang`, `discountAmountSatang`, `discountType=ADMIN_FIXED`, reason, actor, time, and final `estimatedAmountSatang` atomically; append `BOOKING_DISCOUNT_APPLIED` without changing service line snapshots.
+9. Coupon code validation/redeem remains under `/api/v1/admin/coupons`; a Booking discount reason may reference a Coupon but does not transition Coupon state.
 
 `POST /api/v1/admin/availability/search` is authenticated and returns capacity-safe slots for one Admin-selected date. It bypasses the public Min/Max Advance Booking window, removes only buckets earlier than the current branch-local bucket, and remains advisory until the create transaction commits.
 

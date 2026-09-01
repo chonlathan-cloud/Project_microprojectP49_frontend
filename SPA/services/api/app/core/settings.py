@@ -3,6 +3,8 @@ from functools import lru_cache
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.types import BeamPaymentMethod
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -35,6 +37,7 @@ class Settings(BaseSettings):
     beam_webhook_hmac_key: SecretStr | None = None
     beam_return_url: str | None = None
     beam_request_timeout_seconds: float = 15.0
+    beam_payment_methods: str = "QR_PROMPT_PAY"
     tip_custom_max_satang: int | None = None
 
     @property
@@ -55,6 +58,21 @@ class Settings(BaseSettings):
     def resolved_firestore_database(self) -> str:
         return self.firestore_database
 
+    @property
+    def configured_beam_payment_methods(self) -> tuple[BeamPaymentMethod, ...]:
+        methods: list[BeamPaymentMethod] = []
+        for value in self.beam_payment_methods.split(","):
+            normalized = value.strip().upper()
+            if not normalized:
+                continue
+            try:
+                method = BeamPaymentMethod(normalized)
+            except ValueError:
+                continue
+            if method not in methods:
+                methods.append(method)
+        return tuple(methods)
+
     def beam_readiness_errors(self) -> tuple[str, ...]:
         if not self.beam_enabled:
             return ("BEAM_DISABLED",)
@@ -74,6 +92,16 @@ class Settings(BaseSettings):
         )
         if self.beam_api_base_url.rstrip("/") != expected_url:
             missing.append("BEAM_BASE_URL_ENVIRONMENT_MISMATCH")
+        raw_methods = {
+            value.strip().upper()
+            for value in self.beam_payment_methods.split(",")
+            if value.strip()
+        }
+        supported_methods = {method.value for method in BeamPaymentMethod}
+        if raw_methods - supported_methods:
+            missing.append("BEAM_PAYMENT_METHODS_INVALID")
+        if not self.configured_beam_payment_methods:
+            missing.append("BEAM_PAYMENT_METHODS_EMPTY")
         return tuple(missing)
 
 

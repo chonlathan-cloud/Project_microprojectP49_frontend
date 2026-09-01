@@ -4,7 +4,7 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Business Logic |
-| Version | 1.5 |
+| Version | 1.7 |
 | Status | Approved business baseline |
 | Last updated | 1 กันยายน 2026 |
 | Initial branch scope | 1 สาขา |
@@ -93,10 +93,11 @@ Google Stitch ที่อนุญาตให้ใช้อ้างอิง
 
 - สร้าง Booking แบบ Staff-assisted จาก Admin Web สำหรับลูกค้า Walk-in วันนี้ ลูกค้าที่ติดต่อผ่าน LINE เพื่อจองล่วงหน้า และการบันทึกประวัติย้อนหลังที่พนักงานลืมลงระบบ
 - Booking วันนี้หรืออนาคตต้องตรวจ Operating Hours, Slot Block และ Capacity แบบ Transaction และเริ่มต้นเป็น `CONFIRMED`
-- วันที่/เวลาที่ผ่านไปแล้วสร้างได้เฉพาะโหมด `HISTORICAL_RECORD` เป็นสถานะปลายทาง `RECORDED`; ใช้เพื่อเก็บประวัติเท่านั้น ไม่กัน Capacity, ไม่สร้างยอดที่ต้องชำระ, ไม่เข้าสู่ Accounting และไม่ส่ง Booking notification
+- วันที่/เวลาที่ผ่านไปแล้วสร้างได้เฉพาะโหมด `HISTORICAL_RECORD` เป็นสถานะปลายทาง `RECORDED`; ต้องเก็บ Price Snapshot, ราคาปกติ, ส่วนลด และยอดสุทธิเป็นข้อมูลทางการเงินย้อนหลัง แต่ไม่กัน Capacity, ไม่สร้างธุรกรรมรับชำระหรือ Accounting Export อัตโนมัติ และไม่ส่ง Booking notification
 - Staff-assisted Booking ใช้ชื่อเล่นเป็นข้อมูลขั้นต่ำ เบอร์โทรศัพท์เป็นข้อมูลทางเลือก และห้ามใช้เบอร์ร้านหรือเบอร์ปลอมแทนลูกค้าที่ไม่มีช่องทางติดต่อ
 - เมื่อไม่มีเบอร์โทร ระบบไม่สร้าง Phone Guard, Phone Duplicate Key, Customer LINE Link หรือ Secure Status Link และต้องแสดงว่า `ไม่มีเบอร์ติดต่อ` ใน Admin Web
 - Booking วันนี้หรืออนาคตที่สร้างโดย `ADMIN`/`STAFF` เริ่มต้นเป็น `CONFIRMED` ได้ เพราะผู้สร้างเป็นผู้ตรวจสอบและยืนยันรายการใน interaction เดียวกัน โดยต้องบันทึก Actor และ Audit Trail
+- เฉพาะ Role `ADMIN` สามารถระบุส่วนลดจำนวนเงินบาทแบบไม่บังคับขณะสร้าง Booking วันนี้ อนาคต หรือย้อนหลังได้ ต้องระบุเหตุผลหรือชื่อคูปองเมื่อส่วนลดมากกว่า 0 และระบบต้องแสดงราคาปกติ ส่วนลด และยอดสุทธิก่อนยืนยัน
 - พนักงานต้องอ่าน Privacy Notice/Booking Terms และข้อความขอความยินยอมด้านข้อมูลสุขภาพให้ลูกค้ารับทราบ แล้วบันทึกวิธีรับหลักฐานเป็น `VERBAL` หรือ `PAPER`; ห้ามพนักงานให้ความยินยอมแทนลูกค้า
 - ดู Booking แบบปฏิทิน รายการ และตารางเวลา
 - ค้นหาด้วย Booking ID, ชื่อลูกค้า หรือเบอร์โทรศัพท์
@@ -118,6 +119,7 @@ Google Stitch ที่อนุญาตให้ใช้อ้างอิง
 - `ADMIN` ทำงาน Operational ทั้งหมดได้ และมีสิทธิ์เพิ่ม/ปิดผู้ใช้ กำหนด Role จัดการ Security Configuration และ System Configuration
 - `STAFF` จัดการ Booking, Customer Detail, Capacity, Service, Therapist, Branch, Assignment และงานปฏิบัติการประจำวันได้
 - `STAFF` ไม่มีสิทธิ์เพิ่ม/ปิดผู้ใช้ เปลี่ยน Role หรือแก้ Security Configuration
+- `STAFF` ไม่มีสิทธิ์สร้างหรือแก้ส่วนลดของ Booking; การซ่อนช่องส่วนลดใน UI ไม่ทดแทนการตรวจสิทธิ์ที่ API
 - ทั้ง `ADMIN` และ `STAFF` ที่เข้าสู่ระบบ Admin Web สามารถ Confirm หรือ Cancel Booking ตามกฎสถานะได้
 - ทุกการเปลี่ยนแปลงสิทธิ์และทุกการดำเนินการสำคัญต้องมี Audit Trail
 
@@ -285,7 +287,7 @@ PENDING ───────→ CONFIRMED ───────→ IN_SERVICE �
 | `CONFIRMED` | ร้านรับรองวัน เวลา Service และ Capacity แล้ว | ใช้ | LINE Group Approver, `ADMIN` หรือ `STAFF` |
 | `IN_SERVICE` | ลูกค้าเริ่มรับบริการ | ใช้ | `ADMIN`/`STAFF` |
 | `COMPLETED` | ให้บริการเสร็จแล้ว | ไม่ใช้ | `ADMIN`/`STAFF` |
-| `RECORDED` | ประวัติย้อนหลังแบบไม่มีผลทางการเงิน | ไม่ใช้ | `ADMIN`/`STAFF` ขณะสร้าง record |
+| `RECORDED` | ประวัติบริการย้อนหลังพร้อมยอดทางการเงิน | ไม่ใช้ | `ADMIN`/`STAFF` ขณะสร้าง record |
 | `CANCELLED` | ร้านหรือลูกค้าติดต่อให้ยกเลิก โดยผู้ใช้ Admin Web บันทึกเหตุผล | ไม่ใช้ | `ADMIN`/`STAFF` |
 | `NO_SHOW` | Booking ที่ Confirm แล้วแต่ลูกค้าไม่มาตามนัด | ไม่ใช้ | `ADMIN`/`STAFF` |
 
@@ -293,7 +295,7 @@ PENDING ───────→ CONFIRMED ───────→ IN_SERVICE �
 
 - Booking ใหม่จาก Customer Web หรือ LIFF เริ่มต้นเป็น `PENDING` เสมอ
 - Staff-assisted Booking วันนี้หรืออนาคตที่สร้างโดย `ADMIN`/`STAFF` ผ่าน Admin Web เริ่มต้นเป็น `CONFIRMED` และ Audit ต้องระบุ `source=ADMIN_WEB`, ผู้สร้าง และการยืนยันใน interaction เดียวกัน
-- Historical record เริ่มต้นและจบที่ `RECORDED`; ต้องระบุ `financiallyExcluded=true`, ผู้บันทึก และเวลาที่บันทึกใน Audit
+- Historical record เริ่มต้นและจบที่ `RECORDED`; ต้องระบุ `financiallyExcluded=false`, `historicalFinancialRecord=true`, ผู้บันทึก ราคาปกติ ส่วนลด ยอดสุทธิ และเวลาที่บันทึกใน Audit
 - `PENDING → CONFIRMED` ทำได้ครั้งเดียว
 - `PENDING → CANCELLED` ทำได้โดย `ADMIN`/`STAFF` พร้อมเหตุผล
 - `CONFIRMED → IN_SERVICE` ต้องมีหมอนวดถูกมอบหมายแล้ว
@@ -471,7 +473,11 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 - สกุลเงิน Phase 1 คือ THB
 - Admin เป็นผู้กำหนดราคา Service และ Duration Variant
 - ระบบเก็บ Price Snapshot ตอนสร้าง Booking เพื่อไม่ให้การเปลี่ยนราคาในอนาคตแก้ยอดย้อนหลัง
-- ราคาประเมินรวมเท่ากับผลรวม Line Item ที่คิดแบบ `PER_PARTICIPANT` และ Package `PER_BOOKING` อย่างละหนึ่งครั้ง ห้ามคิด Couple Package ซ้ำตามจำนวนผู้รับบริการ
+- ราคาปกติรวมเท่ากับผลรวม Line Item ที่คิดแบบ `PER_PARTICIPANT` และ Package `PER_BOOKING` อย่างละหนึ่งครั้ง ห้ามคิด Couple Package ซ้ำตามจำนวนผู้รับบริการ
+- ส่วนลด Booking เป็นจำนวนเงินบาทเต็มเท่านั้น มีค่าเริ่มต้น 0 ต้องน้อยกว่าราคาปกติรวม และใช้ได้กับ Booking ที่มีผลทางการเงินรวมถึง `HISTORICAL_RECORD`
+- ยอดสุทธิของ Booking เท่ากับ `subtotalAmountSatang - discountAmountSatang`; ระบบต้องเก็บ Price Snapshot เดิมไว้ ไม่แก้ราคาต้นฉบับของ Service line
+- Admin สามารถบันทึกผลของ Coupon เป็นส่วนลด Booking พร้อมเหตุผล เช่น `คูปองสมัครครั้งแรก`; การค้นหาและ Redeem coupon code จริงยังเป็น transaction แยก และข้อความเหตุผลเพียงอย่างเดียวต้องไม่เปลี่ยนสถานะ Coupon
+- การให้ส่วนลดต้องเก็บผู้ดำเนินการ เวลา เหตุผล ราคาปกติ ส่วนลด และยอดสุทธิใน Audit Trail
 - ไม่มี Online Payment และไม่มีสถานะ `PAID` ใน Phase 1
 - ลูกค้าชำระที่ร้าน
 - วิธีชำระจริงและการออกใบเสร็จอยู่นอก Scope ของ Phase 1 Booking

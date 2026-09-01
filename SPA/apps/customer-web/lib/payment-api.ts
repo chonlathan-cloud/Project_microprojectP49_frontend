@@ -8,6 +8,15 @@ export type PaymentStatus =
   | "PARTIALLY_REFUNDED"
   | "REFUNDED";
 
+export type BeamPaymentMethod =
+  | "KPLUS"
+  | "SCB_EASY"
+  | "KRUNGSRI_APP"
+  | "BANGKOK_BANK_APP"
+  | "QR_PROMPT_PAY";
+
+export type BeamDeviceType = "IOS" | "ANDROID" | "WEB";
+
 export type PaymentOptions = {
   bookingId: string;
   paymentId: string;
@@ -19,7 +28,7 @@ export type PaymentOptions = {
   reason: string | null;
   tipPresetsSatang: number[];
   customTipMaxSatang: number | null;
-  methods: string[];
+  methods: BeamPaymentMethod[];
   version: number;
 };
 
@@ -27,6 +36,7 @@ export type PaymentAttempt = {
   attemptId: string;
   paymentId: string;
   status: string;
+  paymentMethod: BeamPaymentMethod;
   actionRequired: "NONE" | "REDIRECT" | "ENCODED_IMAGE";
   expiresAt: string | null;
   statusToken: string;
@@ -78,11 +88,12 @@ async function post<T>(
 export function getPaymentOptions(
   bookingId: string,
   lineIdToken: string,
+  deviceType: BeamDeviceType,
   signal?: AbortSignal,
 ) {
   return post<PaymentOptions>(
     `/api/v1/public/bookings/${encodeURIComponent(bookingId)}/payment-options`,
-    { lineIdToken },
+    { lineIdToken, deviceType },
     { signal },
   );
 }
@@ -91,13 +102,23 @@ export function createPaymentAttempt(
   bookingId: string,
   lineIdToken: string,
   tipAmountSatang: number,
+  paymentMethod: BeamPaymentMethod,
+  deviceType: BeamDeviceType,
   idempotencyKey: string,
 ) {
   return post<PaymentAttempt>(
     `/api/v1/public/bookings/${encodeURIComponent(bookingId)}/payment-attempts`,
-    { lineIdToken, tipAmountSatang, paymentMethod: "QR_PROMPT_PAY" },
+    { lineIdToken, tipAmountSatang, paymentMethod, deviceType },
     { idempotencyKey },
   );
+}
+
+export function detectBeamDeviceType(): BeamDeviceType {
+  const userAgent = navigator.userAgent;
+  const isIPadOS = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  if (/iPhone|iPad|iPod/i.test(userAgent) || isIPadOS) return "IOS";
+  if (/Android/i.test(userAgent)) return "ANDROID";
+  return "WEB";
 }
 
 export function resolvePaymentStatus(statusToken: string, signal?: AbortSignal) {

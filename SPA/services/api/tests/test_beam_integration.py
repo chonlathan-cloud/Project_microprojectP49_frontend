@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from app.core.errors import FinancialConflict
 from app.core.settings import Settings
+from app.core.types import BeamDeviceType, BeamPaymentMethod
 from app.domains.payments.models import MoneyBreakdown, Payment, ServiceLineSnapshot
 from app.integrations.beam import (
     BeamCharge,
@@ -37,6 +38,22 @@ def settings() -> Settings:
         beam_webhook_hmac_key=SecretStr("a2V5"),
         beam_return_url="https://customer.invalid/payment/return",
     )
+
+
+def test_beam_payment_method_allowlist_is_ordered_deduplicated_and_fail_closed() -> None:
+    configured = settings().model_copy(
+        update={"beam_payment_methods": "KPLUS,SCB_EASY,KPLUS,QR_PROMPT_PAY"}
+    )
+    assert configured.configured_beam_payment_methods == (
+        BeamPaymentMethod.KPLUS,
+        BeamPaymentMethod.SCB_EASY,
+        BeamPaymentMethod.QR_PROMPT_PAY,
+    )
+
+    invalid = settings().model_copy(
+        update={"beam_payment_methods": "KPLUS,UNSUPPORTED_BANK"}
+    )
+    assert "BEAM_PAYMENT_METHODS_INVALID" in invalid.beam_readiness_errors()
 
 
 def test_webhook_signature_uses_raw_body_and_decoded_hmac_key() -> None:
@@ -105,6 +122,7 @@ def test_qr_action_is_reduced_to_browser_safe_fields() -> None:
         {
             "chargeId": "ch_001",
             "actionRequired": "ENCODED_IMAGE",
+            "paymentMethodType": "QR_PROMPT_PAY",
             "encodedImage": {
                 "expiry": "2026-08-31T15:15:00+07:00",
                 "imageBase64Encoded": "iVBORw0KGgo=",
@@ -124,6 +142,7 @@ def test_qr_action_uses_requested_expiry_when_playground_returns_null() -> None:
         {
             "chargeId": "ch_001",
             "actionRequired": "ENCODED_IMAGE",
+            "paymentMethodType": "QR_PROMPT_PAY",
             "encodedImage": {
                 "expiry": None,
                 "imageBase64Encoded": "iVBORw0KGgo=",
@@ -140,6 +159,7 @@ def test_qr_action_requires_provider_or_requested_expiry() -> None:
             {
                 "chargeId": "ch_001",
                 "actionRequired": "ENCODED_IMAGE",
+                "paymentMethodType": "QR_PROMPT_PAY",
                 "encodedImage": {
                     "expiry": None,
                     "imageBase64Encoded": "iVBORw0KGgo=",
@@ -170,6 +190,82 @@ async def test_qr_charge_uses_satang_and_idempotency_header() -> None:
     assert captured.headers["x-beam-idempotency-key"] == "attempt_001"
     assert b'"amount":40000' in captured.content
     assert b'"paymentMethodType":"QR_PROMPT_PAY"' in captured.content
+
+
+@pytest.mark.parametrize(
+    ("method", "provider_field"),
+    [
+        (BeamPaymentMethod.KPLUS, b'"kPlus":{}'),
+        (BeamPaymentMethod.SCB_EASY, b'"scbEasy":{}'),
+        (BeamPaymentMethod.KRUNGSRI_APP, b'"krungsri":{}'),
+        (BeamPaymentMethod.BANGKOK_BANK_APP, b'"bbl":{}'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mobile_banking_charge_uses_method_device_and_idempotency(
+    method: BeamPaymentMethod,
+    provider_field: bytes,
+) -> None:
+    captured: httpx.Request | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured
+        captured = request
+        return httpx.Response(
+            201,
+            json={
+                "chargeId": "ch_mobile_001",
+                "paymentMethodType": method.value,
+                "actionRequired": "REDIRECT",
+                "redirect": {"redirectUrl": "https://checkout.beamcheckout.com/test"},
+            },
+        )
+
+    async with BeamClient(settings(), httpx.MockTransport(handler)) as client:
+        result = await client.create_mobile_banking_charge(
+            amount_satang=40_000,
+            reference_id="SPA-PAY-pay_001",
+            payment_method=method,
+            device_type=BeamDeviceType.IOS,
+            idempotency_key="attempt_mobile_001",
+        )
+
+    assert result["chargeId"] == "ch_mobile_001"
+    assert captured is not None
+    assert captured.headers["x-beam-idempotency-key"] == "attempt_mobile_001"
+    assert b'"deviceType":"IOS"' in captured.content
+    assert f'"paymentMethodType":"{method.value}"'.encode() in captured.content
+    assert provider_field in captured.content
+
+
+def test_mobile_banking_redirect_is_reduced_to_allowlisted_browser_fields() -> None:
+    action = normalize_charge_action(
+        {
+            "chargeId": "ch_mobile_001",
+            "paymentMethodType": "KPLUS",
+            "actionRequired": "REDIRECT",
+            "redirect": {"redirectUrl": "https://checkout.beamcheckout.com/test"},
+            "providerInternal": {"secret": True},
+        },
+        requested_method=BeamPaymentMethod.KPLUS,
+    )
+
+    assert action.payment_method is BeamPaymentMethod.KPLUS
+    assert action.redirect_url == "https://checkout.beamcheckout.com/test"
+    assert action.image_base64 is None
+
+
+def test_mobile_banking_redirect_rejects_non_beam_host() -> None:
+    with pytest.raises(BeamConfigurationError, match="allowlisted"):
+        normalize_charge_action(
+            {
+                "chargeId": "ch_mobile_001",
+                "paymentMethodType": "SCB_EASY",
+                "actionRequired": "REDIRECT",
+                "redirect": {"redirectUrl": "https://attacker.invalid/collect"},
+            },
+            requested_method=BeamPaymentMethod.SCB_EASY,
+        )
 
 
 @pytest.mark.asyncio

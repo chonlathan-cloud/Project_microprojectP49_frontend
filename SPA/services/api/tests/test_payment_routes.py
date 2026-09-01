@@ -5,12 +5,12 @@ from fastapi.testclient import TestClient
 from app.api.v1 import payments as payment_routes
 from app.application.payments import PaymentAttemptResult, PaymentOptions, PaymentStatusResult
 from app.core.auth import require_admin_user
-from app.core.types import PaymentSource, PaymentStatus
+from app.core.types import BeamPaymentMethod, PaymentSource, PaymentStatus
 from app.main import app
 
 
 class Payments:
-    async def options(self, booking_id, principal):
+    async def options(self, booking_id, principal, device_type=None):
         assert booking_id == "BK-001"
         assert principal.user_id == "U-trusted"
         return PaymentOptions(
@@ -24,7 +24,13 @@ class Payments:
             reason=None,
             tip_presets_satang=(0, 2_000, 5_000, 10_000),
             custom_tip_max_satang=50_000,
-            beam_qr_enabled=True,
+            enabled_methods=(
+                BeamPaymentMethod.KPLUS,
+                BeamPaymentMethod.SCB_EASY,
+                BeamPaymentMethod.KRUNGSRI_APP,
+                BeamPaymentMethod.BANGKOK_BANK_APP,
+                BeamPaymentMethod.QR_PROMPT_PAY,
+            ),
             version=1,
         )
 
@@ -38,10 +44,11 @@ class Payments:
             attempt_id="pat_001",
             payment_id="pay_001",
             status="ACTIVE",
-            action_required="ENCODED_IMAGE",
+            payment_method=BeamPaymentMethod.KPLUS,
+            action_required="REDIRECT",
             expires_at=datetime(2026, 8, 31, 8, 0, tzinfo=UTC),
             status_token="opaque-status-token",
-            image_base64="iVBORw0KGgo=",
+            redirect_url="https://checkout.beamcheckout.com/test",
         )
 
     async def resolve_status(self, token):
@@ -83,19 +90,32 @@ def test_customer_payment_routes_use_line_identity_and_no_store(monkeypatch) -> 
     try:
         options = client.post(
             "/api/v1/public/bookings/BK-001/payment-options",
-            json={"lineIdToken": "line-token"},
+            json={"lineIdToken": "line-token", "deviceType": "IOS"},
         )
         assert options.status_code == 200
         assert options.headers["cache-control"] == "no-store, private"
         assert options.json()["tipPresetsSatang"] == [0, 2_000, 5_000, 10_000]
+        assert options.json()["methods"] == [
+            "KPLUS",
+            "SCB_EASY",
+            "KRUNGSRI_APP",
+            "BANGKOK_BANK_APP",
+            "QR_PROMPT_PAY",
+        ]
 
         attempt = client.post(
             "/api/v1/public/bookings/BK-001/payment-attempts",
             headers={"Idempotency-Key": "2d4e72d3-4ab8-4f99-a09a-c81fa1caa49c"},
-            json={"lineIdToken": "line-token", "tipAmountSatang": 2_000},
+            json={
+                "lineIdToken": "line-token",
+                "tipAmountSatang": 2_000,
+                "paymentMethod": "KPLUS",
+                "deviceType": "IOS",
+            },
         )
         assert attempt.status_code == 201
-        assert attempt.json()["actionRequired"] == "ENCODED_IMAGE"
+        assert attempt.json()["actionRequired"] == "REDIRECT"
+        assert attempt.json()["paymentMethod"] == "KPLUS"
 
         resolved = client.post(
             "/api/v1/public/payment-status:resolve",

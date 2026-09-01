@@ -73,6 +73,10 @@ export type PreviewBooking = {
   version: number;
   paymentStatus?: PaymentStatus;
   paidAmountSatang?: number;
+  subtotalAmountSatang?: number;
+  discountAmountSatang?: number;
+  discountReason?: string;
+  estimatedAmountSatang?: number;
 };
 
 export type PaymentStatus =

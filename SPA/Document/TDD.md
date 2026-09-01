@@ -4,11 +4,11 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Technical Design (TDD) |
-| Version | 1.2 |
+| Version | 1.4 |
 | Status | Approved technical baseline |
-| Last updated | 18 August 2026 |
-| Business baseline | [Business Logic v1.3](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.2](./HLD.md) |
+| Last updated | 1 September 2026 |
+| Business baseline | [Business Logic v1.7](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.4](./HLD.md) |
 | Initial branch scope | One branch, multi-branch-ready data ownership |
 | Runtime location | `asia-southeast1` |
 
@@ -266,7 +266,7 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | `GET` | `/api/v1/admin/me` | Active admin user |
 | `GET` | `/api/v1/admin/bookings` | `booking.read` |
 | `POST` | `/api/v1/admin/availability/search` | `booking.create`; capacity slots for Admin-selected today/future date |
-| `POST` | `/api/v1/admin/bookings` | `booking.create`; create active Staff-assisted Booking as `CONFIRMED` or past record as `RECORDED` |
+| `POST` | `/api/v1/admin/bookings` | `booking.create`; create active Staff-assisted Booking as `CONFIRMED` or past record as `RECORDED`; non-zero discount requires `ADMIN` |
 | `GET` | `/api/v1/admin/bookings/{bookingId}` | `booking.read` |
 | `PATCH` | `/api/v1/admin/bookings/{bookingId}` | `booking.update` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:confirm` | `booking.confirm` |
@@ -454,8 +454,10 @@ The creation operation has a pre-transaction validation stage and one Firestore 
 - Load static catalogue/configuration needed to build candidate allocations
 - Calculate payload digest and inspect idempotency record
 - For Admin Staff-assisted creation, require an active `ADMIN`/`STAFF`, a 15-minute-aligned appointment, booking/privacy acknowledgement, and `VERBAL` or `PAPER` consent capture evidence
+- Accept optional `discountAmountSatang` and `discountReason`; require whole-baht, non-negative input, require `ADMIN` and a non-empty reason when the amount is greater than zero, and require the discount to be less than the service subtotal
+- Keep Coupon lookup/redeem independent. A reason such as `คูปองสมัครครั้งแรก` records why the Booking was discounted but never marks a coupon code redeemed implicitly
 - `STAFF_ASSISTED` accepts the current non-past bucket or a future date and performs operating-hours, closure, duplicate, and capacity validation
-- `HISTORICAL_RECORD` requires a past appointment time, commits `RECORDED`, and skips operating-hours/closure/capacity reservations, payment eligibility, and notification outbox writes
+- `HISTORICAL_RECORD` requires a past appointment time, commits `RECORDED`, preserves the immutable subtotal/discount/net financial snapshot, and skips operating-hours/closure/capacity reservations, automatic payment/accounting creation, and notification outbox writes
 - Normalize the optional Admin-entered phone only when provided; never synthesize a placeholder number
 
 ### 14.2 Transaction
@@ -467,7 +469,7 @@ The transaction:
 3. Confirms the complete allocation for all participants.
 4. Reads and increments the branch-local appointment-date Booking counter.
 5. Creates Customer Web/LIFF Bookings as `PENDING`; creates an authenticated active Admin Booking as `CONFIRMED`, or a historical record as terminal `RECORDED`, with trusted actor timestamps in the same transaction.
-6. Creates price-bearing Booking line items; a `PER_BOOKING` item is written and charged once.
+6. Creates immutable price-bearing Booking line items; a `PER_BOOKING` item is written and charged once. The Booking separately stores subtotal, Admin discount, and net estimated amount.
 7. Creates participant and immutable Booking Health Snapshot documents linked to the appropriate line item.
 8. Resolves or creates the verified/provisional Customer Profile, updates the current Health Profile, and writes versioned consent receipts.
 9. Increments every capacity bucket.

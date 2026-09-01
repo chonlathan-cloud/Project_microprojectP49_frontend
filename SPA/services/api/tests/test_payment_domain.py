@@ -14,6 +14,7 @@ from app.core.types import (
     PaymentSource,
     PaymentStatus,
 )
+from app.domains.accounting.factory import build_accounting_export
 from app.domains.payments.eligibility import (
     attempt_expires_at,
     evaluate_payment_eligibility,
@@ -24,6 +25,7 @@ from app.domains.payments.policy import (
     require_admin_financial_action,
     validate_tip_amount,
 )
+from app.infrastructure.firestore_payments import _new_payment
 
 
 def payment() -> Payment:
@@ -53,6 +55,60 @@ def test_money_requires_exact_integer_satang_total() -> None:
         MoneyBreakdown(35_000, 5_000.0, 40_000)  # type: ignore[arg-type]
     with pytest.raises(FinancialInvariantError, match="must equal"):
         MoneyBreakdown(35_000, 5_000, 40_001)
+
+
+def test_discounted_booking_freezes_subtotal_discount_and_net_payment() -> None:
+    lines = (
+        ServiceLineSnapshot(
+            sku="FOOT-60",
+            name="นวดเท้า 60 นาที",
+            quantity=1,
+            unit_price_satang=50_000,
+        ),
+    )
+    discounted = _new_payment(
+        "booking-doc-001",
+        {
+            "publicBookingId": "BK-20260901-001",
+            "branchId": "branch_001",
+            "subtotalAmountSatang": 50_000,
+            "discountAmountSatang": 2_000,
+            "discountReason": "คูปองสมัครครั้งแรก",
+            "estimatedAmountSatang": 48_000,
+        },
+        lines,
+    )
+
+    assert discounted.subtotal_amount_satang == 50_000
+    assert discounted.discount_amount_satang == 2_000
+    assert discounted.amounts.service_amount_satang == 48_000
+    assert discounted.service_lines[0].unit_price_satang == 50_000
+    paid = discounted.mark_paid(
+        source=PaymentSource.CASH,
+        paid_at=datetime(2026, 9, 1, 12, 0, tzinfo=UTC),
+        cash_received_by="admin-001",
+    )
+    accounting_export = build_accounting_export(paid)
+    assert accounting_export.subtotal_amount_satang == 50_000
+    assert accounting_export.discount_amount_satang == 2_000
+    assert accounting_export.service_amount_satang == 48_000
+
+
+def test_discounted_booking_rejects_tampered_net_amount() -> None:
+    lines = (ServiceLineSnapshot("FOOT-60", "Foot massage", 1, 50_000),)
+    with pytest.raises(FinancialConflict, match="payable snapshot"):
+        _new_payment(
+            "booking-doc-001",
+            {
+                "publicBookingId": "BK-20260901-001",
+                "branchId": "branch_001",
+                "subtotalAmountSatang": 50_000,
+                "discountAmountSatang": 2_000,
+                "discountReason": "คูปองสมัครครั้งแรก",
+                "estimatedAmountSatang": 49_000,
+            },
+            lines,
+        )
 
 
 def test_payment_is_eligible_only_after_completion_on_service_date() -> None:

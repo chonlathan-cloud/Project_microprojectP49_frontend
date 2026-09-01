@@ -46,6 +46,13 @@ def build_accounting_export(payment: Payment) -> AccountingExport:
         gross_amount_satang=payment.amounts.gross_amount_satang,
         currency=payment.amounts.currency,
         service_lines=payment.service_lines,
+        subtotal_amount_satang=(
+            payment.subtotal_amount_satang
+            if payment.subtotal_amount_satang is not None
+            else payment.amounts.service_amount_satang
+        ),
+        discount_amount_satang=payment.discount_amount_satang,
+        discount_reason=payment.discount_reason,
         external_reference=f"SPA-PAY-{payment.payment_id}",
         external_document_id=external_document_id,
         source_snapshot_version=payment.version,

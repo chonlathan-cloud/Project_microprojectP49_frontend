@@ -463,6 +463,7 @@ export function AdminDashboard({ user }: { user: User }) {
         <dl>
           <div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div>
           <div><dt>{text.service}</dt><dd>{formatServiceName(selected, locale)}</dd></div>
+          {!!selected.discountAmountSatang && <><div><dt>{locale === "th" ? "ราคาปกติ" : "Regular price"}</dt><dd>{formatBaht(selected.subtotalAmountSatang ?? 0, locale)}</dd></div><div><dt>{locale === "th" ? "ส่วนลด" : "Discount"}</dt><dd>−{formatBaht(selected.discountAmountSatang, locale)}<small>{selected.discountReason}</small></dd></div><div><dt>{locale === "th" ? "ยอดสุทธิ" : "Net total"}</dt><dd>{formatBaht(selected.estimatedAmountSatang ?? 0, locale)}</dd></div></>}
           <div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div>
           <div><dt>{text.therapist}</dt><dd>{selected.status === "RECORDED" ? <span className="not-applicable">{locale === "th" ? "ไม่เกี่ยวข้อง" : "Not applicable"}</span> : selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div>
           <div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div>

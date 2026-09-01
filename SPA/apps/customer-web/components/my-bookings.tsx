@@ -7,10 +7,12 @@ import { useEffect, useRef, useState } from "react";
 import { loadLiff } from "@/lib/line-liff";
 import {
   createPaymentAttempt,
+  detectBeamDeviceType,
   getPaymentOptions,
   PaymentApiError,
   resolvePaymentStatus,
   type PaymentAttempt,
+  type BeamPaymentMethod,
   type PaymentOptions,
   type ResolvedPayment,
 } from "@/lib/payment-api";
@@ -75,6 +77,15 @@ const COPY = {
     noTip: "ไม่มีทิป",
     customTip: "กรอกเอง",
     total: "ยอดชำระทั้งหมด",
+    chooseMethod: "เลือกวิธีชำระเงิน",
+    mobileBanking: "เปิดแอปธนาคารบนโทรศัพท์เครื่องนี้",
+    promptPay: "PromptPay QR",
+    promptPayHint: "สแกนหรือบันทึก QR เพื่อชำระ",
+    selectMethod: "กรุณาเลือกวิธีชำระเงิน",
+    noPaymentMethods: "ยังไม่มีวิธีชำระเงินออนไลน์ที่รองรับบนอุปกรณ์นี้ กรุณาติดต่อร้านหรือชำระเงินสด",
+    continuePayment: "ดำเนินการชำระเงิน",
+    openingBank: "กำลังเปิดแอปธนาคาร…",
+    openBankAgain: "เปิดแอปธนาคารอีกครั้ง",
     createQr: "สร้าง PromptPay QR",
     creatingQr: "กำลังสร้าง QR…",
     scanQr: "สแกน QR เพื่อชำระเงิน",
@@ -117,6 +128,15 @@ const COPY = {
     noTip: "No tip",
     customTip: "Custom",
     total: "Total",
+    chooseMethod: "Choose payment method",
+    mobileBanking: "Open a banking app on this phone",
+    promptPay: "PromptPay QR",
+    promptPayHint: "Scan or save the QR to pay",
+    selectMethod: "Select a payment method",
+    noPaymentMethods: "No online payment method is available on this device. Contact the store or pay in cash.",
+    continuePayment: "Continue to payment",
+    openingBank: "Opening your banking app…",
+    openBankAgain: "Open banking app again",
     createQr: "Create PromptPay QR",
     creatingQr: "Creating QR…",
     scanQr: "Scan QR to pay",
@@ -171,8 +191,56 @@ const PAYMENT_ERROR_COPY: Record<string, { th: string; en: string }> = {
     th: "ตรวจสอบผลชำระเงินไม่ได้ในขณะนี้ โปรดลองอีกครั้ง",
     en: "The payment result is temporarily unavailable. Please try again."
   },
+  PAYMENT_METHOD_UNAVAILABLE: {
+    th: "ธนาคารนี้ยังไม่เปิดใช้งานสำหรับร้าน กรุณาเลือก PromptPay QR หรือธนาคารอื่น",
+    en: "This bank is not enabled for the merchant. Choose PromptPay QR or another bank."
+  },
+  PAYMENT_DEVICE_UNSUPPORTED: {
+    th: "Mobile Banking ใช้ได้บนโทรศัพท์เท่านั้น กรุณาเลือก PromptPay QR",
+    en: "Mobile banking is available on phones only. Choose PromptPay QR instead."
+  },
   PAYMENT_REVIEW_REQUIRED: PAYMENT_REASON_COPY.PAYMENT_REVIEW_REQUIRED
 };
+
+const PAYMENT_METHOD_COPY: Record<BeamPaymentMethod, {
+  th: string;
+  en: string;
+  thHint: string;
+  enHint: string;
+}> = {
+  KPLUS: { th: "K PLUS", en: "K PLUS", thHint: "ธนาคารกสิกรไทย", enHint: "Kasikornbank" },
+  SCB_EASY: { th: "SCB EASY", en: "SCB EASY", thHint: "ธนาคารไทยพาณิชย์", enHint: "Siam Commercial Bank" },
+  KRUNGSRI_APP: { th: "Krungsri App", en: "Krungsri App", thHint: "ธนาคารกรุงศรีอยุธยา", enHint: "Bank of Ayudhya" },
+  BANGKOK_BANK_APP: { th: "Bangkok Bank", en: "Bangkok Bank", thHint: "โมบายแบงก์กิ้ง จากธนาคารกรุงเทพ", enHint: "Bangkok Bank Mobile Banking" },
+  QR_PROMPT_PAY: { th: "PromptPay QR", en: "PromptPay QR", thHint: "สแกนด้วยแอปธนาคาร", enHint: "Scan with any supported banking app" }
+};
+
+const REDIRECT_ATTEMPT_STORAGE_KEY = "spa49.payment.redirect.v1";
+
+type StoredRedirectAttempt = {
+  bookingId: string;
+  attempt: PaymentAttempt;
+};
+
+function readStoredRedirectAttempt(): StoredRedirectAttempt | null {
+  try {
+    const raw = window.sessionStorage.getItem(REDIRECT_ATTEMPT_STORAGE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as StoredRedirectAttempt;
+    if (
+      !value?.bookingId
+      || !value.attempt?.statusToken
+      || value.attempt.actionRequired !== "REDIRECT"
+    ) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredRedirectAttempt() {
+  window.sessionStorage.removeItem(REDIRECT_ATTEMPT_STORAGE_KEY);
+}
 
 function paymentReason(reason: string | null, locale: Locale, fallback: string) {
   return reason ? (PAYMENT_REASON_COPY[reason]?.[locale] ?? fallback) : fallback;
@@ -246,6 +314,7 @@ export function MyBookings() {
   const [paymentState, setPaymentState] = useState<"idle" | "loading" | "ready" | "creating" | "error">("idle");
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [tipAmountSatang, setTipAmountSatang] = useState(0);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<BeamPaymentMethod | null>(null);
   const paymentAttemptKey = useRef<string | null>(null);
   const copy = COPY[locale];
 
@@ -269,6 +338,25 @@ export function MyBookings() {
         if (!cancelled) {
           setLineIdToken(token);
           setState("loading");
+          const stored = readStoredRedirectAttempt();
+          if (stored) {
+            setView("HISTORY");
+            setPaymentBookingId(stored.bookingId);
+            setPaymentAttempt(stored.attempt);
+            setSelectedPaymentMethod(stored.attempt.paymentMethod);
+            setPaymentState("loading");
+            void getPaymentOptions(stored.bookingId, token, detectBeamDeviceType())
+              .then((options) => {
+                if (cancelled) return;
+                setPaymentOptions(options);
+                setPaymentState("ready");
+              })
+              .catch((error) => {
+                if (cancelled) return;
+                setPaymentError(error instanceof PaymentApiError ? error.code : "PAYMENT_OPTIONS_UNAVAILABLE");
+                setPaymentState("error");
+              });
+          }
         }
       } catch {
         if (!cancelled) setState("error");
@@ -344,10 +432,11 @@ export function MyBookings() {
     setResolvedPayment(null);
     setPaymentError(null);
     setTipAmountSatang(0);
+    setSelectedPaymentMethod(null);
     setPaymentState("loading");
     paymentAttemptKey.current = null;
     try {
-      setPaymentOptions(await getPaymentOptions(bookingId, lineIdToken));
+      setPaymentOptions(await getPaymentOptions(bookingId, lineIdToken, detectBeamDeviceType()));
       setPaymentState("ready");
     } catch (error) {
       setPaymentError(error instanceof PaymentApiError ? error.code : "PAYMENT_OPTIONS_UNAVAILABLE");
@@ -356,18 +445,33 @@ export function MyBookings() {
   }
 
   async function payWithBeam() {
-    if (!lineIdToken || !paymentBookingId || !paymentOptions?.eligible) return;
+    if (
+      !lineIdToken
+      || !paymentBookingId
+      || !paymentOptions?.eligible
+      || !selectedPaymentMethod
+    ) return;
     setPaymentState("creating");
     setPaymentError(null);
     paymentAttemptKey.current ??= crypto.randomUUID();
     try {
-      setPaymentAttempt(await createPaymentAttempt(
+      const attempt = await createPaymentAttempt(
         paymentBookingId,
         lineIdToken,
         tipAmountSatang,
+        selectedPaymentMethod,
+        detectBeamDeviceType(),
         paymentAttemptKey.current,
-      ));
+      );
+      setPaymentAttempt(attempt);
       setPaymentState("ready");
+      if (attempt.actionRequired === "REDIRECT" && attempt.redirectUrl) {
+        window.sessionStorage.setItem(
+          REDIRECT_ATTEMPT_STORAGE_KEY,
+          JSON.stringify({ bookingId: paymentBookingId, attempt }),
+        );
+        window.location.assign(attempt.redirectUrl);
+      }
     } catch (error) {
       setPaymentError(error instanceof PaymentApiError ? error.code : "PAYMENT_ATTEMPT_UNAVAILABLE");
       setPaymentState("error");
@@ -388,10 +492,12 @@ export function MyBookings() {
         if (controller.signal.aborted) return;
         setResolvedPayment(result);
         if (result.status === "PAID") {
+          clearStoredRedirectAttempt();
           setItems((current) => current.map((booking) => booking.bookingId === result.bookingId
             ? { ...booking, paymentStatus: "PAID", paidAmountSatang: result.grossAmountSatang }
             : booking));
         } else if (result.status === "DUE" || result.status === "PAYMENT_REVIEW") {
+          clearStoredRedirectAttempt();
           setPaymentAttempt(null);
           paymentAttemptKey.current = null;
           setPaymentError(result.status === "DUE" ? "PAYMENT_ATTEMPT_FAILED" : "PAYMENT_REVIEW_REQUIRED");
@@ -527,12 +633,43 @@ export function MyBookings() {
                     onClick={() => { void openPayment(booking.bookingId); }}
                   >{copy.recheckPayment}</button>}
                 </div>}
-                {paymentOptions.eligible && !paymentAttempt && <button
-                  type="button"
-                  className="primary-button payment-submit"
-                  disabled={paymentState === "creating" || !paymentOptions.methods.includes("QR_PROMPT_PAY")}
-                  onClick={() => { void payWithBeam(); }}
-                >{paymentState === "creating" ? copy.creatingQr : copy.createQr}</button>}
+                {paymentOptions.eligible && !paymentAttempt && <>
+                  {paymentOptions.methods.length === 0 && <p className="payment-message" role="status">{copy.noPaymentMethods}</p>}
+                  <fieldset className="customer-payment-methods">
+                    <legend>{copy.chooseMethod}</legend>
+                    <p>{copy.mobileBanking}</p>
+                    <div className="payment-method-list">
+                      {paymentOptions.methods.map((method) => {
+                        const methodCopy = PAYMENT_METHOD_COPY[method];
+                        const isQr = method === "QR_PROMPT_PAY";
+                        return <label key={method}>
+                          <input
+                            type="radio"
+                            name={`payment-method-${booking.bookingId}`}
+                            value={method}
+                            checked={selectedPaymentMethod === method}
+                            onChange={() => {
+                              setSelectedPaymentMethod(method);
+                              paymentAttemptKey.current = null;
+                            }}
+                          />
+                          <span>
+                            <strong>{methodCopy[locale]}</strong>
+                            <small>{isQr ? copy.promptPayHint : methodCopy[locale === "th" ? "thHint" : "enHint"]}</small>
+                          </span>
+                        </label>;
+                      })}
+                    </div>
+                  </fieldset>
+                  <button
+                    type="button"
+                    className="primary-button payment-submit"
+                    disabled={paymentState === "creating" || !selectedPaymentMethod || paymentOptions.methods.length === 0}
+                    onClick={() => { void payWithBeam(); }}
+                  >{paymentState === "creating"
+                    ? (selectedPaymentMethod === "QR_PROMPT_PAY" ? copy.creatingQr : copy.openingBank)
+                    : (selectedPaymentMethod ? copy.continuePayment : copy.selectMethod)}</button>
+                </>}
                 <p className="payment-cash-hint">{copy.cashHint}</p>
               </>}
               {paymentAttempt?.actionRequired === "ENCODED_IMAGE" && paymentAttempt.imageBase64 && resolvedPayment?.status !== "PAID" && <div className="beam-qr" role="status">
@@ -547,7 +684,10 @@ export function MyBookings() {
                 <p>{copy.waiting}</p>
                 {paymentAttempt.expiresAt && <time dateTime={paymentAttempt.expiresAt}>{new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { dateStyle: "medium", timeStyle: "medium" }).format(new Date(paymentAttempt.expiresAt))}</time>}
               </div>}
-              {paymentAttempt?.actionRequired === "REDIRECT" && paymentAttempt.redirectUrl && <a className="primary-button payment-submit" href={paymentAttempt.redirectUrl} rel="noopener noreferrer">{copy.payment}</a>}
+              {paymentAttempt?.actionRequired === "REDIRECT" && paymentAttempt.redirectUrl && <div className="payment-redirect" role="status">
+                <p>{copy.waiting}</p>
+                <button type="button" className="primary-button payment-submit" onClick={() => window.location.assign(paymentAttempt.redirectUrl!)}>{copy.openBankAgain}</button>
+              </div>}
               {resolvedPayment?.status === "PAID" && <div className="payment-success" role="status"><strong>✓ {copy.paid}</strong>{resolvedPayment.paidAt && <time dateTime={resolvedPayment.paidAt}>{new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(resolvedPayment.paidAt))}</time>}</div>}
               {paymentError && <p className="payment-error" role="alert">{paymentErrorMessage(paymentError, locale)}</p>}
             </section>}

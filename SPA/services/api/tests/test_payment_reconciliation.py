@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -10,7 +11,7 @@ from app.application.payments import (
     PaymentService,
 )
 from app.core.settings import Settings
-from app.core.types import PaymentStatus
+from app.core.types import BeamDeviceType, BeamPaymentMethod, PaymentStatus
 from app.domains.identity.models import LinePrincipal
 from app.integrations.beam import BeamCharge, BeamChargeList
 
@@ -42,7 +43,7 @@ def options(
         reason=reason,
         tip_presets_satang=(0, 2_000, 5_000, 10_000),
         custom_tip_max_satang=50_000,
-        beam_qr_enabled=True,
+        enabled_methods=(BeamPaymentMethod.QR_PROMPT_PAY,),
         version=1,
         reconciliation=reconciliation,
     )
@@ -328,3 +329,25 @@ async def test_webhook_ignores_charge_that_cannot_be_linked(monkeypatch) -> None
 
     assert processed is False
     assert repository.accepted == []
+
+
+@pytest.mark.asyncio
+async def test_payment_options_expose_mobile_methods_only_to_mobile_devices() -> None:
+    all_methods = tuple(BeamPaymentMethod)
+    configured = replace(
+        options(eligible=True, reason=None),
+        enabled_methods=all_methods,
+    )
+    principal = LinePrincipal(user_id="U-001", channel_id="line-channel")
+
+    web_result = await PaymentService(
+        Repository(configured, configured),
+        settings(),
+    ).options("BK-001", principal, BeamDeviceType.WEB)
+    ios_result = await PaymentService(
+        Repository(configured, configured),
+        settings(),
+    ).options("BK-001", principal, BeamDeviceType.IOS)
+
+    assert web_result.enabled_methods == (BeamPaymentMethod.QR_PROMPT_PAY,)
+    assert ios_result.enabled_methods == all_methods

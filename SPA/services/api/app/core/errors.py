@@ -60,6 +60,16 @@ class PaymentNotEligible(DomainError):
     code = "PAYMENT_NOT_ELIGIBLE"
 
 
+class PaymentMethodUnavailable(DomainError):
+    code = "PAYMENT_METHOD_UNAVAILABLE"
+    status_code = 422
+
+
+class PaymentDeviceUnsupported(DomainError):
+    code = "PAYMENT_DEVICE_UNSUPPORTED"
+    status_code = 422
+
+
 class FinancialInvariantError(DomainError):
     code = "FINANCIAL_INVARIANT_VIOLATION"
 
