@@ -61,7 +61,8 @@
     - *Traditional Thai Massage* | Variants: `60m - 300 ฿`, `120m - 600 ฿` | Active Toggle: `ON`
     - *Body Scrub* | Variant: `60m - 600 ฿` | Active Toggle: `ON`
   - **Active / Inactive Toggle Switch:** Instantly hide/show course on the customer-facing LINE menu (e.g., if specific massage oil is out of stock).
-  - **Primary CTA:** Top right `+ Add New Service` button (opens creation modal).
+  - **Primary CTA:** Top right `+ Add New Service` button (opens creation modal). The duration-and-price section starts with one row and exposes `+ Add duration`, allowing multiple unique options such as 30/60 or 60/120 minutes before publishing.
+  - **Existing Service Editor:** The duration-and-price section lists every current variant and provides an inline `Add duration option` control so staff can add a missing duration without recreating the service.
 
 ---
 

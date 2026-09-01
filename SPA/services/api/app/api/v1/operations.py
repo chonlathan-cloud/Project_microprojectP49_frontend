@@ -79,9 +79,7 @@ class ServiceCreate(ApiModel):
     description_en: str = Field(default="", max_length=500)
     duration_minutes: int | None = Field(default=None, ge=15, le=480, multiple_of=15)
     price_satang: int | None = Field(default=None, ge=0)
-    variants: list[ServiceVariantCreate] | None = Field(
-        default=None, min_length=1, max_length=20
-    )
+    variants: list[ServiceVariantCreate] | None = Field(default=None, min_length=1)
     pricing_mode: Literal["PER_PARTICIPANT", "PER_BOOKING"] = "PER_PARTICIPANT"
     required_pax: Literal[1, 2] = 1
 
@@ -347,6 +345,7 @@ async def create_service(
     durations = [variant.duration_minutes for variant in variant_inputs]
     if len(set(durations)) != len(durations):
         raise ValidationDomainError("Service durations must be unique")
+    sorted_variant_inputs = sorted(variant_inputs, key=lambda item: item.duration_minutes)
 
     service_id = f"service-{uuid4().hex}"
     existing = [snapshot.to_dict() or {} for snapshot in client.collection("services").stream()]
@@ -372,7 +371,7 @@ async def create_service(
                 "active": True,
                 "resourceRequirements": [],
             }
-            for variant in sorted(variant_inputs, key=lambda item: item.duration_minutes)
+            for variant in sorted_variant_inputs
         ],
         "version": 1,
         "createdAt": now,
@@ -382,9 +381,10 @@ async def create_service(
     _audit(client, actor=actor, event_type="SERVICE_CREATED", target_id=service_id)
     return {
         "serviceId": service_id,
+        "variantId": f"{service_id}-{sorted_variant_inputs[0].duration_minutes}",
         "variantIds": [
             f"{service_id}-{variant.duration_minutes}"
-            for variant in sorted(variant_inputs, key=lambda item: item.duration_minutes)
+            for variant in sorted_variant_inputs
         ],
         "version": 1,
         "active": True,
@@ -590,7 +590,7 @@ async def create_service_variant(
         "pricingMode": pricing_source.get("pricingMode", "PER_PARTICIPANT"),
         "requiredPax": int(pricing_source.get("requiredPax", 1)),
         "active": True,
-        "resourceRequirements": list(pricing_source.get("resourceRequirements", [])),
+        "resourceRequirements": list(pricing_source.get("resourceRequirements") or []),
     }
     variants.append(new_variant)
     variants.sort(key=lambda variant: int(variant.get("durationMinutes", 0)))

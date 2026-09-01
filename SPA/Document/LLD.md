@@ -494,6 +494,10 @@ The seed manifest uses stable IDs and the approved Business Logic 7.1 bilingual 
 
 The seed file is `SPA/infra/seed/service-catalog.v1.json`. It contains 11 services and 17 variants. Seed application creates missing records and reports drift; it does not silently overwrite Admin changes.
 
+Admin-created catalog entries use `POST /api/v1/admin/services` with a non-empty `variants` array. Each item contains `durationMinutes` and `priceSatang`; duration values must be unique within the service. The write creates the service and every initial variant together so the Customer catalog never observes a partially created menu item. The legacy single `durationMinutes`/`priceSatang` request remains accepted for backward compatibility, but a request cannot mix legacy fields with `variants`.
+
+`POST /api/v1/admin/services/{serviceId}/variants` accepts `durationMinutes`, `priceSatang`, and `expectedVersion`. It rejects stale versions and existing durations, generates `{serviceId}-{durationMinutes}` as the variant ID, inherits `pricingMode`, `requiredPax`, and `resourceRequirements` from the existing service, sorts variants by duration, increments the service version, and appends `SERVICE_VARIANT_CREATED` audit evidence.
+
 ### 6.4 `resources/{resourceId}`
 
 ```json

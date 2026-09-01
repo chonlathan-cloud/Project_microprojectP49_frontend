@@ -277,6 +277,38 @@ def test_staff_can_add_duration_variant_to_existing_service() -> None:
     assert database.audits[-1]["eventType"] == "SERVICE_VARIANT_CREATED"
 
 
+def test_service_variant_create_rejects_duplicate_duration() -> None:
+    database = ServiceFirestore()
+    database.services["existing"].update(
+        {
+            "version": 1,
+            "variants": [
+                {
+                    "variantId": "existing-60",
+                    "durationMinutes": 60,
+                    "priceSatang": 50000,
+                    "pricingMode": "PER_PARTICIPANT",
+                    "requiredPax": 1,
+                    "active": True,
+                    "resourceRequirements": [],
+                }
+            ],
+        }
+    )
+    previous_auth, previous_firestore = _with_service_dependencies(database)
+    try:
+        response = client.post(
+            "/api/v1/admin/services/existing/variants",
+            json={"durationMinutes": 60, "priceSatang": 60000, "expectedVersion": 1},
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "A service variant with this duration already exists"
+    assert len(database.services["existing"]["variants"]) == 1
+
+
 def test_staff_can_change_service_category() -> None:
     database = ServiceFirestore()
     database.services["existing"].update({"version": 1, "category": "MASSAGE"})

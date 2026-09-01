@@ -93,6 +93,8 @@ The implementation supplies a version-controlled seed manifest for the 11 servic
 
 `Couple Relaxation Package` is the only initial `PER_BOOKING` / `requiredPax=2` variant. Its 1,190 THB price is charged once, two participants reference the same Booking line item, and resources are allocated for both. `Hot Compress` is a standalone 20-minute variant in Phase 1. Seed import is idempotent by stable Service/Variant ID and never overwrites an Admin-edited record unless an explicit migration is approved.
 
+Admin service creation accepts one or more unique duration/price variants in the same request. Every duration is a 15-minute increment from 15–480 minutes, price is a non-negative integer in satang, and all variants created for one service share its `pricingMode` and `requiredPax`. `POST /api/v1/admin/services/{serviceId}/variants` adds another duration to an existing service with `expectedVersion`; it rejects a duplicate duration and inherits the service's pricing and resource requirements.
+
 ## 5. Target Repository Layout
 
 ```text
