@@ -2,9 +2,16 @@
 
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { loadLiff } from "@/lib/line-liff";
+import { PAYMENT_METHOD_DETAILS } from "@/lib/payment-methods";
+import {
+  clearStoredPaymentAttempt,
+  readStoredPaymentAttempt,
+  storePaymentAttempt,
+} from "@/lib/payment-return";
 import {
   createPaymentAttempt,
   detectBeamDeviceType,
@@ -89,6 +96,8 @@ const COPY = {
     createQr: "สร้าง PromptPay QR",
     creatingQr: "กำลังสร้าง QR…",
     scanQr: "สแกน QR เพื่อชำระเงิน",
+    saveQr: "บันทึก QR",
+    saveQrFailed: "บันทึก QR ไม่สำเร็จ กรุณากดค้างที่รูปเพื่อบันทึก",
     waiting: "กำลังรอการยืนยันจาก Beam",
     paid: "ชำระเงินแล้ว",
     cashHint: "หากชำระเงินสด โปรดแจ้ง Admin ที่หน้าร้าน",
@@ -140,6 +149,8 @@ const COPY = {
     createQr: "Create PromptPay QR",
     creatingQr: "Creating QR…",
     scanQr: "Scan QR to pay",
+    saveQr: "Save QR",
+    saveQrFailed: "Could not save the QR. Press and hold the image to save it.",
     waiting: "Waiting for confirmation from Beam",
     paid: "Payment completed",
     cashHint: "For cash payment, ask the in-store Admin to record the receipt",
@@ -202,44 +213,23 @@ const PAYMENT_ERROR_COPY: Record<string, { th: string; en: string }> = {
   PAYMENT_REVIEW_REQUIRED: PAYMENT_REASON_COPY.PAYMENT_REVIEW_REQUIRED
 };
 
-const PAYMENT_METHOD_COPY: Record<BeamPaymentMethod, {
-  th: string;
-  en: string;
-  thHint: string;
-  enHint: string;
-}> = {
-  KPLUS: { th: "K PLUS", en: "K PLUS", thHint: "ธนาคารกสิกรไทย", enHint: "Kasikornbank" },
-  SCB_EASY: { th: "SCB EASY", en: "SCB EASY", thHint: "ธนาคารไทยพาณิชย์", enHint: "Siam Commercial Bank" },
-  KRUNGSRI_APP: { th: "Krungsri App", en: "Krungsri App", thHint: "ธนาคารกรุงศรีอยุธยา", enHint: "Bank of Ayudhya" },
-  BANGKOK_BANK_APP: { th: "Bangkok Bank", en: "Bangkok Bank", thHint: "โมบายแบงก์กิ้ง จากธนาคารกรุงเทพ", enHint: "Bangkok Bank Mobile Banking" },
-  QR_PROMPT_PAY: { th: "PromptPay QR", en: "PromptPay QR", thHint: "สแกนด้วยแอปธนาคาร", enHint: "Scan with any supported banking app" }
-};
-
-const REDIRECT_ATTEMPT_STORAGE_KEY = "spa49.payment.redirect.v1";
-
-type StoredRedirectAttempt = {
-  bookingId: string;
-  attempt: PaymentAttempt;
-};
-
-function readStoredRedirectAttempt(): StoredRedirectAttempt | null {
-  try {
-    const raw = window.sessionStorage.getItem(REDIRECT_ATTEMPT_STORAGE_KEY);
-    if (!raw) return null;
-    const value = JSON.parse(raw) as StoredRedirectAttempt;
-    if (
-      !value?.bookingId
-      || !value.attempt?.statusToken
-      || value.attempt.actionRequired !== "REDIRECT"
-    ) return null;
-    return value;
-  } catch {
-    return null;
+function PaymentMethodLogo({ method }: { method: BeamPaymentMethod }) {
+  const logoSrc = PAYMENT_METHOD_DETAILS[method].logoSrc;
+  if (logoSrc) {
+    return <Image
+      className="payment-method-logo"
+      src={logoSrc}
+      alt=""
+      width={40}
+      height={40}
+      aria-hidden="true"
+    />;
   }
-}
-
-function clearStoredRedirectAttempt() {
-  window.sessionStorage.removeItem(REDIRECT_ATTEMPT_STORAGE_KEY);
+  return <span className="payment-method-logo payment-method-logo-qr" aria-hidden="true">
+    <svg viewBox="0 0 24 24" focusable="false">
+      <path d="M4 4h6v6H4V4Zm2 2v2h2V6H6Zm8-2h6v6h-6V4Zm2 2v2h2V6h-2ZM4 14h6v6H4v-6Zm2 2v2h2v-2H6Zm8-2h2v2h-2v-2Zm4 0h2v4h-2v-4Zm-4 4h4v2h-4v-2Z" />
+    </svg>
+  </span>;
 }
 
 function paymentReason(reason: string | null, locale: Locale, fallback: string) {
@@ -299,6 +289,7 @@ async function fetchBookingPage(
 }
 
 export function MyBookings() {
+  const router = useRouter();
   const [locale, setLocale] = useState<Locale>("th");
   const [view, setView] = useState<BookingView>("UPCOMING");
   const [state, setState] = useState<LoadState>("authenticating");
@@ -313,6 +304,7 @@ export function MyBookings() {
   const [resolvedPayment, setResolvedPayment] = useState<ResolvedPayment | null>(null);
   const [paymentState, setPaymentState] = useState<"idle" | "loading" | "ready" | "creating" | "error">("idle");
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [qrSaveError, setQrSaveError] = useState(false);
   const [tipAmountSatang, setTipAmountSatang] = useState(0);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<BeamPaymentMethod | null>(null);
   const paymentAttemptKey = useRef<string | null>(null);
@@ -338,7 +330,7 @@ export function MyBookings() {
         if (!cancelled) {
           setLineIdToken(token);
           setState("loading");
-          const stored = readStoredRedirectAttempt();
+          const stored = readStoredPaymentAttempt();
           if (stored) {
             setView("HISTORY");
             setPaymentBookingId(stored.bookingId);
@@ -431,6 +423,7 @@ export function MyBookings() {
     setPaymentAttempt(null);
     setResolvedPayment(null);
     setPaymentError(null);
+    setQrSaveError(false);
     setTipAmountSatang(0);
     setSelectedPaymentMethod(null);
     setPaymentState("loading");
@@ -453,6 +446,7 @@ export function MyBookings() {
     ) return;
     setPaymentState("creating");
     setPaymentError(null);
+    setQrSaveError(false);
     paymentAttemptKey.current ??= crypto.randomUUID();
     try {
       const attempt = await createPaymentAttempt(
@@ -464,17 +458,50 @@ export function MyBookings() {
         paymentAttemptKey.current,
       );
       setPaymentAttempt(attempt);
+      storePaymentAttempt({ bookingId: paymentBookingId, attempt });
       setPaymentState("ready");
       if (attempt.actionRequired === "REDIRECT" && attempt.redirectUrl) {
-        window.sessionStorage.setItem(
-          REDIRECT_ATTEMPT_STORAGE_KEY,
-          JSON.stringify({ bookingId: paymentBookingId, attempt }),
-        );
         window.location.assign(attempt.redirectUrl);
       }
     } catch (error) {
       setPaymentError(error instanceof PaymentApiError ? error.code : "PAYMENT_ATTEMPT_UNAVAILABLE");
       setPaymentState("error");
+    }
+  }
+
+  async function savePromptPayQr() {
+    if (!paymentAttempt?.imageBase64 || !paymentBookingId) return;
+    setQrSaveError(false);
+    try {
+      const encodedImage = paymentAttempt.imageBase64.replace(/^data:image\/png;base64,/, "");
+      const binaryImage = window.atob(encodedImage);
+      const imageBytes = Uint8Array.from(binaryImage, (character) => character.charCodeAt(0));
+      const imageBlob = new Blob([imageBytes], { type: "image/png" });
+      const safeBookingId = paymentBookingId.replace(/[^A-Za-z0-9_-]/g, "-");
+      const fileName = `spa49-promptpay-${safeBookingId}.png`;
+      const imageFile = new File([imageBlob], fileName, { type: "image/png" });
+
+      if (
+        typeof navigator.share === "function"
+        && typeof navigator.canShare === "function"
+        && navigator.canShare({ files: [imageFile] })
+      ) {
+        await navigator.share({ files: [imageFile], title: copy.saveQr });
+        return;
+      }
+
+      const objectUrl = URL.createObjectURL(imageBlob);
+      const downloadLink = document.createElement("a");
+      downloadLink.href = objectUrl;
+      downloadLink.download = fileName;
+      downloadLink.rel = "noopener";
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setQrSaveError(true);
     }
   }
 
@@ -492,15 +519,14 @@ export function MyBookings() {
         if (controller.signal.aborted) return;
         setResolvedPayment(result);
         if (result.status === "PAID") {
-          clearStoredRedirectAttempt();
+          clearStoredPaymentAttempt();
           setItems((current) => current.map((booking) => booking.bookingId === result.bookingId
             ? { ...booking, paymentStatus: "PAID", paidAmountSatang: result.grossAmountSatang }
             : booking));
+          router.replace(`/payment/result?attempt=${encodeURIComponent(paymentAttempt.attemptId)}`);
         } else if (result.status === "DUE" || result.status === "PAYMENT_REVIEW") {
-          clearStoredRedirectAttempt();
-          setPaymentAttempt(null);
-          paymentAttemptKey.current = null;
-          setPaymentError(result.status === "DUE" ? "PAYMENT_ATTEMPT_FAILED" : "PAYMENT_REVIEW_REQUIRED");
+          clearStoredPaymentAttempt();
+          router.replace(`/payment/result?attempt=${encodeURIComponent(paymentAttempt.attemptId)}`);
         }
       } catch (error) {
         if (!controller.signal.aborted) {
@@ -511,7 +537,7 @@ export function MyBookings() {
     void poll();
     const interval = window.setInterval(() => { void poll(); }, 4_000);
     return () => { controller.abort(); window.clearInterval(interval); };
-  }, [paymentAttempt, resolvedPayment?.status]);
+  }, [paymentAttempt, resolvedPayment?.status, router]);
 
   return <main className="my-bookings-shell">
     <header className="my-bookings-header">
@@ -640,7 +666,7 @@ export function MyBookings() {
                     <p>{copy.mobileBanking}</p>
                     <div className="payment-method-list">
                       {paymentOptions.methods.map((method) => {
-                        const methodCopy = PAYMENT_METHOD_COPY[method];
+                        const methodCopy = PAYMENT_METHOD_DETAILS[method];
                         const isQr = method === "QR_PROMPT_PAY";
                         return <label key={method}>
                           <input
@@ -653,7 +679,8 @@ export function MyBookings() {
                               paymentAttemptKey.current = null;
                             }}
                           />
-                          <span>
+                          <PaymentMethodLogo method={method} />
+                          <span className="payment-method-copy">
                             <strong>{methodCopy[locale]}</strong>
                             <small>{isQr ? copy.promptPayHint : methodCopy[locale === "th" ? "thHint" : "enHint"]}</small>
                           </span>
@@ -672,7 +699,7 @@ export function MyBookings() {
                 </>}
                 <p className="payment-cash-hint">{copy.cashHint}</p>
               </>}
-              {paymentAttempt?.actionRequired === "ENCODED_IMAGE" && paymentAttempt.imageBase64 && resolvedPayment?.status !== "PAID" && <div className="beam-qr" role="status">
+              {paymentAttempt?.actionRequired === "ENCODED_IMAGE" && paymentAttempt.imageBase64 && resolvedPayment?.status !== "PAID" && <div className="beam-qr">
                 <h3>{copy.scanQr}</h3>
                 <Image
                   unoptimized
@@ -681,12 +708,19 @@ export function MyBookings() {
                   width={260}
                   height={260}
                 />
-                <p>{copy.waiting}</p>
+                <button type="button" className="qr-save-button" onClick={() => { void savePromptPayQr(); }}>
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M12 3v11m0 0 4-4m-4 4-4-4M5 16v3h14v-3" />
+                  </svg>
+                  {copy.saveQr}
+                </button>
+                {qrSaveError && <p className="qr-save-error" role="alert">{copy.saveQrFailed}</p>}
+                <p role="status" aria-live="polite">{copy.waiting}</p>
                 {paymentAttempt.expiresAt && <time dateTime={paymentAttempt.expiresAt}>{new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { dateStyle: "medium", timeStyle: "medium" }).format(new Date(paymentAttempt.expiresAt))}</time>}
               </div>}
               {paymentAttempt?.actionRequired === "REDIRECT" && paymentAttempt.redirectUrl && <div className="payment-redirect" role="status">
                 <p>{copy.waiting}</p>
-                <button type="button" className="primary-button payment-submit" onClick={() => window.location.assign(paymentAttempt.redirectUrl!)}>{copy.openBankAgain}</button>
+                <a className="primary-button payment-submit" href={paymentAttempt.redirectUrl}>{copy.openBankAgain}</a>
               </div>}
               {resolvedPayment?.status === "PAID" && <div className="payment-success" role="status"><strong>✓ {copy.paid}</strong>{resolvedPayment.paidAt && <time dateTime={resolvedPayment.paidAt}>{new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(resolvedPayment.paidAt))}</time>}</div>}
               {paymentError && <p className="payment-error" role="alert">{paymentErrorMessage(paymentError, locale)}</p>}

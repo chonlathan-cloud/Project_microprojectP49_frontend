@@ -1,10 +1,12 @@
+import re
 from base64 import b64decode
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from hmac import compare_digest, digest
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 import httpx
 
@@ -34,6 +36,41 @@ class BeamAmbiguousCreateError(BeamError):
     pass
 
 
+_PAYMENT_RETURN_REFERENCE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def build_payment_return_url(base_url: str | None, attempt_id: str) -> str:
+    """Add a non-secret attempt reference to the configured customer return page."""
+    if not base_url or _PAYMENT_RETURN_REFERENCE.fullmatch(attempt_id) is None:
+        raise BeamConfigurationError("Beam payment return URL is invalid")
+    try:
+        parsed = urlsplit(base_url)
+        port = parsed.port
+    except ValueError as error:
+        raise BeamConfigurationError("Beam payment return URL is invalid") from error
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or (parsed.scheme == "http" and hostname not in {"localhost", "127.0.0.1"})
+        or port not in {None, 80, 443}
+    ):
+        raise BeamConfigurationError("Beam payment return URL is invalid")
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key != "attempt"
+    ]
+    query.append(("attempt", attempt_id))
+    result = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), ""))
+    if len(result) > 2_048:
+        raise BeamConfigurationError("Beam payment return URL is too long")
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class BeamAction:
     charge_id: str
@@ -55,6 +92,7 @@ def normalize_charge_action(
         "beamcheckout.co",
         "*.beamcheckout.co",
     ),
+    allowed_redirect_schemes: Mapping[BeamPaymentMethod, tuple[str, ...]] | None = None,
 ) -> BeamAction:
     """Return the small provider action contract that is safe for the browser."""
     charge_id = payload.get("chargeId")
@@ -103,33 +141,58 @@ def normalize_charge_action(
     elif action_required == "REDIRECT":
         redirect = payload.get("redirect")
         redirect_url = redirect.get("redirectUrl") if isinstance(redirect, dict) else None
-        if not isinstance(redirect_url, str) or not redirect_url.startswith("https://"):
+        if (
+            not isinstance(redirect_url, str)
+            or not redirect_url
+            or len(redirect_url) > 8_192
+            or any(ord(character) < 0x20 for character in redirect_url)
+        ):
             raise BeamConfigurationError("Beam redirect URL is invalid")
         try:
             parsed_redirect = urlparse(redirect_url)
-            hostname = (parsed_redirect.hostname or "").lower().rstrip(".")
-            port = parsed_redirect.port
         except ValueError as error:
             raise BeamConfigurationError("Beam redirect URL is invalid") from error
-        if (
-            not hostname
-            or parsed_redirect.username is not None
-            or parsed_redirect.password is not None
-            or port not in {None, 443}
-        ):
-            raise BeamConfigurationError("Beam redirect URL is invalid")
-        is_allowlisted = any(
-            (
-                hostname.endswith(f".{pattern[2:]}")
-                if pattern.startswith("*.")
-                else hostname == pattern
+        scheme = parsed_redirect.scheme.lower()
+        if scheme == "https":
+            try:
+                hostname = (parsed_redirect.hostname or "").lower().rstrip(".")
+                port = parsed_redirect.port
+            except ValueError as error:
+                raise BeamConfigurationError("Beam redirect URL is invalid") from error
+            if (
+                not redirect_url.startswith("https://")
+                or not hostname
+                or parsed_redirect.username is not None
+                or parsed_redirect.password is not None
+                or port not in {None, 443}
+            ):
+                raise BeamConfigurationError("Beam redirect URL is invalid")
+            is_allowlisted = any(
+                (
+                    hostname.endswith(f".{pattern[2:]}")
+                    if pattern.startswith("*.")
+                    else hostname == pattern
+                )
+                for pattern in allowed_redirect_hosts
             )
-            for pattern in allowed_redirect_hosts
-        )
-        if not is_allowlisted:
-            raise BeamConfigurationError(
-                f"Beam redirect URL host is not allowlisted: {hostname[:253]}"
-            )
+            if not is_allowlisted:
+                raise BeamConfigurationError(
+                    f"Beam redirect URL host is not allowlisted: {hostname[:253]}"
+                )
+        else:
+            allowed_schemes = (allowed_redirect_schemes or {}).get(response_method, ())
+            safe_scheme = scheme[:32] if scheme else "missing"
+            if scheme not in allowed_schemes:
+                raise BeamConfigurationError(
+                    f"Beam redirect URL scheme is not allowlisted: {safe_scheme}"
+                )
+            if (
+                not redirect_url.lower().startswith(f"{scheme}://")
+                or parsed_redirect.username is not None
+                or parsed_redirect.password is not None
+                or not (parsed_redirect.netloc or parsed_redirect.path)
+            ):
+                raise BeamConfigurationError("Beam redirect URL is invalid")
 
     return BeamAction(
         charge_id=charge_id,
@@ -256,6 +319,7 @@ class BeamClient:
         reference_id: str,
         expires_at: datetime,
         idempotency_key: str,
+        return_url: str | None = None,
     ) -> dict[str, Any]:
         if amount_satang <= 0:
             raise FinancialInvariantError("Beam charge amount must be positive")
@@ -269,7 +333,7 @@ class BeamClient:
                 "paymentMethodType": "QR_PROMPT_PAY",
             },
             "referenceId": reference_id,
-            "returnUrl": self._settings.beam_return_url,
+            "returnUrl": return_url or self._settings.beam_return_url,
         }
         return await self._request(
             "POST",
@@ -287,6 +351,7 @@ class BeamClient:
         payment_method: BeamPaymentMethod,
         device_type: BeamDeviceType,
         idempotency_key: str,
+        return_url: str | None = None,
     ) -> dict[str, Any]:
         if amount_satang <= 0:
             raise FinancialInvariantError("Beam charge amount must be positive")
@@ -312,7 +377,7 @@ class BeamClient:
             },
             "deviceType": device_type.value,
             "referenceId": reference_id,
-            "returnUrl": self._settings.beam_return_url,
+            "returnUrl": return_url or self._settings.beam_return_url,
         }
         return await self._request(
             "POST",

@@ -66,23 +66,33 @@ class FlowAccountClient:
                 raise FlowAccountConfigurationError(
                     f"FlowAccount integration is not ready: {self._settings.readiness_errors()}"
                 )
-            response = await self._client.post(
-                self._settings.token_path,
-                data={
-                    "grant_type": "client_credentials",
-                    "scope": "flowaccount-api",
-                    "client_id": self._settings.client_id.get_secret_value(),
-                    "client_secret": self._settings.client_secret.get_secret_value(),
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
+            try:
+                response = await self._client.post(
+                    self._settings.token_path,
+                    data={
+                        "grant_type": "client_credentials",
+                        "scope": "flowaccount-api",
+                        "client_id": self._settings.client_id.get_secret_value(),
+                        "client_secret": self._settings.client_secret.get_secret_value(),
+                    },
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as error:
+                raise FlowAccountRetryableError(
+                    "FlowAccount authentication is unavailable"
+                ) from error
             if response.status_code >= 500 or response.status_code == 429:
                 raise FlowAccountRetryableError(f"Token request failed with {response.status_code}")
             if response.status_code >= 400:
                 raise FlowAccountConfigurationError(
                     f"Token request failed with {response.status_code}"
                 )
-            body = response.json()
+            try:
+                body = response.json()
+            except ValueError as error:
+                raise FlowAccountConfigurationError(
+                    "Token response is not valid JSON"
+                ) from error
             access_token = body.get("access_token")
             if not isinstance(access_token, str) or not access_token:
                 raise FlowAccountConfigurationError("Token response did not include access_token")
@@ -119,8 +129,145 @@ class FlowAccountClient:
                 raise FlowAccountConfigurationError(
                     f"FlowAccount rejected the document with {response.status_code}"
                 )
-            body = response.json()
+            try:
+                body = response.json()
+            except ValueError as error:
+                raise FlowAccountAmbiguousCreateError(
+                    "FlowAccount create response is invalid and requires reconciliation"
+                ) from error
             if not isinstance(body, dict):
                 raise FlowAccountConfigurationError("FlowAccount returned an invalid response")
-            return body
+            if body.get("status") is False:
+                raise FlowAccountConfigurationError("FlowAccount rejected the document contract")
+            data = body.get("data")
+            if not isinstance(data, dict):
+                raise FlowAccountAmbiguousCreateError(
+                    "FlowAccount create response data requires reconciliation"
+                )
+            return data
         raise FlowAccountConfigurationError("FlowAccount authentication failed after refresh")
+
+    async def _authorized_get(
+        self, path: str, *, params: dict[str, Any] | None = None
+    ) -> Any:
+        for auth_attempt in range(2):
+            token = await self._access_token(force_refresh=auth_attempt == 1)
+            try:
+                response = await self._client.get(
+                    path,
+                    params=params,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as error:
+                raise FlowAccountRetryableError(
+                    "FlowAccount configuration validation is unavailable"
+                ) from error
+            if response.status_code == 401 and auth_attempt == 0:
+                self._token = None
+                continue
+            if response.status_code == 429 or response.status_code >= 500:
+                raise FlowAccountRetryableError(
+                    f"FlowAccount validation failed with {response.status_code}"
+                )
+            if response.status_code >= 400:
+                raise FlowAccountConfigurationError(
+                    f"FlowAccount validation was rejected with {response.status_code}"
+                )
+            try:
+                body = response.json()
+            except ValueError as error:
+                raise FlowAccountConfigurationError(
+                    "FlowAccount validation response is not valid JSON"
+                ) from error
+            if not isinstance(body, dict) or body.get("status") is False:
+                raise FlowAccountConfigurationError(
+                    "FlowAccount validation response is invalid"
+                )
+            return body.get("data")
+        raise FlowAccountConfigurationError("FlowAccount authentication failed after refresh")
+
+    async def validate_configuration(self) -> None:
+        company = await self._authorized_get(self._settings.company_info_path)
+        if not isinstance(company, dict):
+            raise FlowAccountConfigurationError("FlowAccount company response is invalid")
+        names = {
+            str(company.get(field, "")).strip().casefold()
+            for field in ("compnayName", "companyName", "companyNameEn")
+            if company.get(field)
+        }
+        if self._settings.expected_company_name.strip().casefold() not in names:
+            raise FlowAccountConfigurationError("FlowAccount company identity does not match")
+        if str(company.get("companyType", "")) not in {"10", "40", "50"}:
+            raise FlowAccountConfigurationError("FlowAccount company is not VAT registered")
+
+        contact = await self._authorized_get(
+            self._settings.contact_path_template.replace(
+                "{contactId}", self._settings.contact_id or ""
+            )
+        )
+        if isinstance(contact, dict) and isinstance(contact.get("list"), list):
+            contact = next(
+                (
+                    item
+                    for item in contact["list"]
+                    if isinstance(item, dict)
+                    and str(item.get("id", "")) == self._settings.contact_id
+                ),
+                None,
+            )
+        if not isinstance(contact, dict):
+            raise FlowAccountConfigurationError("FlowAccount contact response is invalid")
+        if (
+            str(contact.get("id", "")) != self._settings.contact_id
+            or str(contact.get("contactCode", "")) != self._settings.contact_code
+            or str(contact.get("contactName", "")) != self._settings.contact_name
+        ):
+            raise FlowAccountConfigurationError("FlowAccount walk-in contact does not match")
+
+        channels = await self._authorized_get(self._settings.other_channels_path)
+        if not isinstance(channels, list):
+            raise FlowAccountConfigurationError("FlowAccount channel response is invalid")
+        matches = [
+            channel
+            for channel in channels
+            if isinstance(channel, dict)
+            and str(channel.get("otherChannelsId", "")) == self._settings.other_channel_id
+            and str(channel.get("otherChannelsName", ""))
+            == self._settings.other_channel_name
+        ]
+        if len(matches) != 1:
+            raise FlowAccountConfigurationError("FlowAccount Other Channel does not match")
+
+    async def find_cash_invoices(
+        self, *, external_document_id: str, accounting_date: str
+    ) -> tuple[dict[str, Any], ...]:
+        matches: list[dict[str, Any]] = []
+        for current_page in range(1, 21):
+            body = await self._authorized_get(
+                self._settings.cash_invoice_list_path,
+                params={
+                    "currentPage": current_page,
+                    "pageSize": 100,
+                    "range": 5,
+                    "startDate": accounting_date,
+                    "endDate": accounting_date,
+                },
+            )
+            records = body.get("list") if isinstance(body, dict) else None
+            total = body.get("total") if isinstance(body, dict) else None
+            if not isinstance(records, list) or not isinstance(total, int):
+                raise FlowAccountConfigurationError(
+                    "FlowAccount reconciliation response is invalid"
+                )
+            matches.extend(
+                record
+                for record in records
+                if isinstance(record, dict)
+                and str(record.get("externalDocumentId", ""))
+                == external_document_id
+            )
+            if current_page * 100 >= total:
+                return tuple(matches)
+        raise FlowAccountRetryableError(
+            "FlowAccount reconciliation result exceeds the bounded scan"
+        )

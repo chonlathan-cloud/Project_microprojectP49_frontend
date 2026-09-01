@@ -104,7 +104,61 @@
         {"fieldPath": "lineIdentityHash", "order": "ASCENDING"},
         {"fieldPath": "startAt", "order": "DESCENDING"}
       ]
+    },
+    {
+      "collectionGroup": "accounting_exports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "paidAt", "order": "DESCENDING"}
+      ]
+    },
+    {
+      "collectionGroup": "accounting_exports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "purpose", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "paidAt", "order": "ASCENDING"}
+      ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "accounting_sync_attempts",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "accounting_exports",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "accounting_sync_runs",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "idempotency_records",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "audit_events",
+      "fieldPath": "retentionUntil",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "notification_outbox",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    }
+  ]
 }

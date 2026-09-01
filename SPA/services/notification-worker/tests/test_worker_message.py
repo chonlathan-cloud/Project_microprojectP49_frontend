@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from app.main import _render_admin_message, _test_prefix, app
+from app.main import _render_accounting_alert, _render_admin_message, _test_prefix, app
 from app.templates.booking import AdminNotificationBookingView, AdminNotificationParticipantView
 
 
@@ -29,6 +29,28 @@ def test_legacy_admin_message_does_not_copy_unprojected_root_health_detail(monke
     assert message.startswith("[TEST]")
     assert "รายละเอียดสุขภาพแสดงใน Flex Summary" in message
     assert "must never leave Firestore" not in message
+
+
+def test_accounting_alert_contains_only_operational_projection(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "test")
+    message = _render_accounting_alert(
+        {
+            "environment": "test",
+            "result": "REVIEW_REQUIRED",
+            "runId": "run-1",
+            "aggregateId": "fa-1",
+            "safeErrorCode": "FLOWACCOUNT_PAYLOAD_INVALID",
+            "adminUrl": "https://admin.example/accounting",
+            "customerName": "must not appear",
+            "phone": "+66812345678",
+            "grossAmount": "999.00",
+        }
+    )
+    assert "run-1" in message
+    assert "FLOWACCOUNT_PAYLOAD_INVALID" in message
+    assert "must not appear" not in message
+    assert "+66812345678" not in message
+    assert "999.00" not in message
 
 
 class FakeDocument:

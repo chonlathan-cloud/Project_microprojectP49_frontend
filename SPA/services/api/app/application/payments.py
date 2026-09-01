@@ -28,6 +28,7 @@ from app.integrations.beam import (
     BeamConfigurationError,
     BeamRejectedError,
     BeamRetryableError,
+    build_payment_return_url,
     normalize_charge_action,
 )
 
@@ -96,6 +97,12 @@ class PaymentStatusResult:
     paid_at: datetime | None
 
 
+@dataclass(frozen=True, slots=True)
+class CustomerPaymentResult(PaymentStatusResult):
+    attempt_id: str
+    payment_method: BeamPaymentMethod
+
+
 class PaymentRepository(Protocol):
     async def get_options(
         self, booking_public_id: str, principal: LinePrincipal, now: datetime
@@ -150,6 +157,10 @@ class PaymentRepository(Protocol):
     ) -> None: ...
 
     async def resolve_status(self, status_token: str) -> PaymentStatusResult: ...
+
+    async def resolve_customer_attempt(
+        self, attempt_id: str, principal: LinePrincipal
+    ) -> CustomerPaymentResult: ...
 
     async def record_cash(
         self,
@@ -319,6 +330,16 @@ class PaymentService:
             request_digest=request_digest,
             now=datetime.now(UTC),
         )
+        try:
+            return_url = build_payment_return_url(
+                self._settings.beam_return_url,
+                prepared.attempt_id,
+            )
+        except BeamConfigurationError:
+            await self._repository.mark_create_failed(
+                prepared.attempt_id, datetime.now(UTC)
+            )
+            raise PersistenceUnavailable("Beam payment return URL is invalid") from None
         raw = None
         try:
             async with BeamClient(self._settings) as client:
@@ -328,6 +349,7 @@ class PaymentService:
                         reference_id=prepared.provider_reference_id,
                         expires_at=prepared.requested_expires_at,
                         idempotency_key=prepared.provider_idempotency_key,
+                        return_url=return_url,
                     )
                 else:
                     raw = await client.create_mobile_banking_charge(
@@ -336,6 +358,7 @@ class PaymentService:
                         payment_method=payment_method,
                         device_type=device_type,
                         idempotency_key=prepared.provider_idempotency_key,
+                        return_url=return_url,
                     )
             action = normalize_charge_action(
                 raw,
@@ -343,6 +366,9 @@ class PaymentService:
                 requested_expires_at=prepared.requested_expires_at,
                 allowed_redirect_hosts=(
                     self._settings.configured_beam_redirect_allowed_hosts
+                ),
+                allowed_redirect_schemes=(
+                    self._settings.configured_beam_redirect_allowed_schemes
                 ),
             )
         except BeamRejectedError:
@@ -422,6 +448,11 @@ class PaymentService:
 
     async def resolve_status(self, status_token: str) -> PaymentStatusResult:
         return await self._repository.resolve_status(status_token)
+
+    async def resolve_customer_attempt(
+        self, attempt_id: str, principal: LinePrincipal
+    ) -> CustomerPaymentResult:
+        return await self._repository.resolve_customer_attempt(attempt_id, principal)
 
     async def record_cash(
         self,

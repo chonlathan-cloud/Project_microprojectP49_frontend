@@ -152,8 +152,19 @@ if values.get("BEAM_API_BASE_URL", "").rstrip("/") != "https://api.beamcheckout.
     errors.append("BEAM_API_BASE_URL must be https://api.beamcheckout.com")
 
 return_url = urlparse(values.get("BEAM_RETURN_URL", ""))
-if return_url.scheme != "https" or not return_url.hostname or "-test" in return_url.hostname:
-    errors.append("BEAM_RETURN_URL must be a non-test HTTPS production URL")
+if (
+    return_url.scheme != "https"
+    or not return_url.hostname
+    or "-test" in return_url.hostname
+    or return_url.path.rstrip("/") != "/payment/result"
+    or return_url.params
+    or return_url.query
+    or return_url.fragment
+):
+    errors.append(
+        "BEAM_RETURN_URL must be a non-test HTTPS production /payment/result URL "
+        "without params, query, or fragment"
+    )
 
 methods = {
     method.strip().upper()
@@ -166,6 +177,25 @@ if mobile_methods and values.get("BEAM_PRODUCTION_MOBILE_BANKING_CONFIRMED", "")
         "set BEAM_PRODUCTION_MOBILE_BANKING_CONFIRMED=true only after Production Lighthouse "
         "shows every configured mobile method as available"
     )
+
+scheme_entries = {}
+for raw_entry in values.get("BEAM_REDIRECT_ALLOWED_SCHEMES", "").split(","):
+    entry = raw_entry.strip()
+    if not entry or "=" not in entry:
+        continue
+    method, scheme = entry.split("=", 1)
+    scheme_entries.setdefault(method.strip().upper(), set()).add(scheme.strip().lower())
+
+required_schemes = {
+    "SCB_EASY": "scbeasy",
+    "KRUNGSRI_APP": "krungsri-kma",
+    "BANGKOK_BANK_APP": "bualuangmbanking",
+}
+for method, scheme in required_schemes.items():
+    if method in methods and scheme not in scheme_entries.get(method, set()):
+        errors.append(
+            f"BEAM_REDIRECT_ALLOWED_SCHEMES must include {method}={scheme}"
+        )
 if values.get("BEAM_PRODUCTION_WEBHOOK_REGISTERED", "").lower() != "true":
     errors.append(
         "set BEAM_PRODUCTION_WEBHOOK_REGISTERED=true only after the production webhook "

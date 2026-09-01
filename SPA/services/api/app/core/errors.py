@@ -106,3 +106,16 @@ class IdentityProviderUnavailable(DomainError):
 class PersistenceUnavailable(DomainError):
     code = "PERSISTENCE_UNAVAILABLE"
     status_code = 503
+
+
+class AccountingExportNotEligible(DomainError):
+    code = "ACCOUNTING_EXPORT_NOT_ELIGIBLE"
+
+
+class AccountingExportPurposeUnsupported(DomainError):
+    code = "ACCOUNTING_EXPORT_PURPOSE_UNSUPPORTED"
+    status_code = 422
+
+
+class AccountingExportAlreadySynced(DomainError):
+    code = "ACCOUNTING_EXPORT_ALREADY_SYNCED"

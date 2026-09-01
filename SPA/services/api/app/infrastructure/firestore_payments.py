@@ -11,6 +11,7 @@ from google.cloud.firestore_v1.async_transaction import async_transactional
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from app.application.payments import (
+    CustomerPaymentResult,
     PaymentOptions,
     PaymentReconciliationTarget,
     PaymentStatusResult,
@@ -344,6 +345,7 @@ def _export_data(export: AccountingExport, now: datetime) -> dict[str, Any]:
         "leaseExpiresAt": None,
         "createdAt": now,
         "updatedAt": now,
+        "expiresAt": export.paid_at + timedelta(days=365 * 7),
     }
 
 
@@ -1281,6 +1283,74 @@ class FirestorePaymentRepository:
             )
         except GoogleAPICallError as error:
             raise PersistenceUnavailable("Payment status store is unavailable") from error
+
+    async def resolve_customer_attempt(
+        self, attempt_id: str, principal: LinePrincipal
+    ) -> CustomerPaymentResult:
+        """Resolve a result-page attempt only for its linked LINE customer.
+
+        The attempt ID is safe to place in the provider return URL, but it is not
+        treated as authorization. The verified LINE identity remains mandatory.
+        """
+        try:
+            attempt_snapshot = await self._client.collection("payment_attempts").document(
+                attempt_id
+            ).get()
+            attempt = attempt_snapshot.to_dict() or {}
+            booking_doc_id = attempt.get("bookingDocId")
+            payment_id = attempt.get("paymentId")
+            if (
+                not attempt_snapshot.exists
+                or not isinstance(booking_doc_id, str)
+                or not booking_doc_id
+                or not isinstance(payment_id, str)
+                or not payment_id
+            ):
+                raise AuthenticationInvalid("Payment attempt is unavailable")
+
+            link_query = (
+                self._client.collection("line_booking_links")
+                .where(filter=FieldFilter("lineUserId", "==", principal.user_id))
+                .limit(50)
+            )
+            links = [snapshot async for snapshot in link_query.stream()]
+            if not any(
+                (link.to_dict() or {}).get("bookingDocId") == booking_doc_id
+                and (link.to_dict() or {}).get("channelId") == principal.channel_id
+                and (link.to_dict() or {}).get("active") is True
+                for link in links
+            ):
+                raise AuthenticationInvalid("Payment attempt is unavailable")
+
+            payment_snapshot = await self._client.collection("payments").document(
+                payment_id
+            ).get()
+            payment = (
+                _payment_from_data(payment_snapshot.id, payment_snapshot.to_dict() or {})
+                if payment_snapshot.exists
+                else None
+            )
+            if payment is None or payment.booking_doc_id != booking_doc_id:
+                raise AuthenticationInvalid("Payment attempt is unavailable")
+            try:
+                payment_method = BeamPaymentMethod(str(attempt.get("paymentMethod", "")))
+            except ValueError as error:
+                raise PersistenceUnavailable("Payment attempt method is invalid") from error
+            status = _status_result(payment)
+            return CustomerPaymentResult(
+                attempt_id=attempt_snapshot.id,
+                payment_method=payment_method,
+                payment_id=status.payment_id,
+                booking_id=status.booking_id,
+                status=status.status,
+                source=status.source,
+                service_amount_satang=status.service_amount_satang,
+                tip_amount_satang=status.tip_amount_satang,
+                gross_amount_satang=status.gross_amount_satang,
+                paid_at=status.paid_at,
+            )
+        except GoogleAPICallError as error:
+            raise PersistenceUnavailable("Payment result store is unavailable") from error
 
     async def record_cash(
         self,

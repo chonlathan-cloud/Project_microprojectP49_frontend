@@ -6,7 +6,7 @@
 | Scope | Customer payment after service, optional tip, Admin cash receipt/deposit, Beam Checkout integration, Admin payment visibility |
 | Surfaces | Customer Web / LIFF, Admin Web, SPA API, private GCS evidence bucket, Notification Worker |
 | Timezone / currency | `Asia/Bangkok` / THB in integer satang |
-| Last reviewed | 26 August 2026 |
+| Last reviewed | 1 September 2026 |
 
 ## 1. Executive decision
 
@@ -74,6 +74,17 @@ Recommended delivery path:
 - Target Charges API with **mobile banking + QR PromptPay only** when the merchant account supports it.
 - Do not accept PAN/CVV or implement card UI in SPA.
 - If the merchant arrangement supports only hosted Payment Links, ship Payment Links first and record downloadable QR/direct-bank as a deferred capability rather than simulating it.
+
+### 3.2 Documented mobile-banking request and redirect contract
+
+For direct Charges API requests, use Beam's documented request objects and a real mobile `deviceType`:
+
+| Method | Request object | Required device | Documented app URI scheme |
+| --- | --- | --- | --- |
+| `KRUNGSRI_APP` | `"krungsri": {}` | `IOS` or `ANDROID` | `krungsri-kma://` |
+| `BANGKOK_BANK_APP` | `"bbl": {}` | `IOS` or `ANDROID` | `bualuangmbanking://` |
+
+The API must reject `WEB` for these methods. The browser receives only Beam's reduced `REDIRECT` action. Custom schemes are allowlisted per payment method so one bank's app link cannot be replayed as another bank's redirect. Payment completion remains webhook/provider-lookup authoritative.
 
 ## 4. Business rules to approve
 
@@ -248,6 +259,8 @@ Tip selection must not be preselected to a positive amount. The final total must
 
 ### 5.6 Result and recovery
 
+- Use `/payment/result` as the customer return page for both mobile-banking and PromptPay flows. The API appends only the non-secret `attempt` identifier to the configured base return URL.
+- The result page must exchange that attempt identifier together with a freshly verified LINE ID token. The API must confirm an active `line_booking_links` ownership record before returning payment details; an attempt identifier is correlation data, not authorization.
 - The return page shows “กำลังตรวจสอบ” until SPA's server-side status is authoritative.
 - Do not display “ชำระสำเร็จ” from a redirect query string.
 - Poll SPA API with bounded exponential backoff for a short period; then show a safe delayed-confirmation state.
@@ -568,6 +581,7 @@ The QR returned by Beam remains ephemeral and is never written to this bucket.
 | `POST` | `/api/v1/public/my-bookings:resolve` | Verified LINE ID token in body | Return customer-safe linked Bookings |
 | `POST` | `/api/v1/public/bookings/{bookingId}/payment-options` | LINE ID token or Secure Status bearer | Eligibility, final amount, tip options, enabled methods |
 | `POST` | `/api/v1/public/bookings/{bookingId}/payment-attempts` | Same bearer plus `Idempotency-Key` | Freeze tip/method and create Beam attempt |
+| `POST` | `/api/v1/public/payment-attempts/{attemptId}:resolve` | Verified LINE ID token in body | Resolve the authenticated result page after a Beam return |
 | `POST` | `/api/v1/public/payment-status:resolve` | High-entropy payment status bearer | Customer-safe payment result |
 | `POST` | `/api/v1/public/payment-attempts/{attemptId}:refresh` | Payment status bearer | Reconcile an ambiguous/expired attempt without creating another |
 
@@ -722,7 +736,7 @@ If evidence upload succeeds but confirmation fails, keep the deposit recoverable
 - Use separate test and production secrets and webhook endpoints.
 - Use HTTP Basic authentication only from server-side integration code over HTTPS.
 - Decode the base64 webhook HMAC key as Beam documents, calculate HMAC-SHA256 over the exact raw request bytes, and use a constant-time signature comparison.
-- Allowlist provider hosts and validate all redirect URLs returned by Beam before sending them to the browser.
+- Allowlist HTTPS provider hosts and exact method-scoped bank-app URI schemes; validate every redirect returned by Beam before sending it to the browser. Never allow a custom scheme globally or reuse one bank's scheme for another payment method.
 - Never log Authorization, API key, webhook body, QR raw data, customer phone, LINE token, status bearer, or health detail.
 - Never log evidence upload/read URLs, cash-photo contents, object checksums, or unrestricted GCS paths.
 - Do not put health detail, full phone, nickname, or internal Firestore IDs into Beam `referenceId` or provider metadata.
@@ -929,6 +943,8 @@ Provider/UAT evidence:
 - [Beam Payment Links](https://docs.beamcheckout.com/payment-links/payment-links)
 - [Beam Payment Links integration](https://docs.beamcheckout.com/payment-links/payment-links-integration)
 - [Beam Charges API](https://docs.beamcheckout.com/charges/charges-api)
+- [Krungsri Pay with krungsri app](https://developers.krungsri.com/usecases/payment/pay-with-krungsri-app)
+- [Bangkok Bank App-to-App API](https://apiportal.bangkokbank.com/th/api/app-to-app/api-documents)
 - [Beam Charges integration](https://docs.beamcheckout.com/charges/charges-integration)
 - [Beam webhook authentication](https://docs.beamcheckout.com/webhook-authentication)
 - [Beam webhook event types](https://docs.beamcheckout.com/webhook-event-types)

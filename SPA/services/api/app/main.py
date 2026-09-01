@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.v1.accounting import router as accounting_router
 from app.api.v1.bookings import router as bookings_router
 from app.api.v1.campaign_admin import router as campaign_admin_router
 from app.api.v1.campaigns import router as campaigns_router
@@ -34,6 +35,7 @@ app.include_router(webhooks_router)
 app.include_router(payment_public_router)
 app.include_router(payment_admin_router)
 app.include_router(payment_webhook_router)
+app.include_router(accounting_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
@@ -74,6 +76,9 @@ async def ready() -> dict[str, object]:
         "beamPaymentConfiguration": (
             "ready" if not settings.beam_readiness_errors() else "not_ready"
         ),
+        "accountingConfiguration": (
+            "ready" if not settings.accounting_readiness_errors() else "not_ready"
+        ),
         "firestore": {
             "status": "ready" if firestore_ready else "unavailable",
             "database": settings.firestore_database,
@@ -85,7 +90,10 @@ async def ready() -> dict[str, object]:
             "database": settings.firestore_database,
             "error": firestore_error,
         }
-    reason_codes = list(settings.beam_readiness_errors())
+    reason_codes = [
+        *settings.beam_readiness_errors(),
+        *settings.accounting_readiness_errors(),
+    ]
     return {
         "status": "ready" if firestore_ready and not reason_codes else "degraded",
         "dependencies": dependencies,

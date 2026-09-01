@@ -7,7 +7,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-from app.application.payments import PaymentService, PaymentStatusResult
+from app.application.payments import (
+    CustomerPaymentResult,
+    PaymentService,
+    PaymentStatusResult,
+)
 from app.core.auth import require_admin_user
 from app.core.errors import AuthenticationInvalid, ValidationDomainError
 from app.core.settings import get_settings
@@ -136,6 +140,11 @@ class PaymentStatusResponse(StrictModel):
     paid_at: datetime | None
 
 
+class CustomerPaymentResultResponse(PaymentStatusResponse):
+    attempt_id: str
+    payment_method: BeamPaymentMethod
+
+
 class RecordCashRequest(StrictModel):
     tip_amount_satang: int = Field(ge=0)
     expected_version: int = Field(ge=1)
@@ -226,6 +235,24 @@ async def create_payment_attempt(
     )
     response.headers["Cache-Control"] = "no-store, private"
     return PaymentAttemptResponse.model_validate(result, from_attributes=True)
+
+
+@public_router.post(
+    "/payment-attempts/{attempt_id}:resolve",
+    response_model=CustomerPaymentResultResponse,
+)
+async def resolve_customer_payment_attempt(
+    attempt_id: str,
+    request: LinePaymentRequest,
+    response: Response,
+    payments: Annotated[PaymentService, Depends(get_payment_service)],
+) -> CustomerPaymentResultResponse:
+    principal = _line_principal(request.line_id_token)
+    result: CustomerPaymentResult = await payments.resolve_customer_attempt(
+        attempt_id, principal
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return CustomerPaymentResultResponse.model_validate(result, from_attributes=True)
 
 
 @public_router.post(

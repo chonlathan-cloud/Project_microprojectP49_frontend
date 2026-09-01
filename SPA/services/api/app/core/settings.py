@@ -11,6 +11,22 @@ _BEAM_REDIRECT_HOST_PATTERN = re.compile(
     r"^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]"
     r"(?:[a-z0-9-]{0,61}[a-z0-9])?$"
 )
+_BEAM_REDIRECT_SCHEME_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{1,31}$")
+_FORBIDDEN_BEAM_REDIRECT_SCHEMES = {
+    "about",
+    "blob",
+    "data",
+    "file",
+    "http",
+    "https",
+    "javascript",
+    "vbscript",
+}
+_REQUIRED_BEAM_REDIRECT_SCHEMES = {
+    BeamPaymentMethod.SCB_EASY: "scbeasy",
+    BeamPaymentMethod.KRUNGSRI_APP: "krungsri-kma",
+    BeamPaymentMethod.BANGKOK_BANK_APP: "bualuangmbanking",
+}
 
 
 class Settings(BaseSettings):
@@ -48,9 +64,21 @@ class Settings(BaseSettings):
     beam_redirect_allowed_hosts: str = (
         "beamcheckout.com,*.beamcheckout.com,beamcheckout.co,*.beamcheckout.co"
     )
+    beam_redirect_allowed_schemes: str = (
+        "SCB_EASY=scbeasy,"
+        "KRUNGSRI_APP=krungsri-kma,"
+        "BANGKOK_BANK_APP=bualuangmbanking"
+    )
     beam_production_mobile_banking_confirmed: bool = False
     beam_production_webhook_registered: bool = False
     tip_custom_max_satang: int | None = None
+    accounting_sync_enabled: bool = False
+    accounting_worker_url: str | None = None
+    accounting_worker_oidc_audience: str | None = None
+    accounting_tasks_location: str = "asia-southeast1"
+    accounting_tasks_queue: str | None = None
+    accounting_tasks_invoker_service_account: str | None = None
+    flowaccount_document_allowed_hosts: str = "flowaccount.com,*.flowaccount.com"
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -94,6 +122,80 @@ class Settings(BaseSettings):
                 hosts.append(normalized)
         return tuple(hosts)
 
+    @property
+    def configured_flowaccount_document_hosts(self) -> tuple[str, ...]:
+        return tuple(
+            value.strip().lower().rstrip(".")
+            for value in self.flowaccount_document_allowed_hosts.split(",")
+            if value.strip()
+        )
+
+    def accounting_readiness_errors(self) -> tuple[str, ...]:
+        if not self.accounting_sync_enabled:
+            return ("ACCOUNTING_SYNC_DISABLED",)
+        missing: list[str] = []
+        for code, value in (
+            ("ACCOUNTING_WORKER_URL_MISSING", self.accounting_worker_url),
+            ("ACCOUNTING_WORKER_AUDIENCE_MISSING", self.accounting_worker_oidc_audience),
+            ("ACCOUNTING_TASKS_QUEUE_MISSING", self.accounting_tasks_queue),
+            (
+                "ACCOUNTING_TASKS_INVOKER_MISSING",
+                self.accounting_tasks_invoker_service_account,
+            ),
+        ):
+            if not value:
+                missing.append(code)
+        if self.accounting_worker_url and not self.accounting_worker_url.startswith("https://"):
+            missing.append("ACCOUNTING_WORKER_URL_INVALID")
+        return tuple(missing)
+
+    @property
+    def configured_beam_redirect_allowed_schemes(
+        self,
+    ) -> dict[BeamPaymentMethod, tuple[str, ...]]:
+        schemes: dict[BeamPaymentMethod, list[str]] = {}
+        for value in self.beam_redirect_allowed_schemes.split(","):
+            entry = value.strip()
+            if not entry or "=" not in entry:
+                continue
+            raw_method, raw_scheme = entry.split("=", 1)
+            try:
+                method = BeamPaymentMethod(raw_method.strip().upper())
+            except ValueError:
+                continue
+            scheme = raw_scheme.strip().lower()
+            if (
+                method is BeamPaymentMethod.QR_PROMPT_PAY
+                or _BEAM_REDIRECT_SCHEME_PATTERN.fullmatch(scheme) is None
+                or scheme in _FORBIDDEN_BEAM_REDIRECT_SCHEMES
+            ):
+                continue
+            method_schemes = schemes.setdefault(method, [])
+            if scheme not in method_schemes:
+                method_schemes.append(scheme)
+        return {method: tuple(values) for method, values in schemes.items()}
+
+    def _beam_redirect_schemes_are_valid(self) -> bool:
+        for value in self.beam_redirect_allowed_schemes.split(","):
+            entry = value.strip()
+            if not entry:
+                continue
+            if "=" not in entry:
+                return False
+            raw_method, raw_scheme = entry.split("=", 1)
+            try:
+                method = BeamPaymentMethod(raw_method.strip().upper())
+            except ValueError:
+                return False
+            scheme = raw_scheme.strip().lower()
+            if (
+                method is BeamPaymentMethod.QR_PROMPT_PAY
+                or _BEAM_REDIRECT_SCHEME_PATTERN.fullmatch(scheme) is None
+                or scheme in _FORBIDDEN_BEAM_REDIRECT_SCHEMES
+            ):
+                return False
+        return True
+
     def beam_readiness_errors(self) -> tuple[str, ...]:
         if not self.beam_enabled:
             return ("BEAM_DISABLED",)
@@ -131,8 +233,30 @@ class Settings(BaseSettings):
             for host in redirect_hosts
         ):
             missing.append("BEAM_REDIRECT_ALLOWED_HOSTS_INVALID")
+        if not self._beam_redirect_schemes_are_valid():
+            missing.append("BEAM_REDIRECT_ALLOWED_SCHEMES_INVALID")
+        return_url = urlparse(self.beam_return_url or "")
+        return_hostname = (return_url.hostname or "").lower().rstrip(".")
+        if (
+            not return_hostname
+            or return_url.scheme not in {"http", "https"}
+            or (return_url.scheme == "http" and return_hostname not in {"localhost", "127.0.0.1"})
+            or return_url.username is not None
+            or return_url.password is not None
+            or return_url.path.rstrip("/") != "/payment/result"
+            or return_url.params
+            or return_url.query
+            or return_url.fragment
+        ):
+            missing.append("BEAM_RETURN_URL_INVALID")
+        configured_schemes = self.configured_beam_redirect_allowed_schemes
+        for method, required_scheme in _REQUIRED_BEAM_REDIRECT_SCHEMES.items():
+            if (
+                method in self.configured_beam_payment_methods
+                and required_scheme not in configured_schemes.get(method, ())
+            ):
+                missing.append(f"BEAM_REDIRECT_SCHEME_MISSING_{method.value}")
         if self.deployment_environment == "prod":
-            return_url = urlparse(self.beam_return_url or "")
             if (
                 return_url.scheme != "https"
                 or not return_url.hostname

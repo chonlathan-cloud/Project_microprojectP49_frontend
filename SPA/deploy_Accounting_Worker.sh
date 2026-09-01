@@ -6,12 +6,12 @@ REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd)"
 
 PROJECT_ID="${PROJECT_ID:-the49-487609}"
 REGION="${REGION:-asia-southeast1}"
-SERVICE_NAME="${SERVICE_NAME:-spa-accounting-worker-test}"
+SERVICE_NAME="${SERVICE_NAME:-}"
 SOURCE_DIR="${SOURCE_DIR:-$SCRIPT_DIR/services/accounting-worker}"
 ARTIFACT_REPOSITORY="${ARTIFACT_REPOSITORY:-spa}"
 IMAGE_NAME="${IMAGE_NAME:-spa-accounting-worker}"
 IMAGE_TAG="${IMAGE_TAG:-}"
-RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-spa-accounting-worker-sa@${PROJECT_ID}.iam.gserviceaccount.com}"
+RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-}"
 IMPERSONATE_SERVICE_ACCOUNT="${IMPERSONATE_SERVICE_ACCOUNT:-project-the49@the49-487609.iam.gserviceaccount.com}"
 CHECK_MAIN_BRANCH="${CHECK_MAIN_BRANCH:-true}"
 DEPLOY_ENVIRONMENT="${DEPLOY_ENVIRONMENT:-test}"
@@ -22,10 +22,34 @@ case "$DEPLOY_ENVIRONMENT" in
     exit 1
     ;;
 esac
+if [[ -z "$SERVICE_NAME" ]]; then
+  SERVICE_NAME="spa-accounting-worker${DEPLOY_ENVIRONMENT:+-${DEPLOY_ENVIRONMENT}}"
+  [[ "$DEPLOY_ENVIRONMENT" == "prod" ]] && SERVICE_NAME="spa-accounting-worker"
+fi
+if [[ -z "$RUNTIME_SERVICE_ACCOUNT" ]]; then
+  if [[ "$DEPLOY_ENVIRONMENT" == "test" ]]; then
+    RUNTIME_SERVICE_ACCOUNT="spa-accounting-worker-test-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+  else
+    RUNTIME_SERVICE_ACCOUNT="spa-accounting-worker-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+  fi
+fi
+if [[ "$DEPLOY_ENVIRONMENT" == "test" && "$SERVICE_NAME" != *-test ]]; then
+  echo "ERROR: Test Accounting Worker service name must end in '-test'."
+  exit 1
+fi
+if [[ "$DEPLOY_ENVIRONMENT" == "prod" && "$SERVICE_NAME" != "spa-accounting-worker" ]]; then
+  echo "ERROR: Production Accounting Worker must use canonical service 'spa-accounting-worker'."
+  exit 1
+fi
 FLOWACCOUNT_SYNC_ENABLED="${FLOWACCOUNT_SYNC_ENABLED:-false}"
 ENV_FILE="${ENV_FILE:-$SOURCE_DIR/.env-${DEPLOY_ENVIRONMENT}}"
 FLOWACCOUNT_CLIENT_ID_SECRET="${FLOWACCOUNT_CLIENT_ID_SECRET:-spa-flowaccount-client-id-${DEPLOY_ENVIRONMENT}}"
 FLOWACCOUNT_CLIENT_SECRET="${FLOWACCOUNT_CLIENT_SECRET:-spa-flowaccount-client-secret-${DEPLOY_ENVIRONMENT}}"
+if [[ "$FLOWACCOUNT_CLIENT_ID_SECRET" != "spa-flowaccount-client-id-${DEPLOY_ENVIRONMENT}" \
+  || "$FLOWACCOUNT_CLIENT_SECRET" != "spa-flowaccount-client-secret-${DEPLOY_ENVIRONMENT}" ]]; then
+  echo "ERROR: FlowAccount secret names must match the selected deployment environment."
+  exit 1
+fi
 
 for required_command in gcloud git python3; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
@@ -54,6 +78,25 @@ cleanup() {
   rm -f "$tmp_env_yaml"
 }
 trap cleanup EXIT
+
+if [[ "$FLOWACCOUNT_SYNC_ENABLED" == "true" ]]; then
+  for secret_name in "$FLOWACCOUNT_CLIENT_ID_SECRET" "$FLOWACCOUNT_CLIENT_SECRET"; do
+    latest_state="$(gcloud "${GCLOUD_ARGS[@]}" secrets versions describe latest \
+      --secret "$secret_name" --project "$PROJECT_ID" --format='value(state)' 2>/dev/null || true)"
+    if [[ "$latest_state" != "ENABLED" ]]; then
+      echo "ERROR: Secret '$secret_name' has no enabled latest version."
+      exit 1
+    fi
+    accessor_role="$(gcloud "${GCLOUD_ARGS[@]}" secrets get-iam-policy "$secret_name" \
+      --project "$PROJECT_ID" --flatten='bindings[]' \
+      --filter="bindings.role=roles/secretmanager.secretAccessor AND bindings.members=serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" \
+      --format='value(bindings.role)' 2>/dev/null || true)"
+    if [[ "$accessor_role" != "roles/secretmanager.secretAccessor" ]]; then
+      echo "ERROR: Runtime identity lacks direct Secret Accessor on '$secret_name'."
+      exit 1
+    fi
+  done
+fi
 
 python3 - "$ENV_FILE" "$tmp_env_yaml" "$DEPLOY_ENVIRONMENT" "$FLOWACCOUNT_SYNC_ENABLED" <<'PY'
 import json

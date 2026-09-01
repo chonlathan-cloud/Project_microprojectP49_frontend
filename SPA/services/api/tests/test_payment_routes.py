@@ -3,7 +3,12 @@ from datetime import UTC, datetime
 from fastapi.testclient import TestClient
 
 from app.api.v1 import payments as payment_routes
-from app.application.payments import PaymentAttemptResult, PaymentOptions, PaymentStatusResult
+from app.application.payments import (
+    CustomerPaymentResult,
+    PaymentAttemptResult,
+    PaymentOptions,
+    PaymentStatusResult,
+)
 from app.core.auth import require_admin_user
 from app.core.types import BeamPaymentMethod, PaymentSource, PaymentStatus
 from app.main import app
@@ -62,6 +67,23 @@ class Payments:
             tip_amount_satang=2_000,
             gross_amount_satang=37_000,
             paid_at=datetime(2026, 8, 31, 7, 50, tzinfo=UTC),
+        )
+
+    async def resolve_customer_attempt(self, attempt_id, principal):
+        assert attempt_id == "pat_001"
+        assert principal.user_id == "U-trusted"
+        assert principal.channel_id == "line-channel"
+        return CustomerPaymentResult(
+            payment_id="pay_001",
+            booking_id="BK-001",
+            status=PaymentStatus.PAID,
+            source=PaymentSource.BEAM,
+            service_amount_satang=35_000,
+            tip_amount_satang=2_000,
+            gross_amount_satang=37_000,
+            paid_at=datetime(2026, 8, 31, 7, 50, tzinfo=UTC),
+            attempt_id="pat_001",
+            payment_method=BeamPaymentMethod.KPLUS,
         )
 
     async def record_cash(self, **kwargs):
@@ -123,6 +145,16 @@ def test_customer_payment_routes_use_line_identity_and_no_store(monkeypatch) -> 
         )
         assert resolved.status_code == 200
         assert resolved.json()["status"] == "PAID"
+
+        customer_result = client.post(
+            "/api/v1/public/payment-attempts/pat_001:resolve",
+            json={"lineIdToken": "line-token"},
+        )
+        assert customer_result.status_code == 200
+        assert customer_result.headers["cache-control"] == "no-store, private"
+        assert customer_result.json()["attemptId"] == "pat_001"
+        assert customer_result.json()["paymentMethod"] == "KPLUS"
+        assert customer_result.json()["status"] == "PAID"
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous_overrides)

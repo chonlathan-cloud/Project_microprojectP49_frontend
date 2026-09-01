@@ -156,6 +156,25 @@ test("mobile customer can choose a bank redirect and resume verified payment sta
       }
     });
   });
+  await page.route("**/api/spa/api/v1/public/payment-attempts/pat_mobile_001:resolve", async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      lineIdToken: "test-line-id-token-with-minimum-length"
+    });
+    await route.fulfill({
+      json: {
+        attemptId: "pat_mobile_001",
+        paymentMethod: "KPLUS",
+        paymentId: "pay_mobile_001",
+        bookingId: "BK-MOBILE-001",
+        status: "PAID",
+        source: "BEAM",
+        serviceAmountSatang: 60000,
+        tipAmountSatang: 0,
+        grossAmountSatang: 60000,
+        paidAt: "2026-09-01T10:05:00Z"
+      }
+    });
+  });
 
   await page.goto(`${customerUrl}/my-bookings`, { waitUntil: "networkidle" });
   await page.getByRole("button", { name: "ชำระเงิน" }).click();
@@ -164,6 +183,8 @@ test("mobile customer can choose a bank redirect and resume verified payment sta
   await expect(page.getByRole("radio", { name: /Krungsri App/ })).toBeVisible();
   await expect(page.getByRole("radio", { name: /Bangkok Bank/ })).toBeVisible();
   await expect(page.getByRole("radio", { name: /PromptPay QR/ })).toBeVisible();
+  await expect(page.locator(".payment-method-logo")).toHaveCount(5);
+  await expect(page.locator(".payment-method-logo").first()).toHaveJSProperty("complete", true);
   for (const viewport of [
     { width: 360, height: 800 },
     { width: 390, height: 844 },
@@ -181,8 +202,139 @@ test("mobile customer can choose a bank redirect and resume verified payment sta
   await page.getByRole("button", { name: "ดำเนินการชำระเงิน" }).click();
   await expect(page).toHaveURL("https://checkout.beamcheckout.com/test");
 
+  await page.goto(`${customerUrl}/payment/result?attempt=pat_mobile_001`, { waitUntil: "networkidle" });
+  await expect(page.getByRole("heading", { name: "ชำระเงินเรียบร้อย" })).toBeVisible();
+  await expect(page.getByText("BK-MOBILE-001")).toBeVisible();
+  await expect(page.getByText("K PLUS")).toBeVisible();
+  await expect(page.getByRole("link", { name: "ดูการจองของฉัน" })).toBeVisible();
+  for (const viewport of [
+    { width: 360, height: 800 },
+    { width: 390, height: 844 },
+    { width: 430, height: 932 }
+  ]) {
+    await page.setViewportSize(viewport);
+    expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+  await page.getByRole("button", { name: "EN", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Payment completed" })).toBeVisible();
+});
+
+test("payment result never claims success without a valid attempt reference", async ({ page }) => {
+  await page.goto(`${customerUrl}/payment/result`, { waitUntil: "networkidle" });
+  await expect(page.getByRole("heading", { name: "ไม่พบรายการชำระเงิน" })).toBeVisible();
+  await expect(page.getByText("ชำระเงินเรียบร้อย")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "ดูการจองของฉัน" })).toBeVisible();
+});
+
+test("mobile customer can save a PromptPay QR image", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "QR save is validated on the mobile payment UI");
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "liff", {
+      value: {
+        init: async () => undefined,
+        isLoggedIn: () => true,
+        isInClient: () => true,
+        login: () => undefined,
+        getIDToken: () => "test-line-id-token-with-minimum-length",
+        getFriendship: async () => ({ friendFlag: true })
+      },
+      configurable: true
+    });
+  });
+  await page.route("**/api/config", async (route) => {
+    await route.fulfill({ json: { lineLiffId: "booking-test-liff-id" } });
+  });
+  await page.route("**/api/spa/api/v1/customer/bookings:list", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [{
+          bookingId: "BK-QR-001",
+          status: "COMPLETED",
+          localDate: "2026-09-01",
+          localStartTime: "16:30",
+          timezone: "Asia/Bangkok",
+          serviceNamesTh: ["นวดแผนไทย"],
+          serviceNamesEn: ["Traditional Thai Massage"],
+          pax: 1,
+          estimatedAmountSatang: 60000,
+          priceIncludesVat: true,
+          paymentStatus: "DUE",
+          paidAmountSatang: 0
+        }],
+        nextPageToken: null
+      }
+    });
+  });
+  await page.route("**/api/spa/api/v1/public/bookings/BK-QR-001/payment-options", async (route) => {
+    await route.fulfill({
+      json: {
+        bookingId: "BK-QR-001",
+        paymentId: "pay_qr_001",
+        status: "DUE",
+        source: null,
+        serviceAmountSatang: 60000,
+        currency: "THB",
+        eligible: true,
+        reason: null,
+        tipPresetsSatang: [0, 2000, 5000, 10000],
+        customTipMaxSatang: 50000,
+        methods: ["QR_PROMPT_PAY"],
+        version: 1
+      }
+    });
+  });
+  await page.route("**/api/spa/api/v1/public/bookings/BK-QR-001/payment-attempts", async (route) => {
+    await route.fulfill({
+      status: 201,
+      json: {
+        attemptId: "pat_qr_001",
+        paymentId: "pay_qr_001",
+        status: "ACTIVE",
+        paymentMethod: "QR_PROMPT_PAY",
+        actionRequired: "ENCODED_IMAGE",
+        expiresAt: "2026-09-01T17:15:00+07:00",
+        statusToken: "opaque-payment-status-token-with-minimum-length",
+        imageBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        redirectUrl: null
+      }
+    });
+  });
+  await page.route("**/api/spa/api/v1/public/payment-status:resolve", async (route) => {
+    await route.fulfill({
+      json: {
+        paymentId: "pay_qr_001",
+        bookingId: "BK-QR-001",
+        status: "PAYMENT_PENDING",
+        source: "BEAM",
+        serviceAmountSatang: 60000,
+        tipAmountSatang: 0,
+        grossAmountSatang: 60000,
+        paidAt: null
+      }
+    });
+  });
+
   await page.goto(`${customerUrl}/my-bookings`, { waitUntil: "networkidle" });
-  await expect(page.getByText("ชำระเงินแล้ว").first()).toBeVisible();
+  await page.getByRole("button", { name: "ชำระเงิน" }).click();
+  await page.getByRole("radio", { name: /PromptPay QR/ }).check();
+  await page.getByRole("button", { name: "ดำเนินการชำระเงิน" }).click();
+  await expect(page.getByRole("button", { name: "บันทึก QR" })).toBeVisible();
+
+  for (const viewport of [
+    { width: 360, height: 800 },
+    { width: 390, height: 844 },
+    { width: 430, height: 932 }
+  ]) {
+    await page.setViewportSize(viewport);
+    expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
+    await expect(page.getByRole("button", { name: "บันทึก QR" })).toBeVisible();
+  }
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "บันทึก QR" }).click()
+  ]);
+  expect(download.suggestedFilename()).toBe("spa49-promptpay-BK-QR-001.png");
 });
 
 test("English duration and price labels do not overlap", async ({ page }) => {

@@ -4,7 +4,7 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from app.contracts import ExportProjection, ServiceLineSnapshot
-from app.payload import build_cash_invoice_payload, satang_to_baht
+from app.payload import build_cash_invoice_payload, satang_to_baht, vat_inclusive_amount
 from app.settings import Settings
 
 
@@ -15,9 +15,10 @@ def settings() -> Settings:
         api_base_url="https://sandbox.flowaccount.invalid/v1",
         client_id=SecretStr("test-client"),
         client_secret=SecretStr("test-secret"),
-        contact_id="contact-test-001",
-        other_channel_id="other-test-001",
+        contact_id="1001",
+        other_channel_id="2001",
         project_id="project-test-001",
+        sell_chart_of_account_code="41110",
     )
 
 
@@ -32,6 +33,8 @@ def export(**overrides: object) -> ExportProjection:
         "payment_source": "BEAM",
         "currency": "THB",
         "service_amount_satang": 35_000,
+        "subtotal_amount_satang": 35_000,
+        "discount_amount_satang": 0,
         "tip_amount_satang": 0,
         "gross_amount_satang": 35_000,
         "service_lines": (
@@ -50,40 +53,67 @@ def export(**overrides: object) -> ExportProjection:
 def test_satang_conversion_never_uses_binary_float() -> None:
     assert satang_to_baht(35_000) == "350.00"
     assert satang_to_baht(1) == "0.01"
+    assert vat_inclusive_amount(35_000) == "22.90"
 
 
 def test_beam_payload_uses_other_channel_and_vat_inclusive() -> None:
     payload = build_cash_invoice_payload(export(), settings())
     assert payload["isVatInclusive"] is True
-    assert payload["payment"] == {
-        "paymentMethod": 13,
-        "paymentDate": "2026-08-31",
-        "amount": "350.00",
-        "otherChannelId": "other-test-001",
-    }
-    assert payload["items"][0]["unitPrice"] == "350.00"
+    assert payload["paymentMethod"] == 13
+    assert payload["paymentDate"] == "2026-08-31"
+    assert payload["collected"] == "350.00"
+    assert payload["otherChannelId"] == 2001
+    assert "paymentStructureType" not in payload
+    assert "documentStructureType" not in payload
+    assert payload["contactId"] == 1001
+    assert payload["contactCode"] == "SPA49-WALKIN"
+    assert payload["grandTotal"] == "350.00"
+    assert payload["vatAmount"] == "22.90"
+    assert payload["items"][0]["pricePerUnit"] == "350.00"
 
 
 def test_tip_is_a_separate_traceable_line() -> None:
     projection = export(tip_amount_satang=5_000, gross_amount_satang=40_000)
     payload = build_cash_invoice_payload(projection, settings())
     assert len(payload["items"]) == 2
-    assert payload["items"][1]["productCode"] == "SPA-TIP"
-    assert payload["items"][1]["unitPrice"] == "50.00"
+    assert payload["items"][1]["sku"] == "SPA-TIP"
+    assert payload["items"][1]["pricePerUnit"] == "50.00"
     assert payload["internalNotes"] == "Tip for BK-20260831-001"
 
 
 def test_cash_payload_has_no_beam_channel() -> None:
     payload = build_cash_invoice_payload(export(payment_source="CASH"), settings())
-    assert payload["payment"]["paymentMethod"] == 1
-    assert "otherChannelId" not in payload["payment"]
+    assert payload["paymentMethod"] == 1
+    assert "otherChannelId" not in payload
 
 
 def test_mismatched_service_or_gross_total_is_rejected() -> None:
     with pytest.raises(ValidationError, match="Gross amount"):
         export(gross_amount_satang=35_001)
     with pytest.raises(ValidationError, match="Service lines"):
-        export(service_amount_satang=34_999, gross_amount_satang=34_999)
+        export(subtotal_amount_satang=34_999)
+
+
+def test_document_discount_preserves_service_line_snapshot() -> None:
+    payload = build_cash_invoice_payload(
+        export(
+            subtotal_amount_satang=40_000,
+            discount_amount_satang=5_000,
+            discount_reason="Admin approved",
+            service_lines=(
+                ServiceLineSnapshot(
+                    sku="FOOT-60",
+                    name="นวดเท้า 60 นาที",
+                    quantity=1,
+                    unit_amount_satang=40_000,
+                ),
+            ),
+        ),
+        settings(),
+    )
+    assert payload["subTotal"] == "400.00"
+    assert payload["discountAmount"] == "50.00"
+    assert payload["totalAfterDiscount"] == "350.00"
 
 
 def test_sync_is_fail_closed_without_bootstrap_proof() -> None:

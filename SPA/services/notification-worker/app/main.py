@@ -123,6 +123,21 @@ def _render_admin_message(event: dict[str, object], booking: dict[str, object]) 
     )
 
 
+def _render_accounting_alert(event: dict[str, object]) -> str:
+    lines = [
+        f"{_test_prefix()}SPA49 Accounting",
+        str(event.get("result", "REVIEW_REQUIRED")),
+        f"Environment: {event.get('environment', 'unknown')}",
+        f"Run: {event.get('runId') or 'scheduled'}",
+        f"Export: {event.get('aggregateId', 'unknown')}",
+        f"Error: {event.get('safeErrorCode', 'UNKNOWN')}",
+    ]
+    admin_url = str(event.get("adminUrl") or "").strip()
+    if admin_url.startswith("https://") or admin_url.startswith("http://localhost"):
+        lines.append(f"Admin: {admin_url}")
+    return "\n".join(lines)
+
+
 def _phone_view(booking: dict[str, object]) -> tuple[str, str | None]:
     contact = booking.get("contact")
     contact = contact if isinstance(contact, dict) else {}
@@ -298,16 +313,31 @@ async def dispatch_notification(
     event = event_snapshot.to_dict() or {}
     if event.get("state") == "SENT":
         return {"status": "already-sent"}
-    booking_snapshot = client.collection("bookings").document(str(event.get("aggregateId"))).get()
-    if not booking_snapshot.exists:
-        raise HTTPException(status_code=404, detail="Booking not found")
+    event_type = str(event.get("eventType", "BOOKING_UPDATE"))
+    booking_snapshot = None
+    if event_type != "ACCOUNTING_OPERATIONAL_ALERT":
+        booking_snapshot = client.collection("bookings").document(
+            str(event.get("aggregateId"))
+        ).get()
+        if not booking_snapshot.exists:
+            raise HTTPException(status_code=404, detail="Booking not found")
     now = datetime.now(UTC)
     event_ref.set({"state": "PROCESSING", "updatedAt": now}, merge=True)
     try:
-        booking = booking_snapshot.to_dict() or {}
-        event_type = str(event.get("eventType", "BOOKING_UPDATE"))
+        booking = booking_snapshot.to_dict() or {} if booking_snapshot else {}
         delivery: dict[str, object] = {}
-        if event_type == "BOOKING_CREATED":
+        if event_type == "ACCOUNTING_OPERATIONAL_ALERT":
+            token = os.getenv("LINE_ADMIN_ACCESS_TOKEN", "")
+            destination = os.getenv("LINE_ADMIN_GROUP_ID", "")
+            if not token or not destination:
+                raise RuntimeError("LINE Admin token or group ID is missing")
+            await _push_line(
+                token=token,
+                destination=destination,
+                message={"type": "text", "text": _render_accounting_alert(event)},
+            )
+            delivery["admin"] = "SENT"
+        elif event_type == "BOOKING_CREATED":
             token = os.getenv("LINE_ADMIN_ACCESS_TOKEN", "")
             destination = os.getenv("LINE_ADMIN_GROUP_ID", "")
             if not token or not destination:

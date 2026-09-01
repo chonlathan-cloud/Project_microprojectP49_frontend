@@ -55,6 +55,11 @@ export type ResolvedPayment = {
   paidAt: string | null;
 };
 
+export type CustomerPaymentResult = ResolvedPayment & {
+  attemptId: string;
+  paymentMethod: BeamPaymentMethod;
+};
+
 export class PaymentApiError extends Error {
   constructor(public readonly code: string, public readonly status: number) {
     super(code);
@@ -125,6 +130,18 @@ export function resolvePaymentStatus(statusToken: string, signal?: AbortSignal) 
   return post<ResolvedPayment>(
     "/api/v1/public/payment-status:resolve",
     { statusToken },
+    { signal },
+  );
+}
+
+export function resolveCustomerPaymentAttempt(
+  attemptId: string,
+  lineIdToken: string,
+  signal?: AbortSignal,
+) {
+  return post<CustomerPaymentResult>(
+    `/api/v1/public/payment-attempts/${encodeURIComponent(attemptId)}:resolve`,
+    { lineIdToken },
     { signal },
   );
 }

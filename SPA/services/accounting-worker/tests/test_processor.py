@@ -6,7 +6,7 @@ from app.client import (
     FlowAccountAmbiguousCreateError,
     FlowAccountRetryableError,
 )
-from app.processor import DeliveryState, deliver_export
+from app.processor import DeliveryState, deliver_export, reconcile_export
 from tests.test_payload import export, settings
 
 
@@ -18,6 +18,14 @@ class StubClient:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
+
+
+class ReconcileClient:
+    def __init__(self, matches: tuple[dict[str, Any], ...]) -> None:
+        self.matches = matches
+
+    async def find_cash_invoices(self, **_: str) -> tuple[dict[str, Any], ...]:
+        return self.matches
 
 
 @pytest.mark.asyncio
@@ -43,7 +51,7 @@ async def test_unknown_create_outcome_requires_reconciliation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transient_failure_is_retryable_but_invalid_response_requires_review() -> None:
+async def test_transient_failure_retries_but_missing_ids_reconcile() -> None:
     retry = await deliver_export(
         export(),
         settings(),
@@ -51,4 +59,21 @@ async def test_transient_failure_is_retryable_but_invalid_response_requires_revi
     )
     invalid = await deliver_export(export(), settings(), StubClient({"message": "created"}))
     assert retry.state is DeliveryState.RETRYABLE
-    assert invalid.state is DeliveryState.REVIEW_REQUIRED
+    assert invalid.state is DeliveryState.RECONCILE_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_distinguishes_absent_exact_and_duplicate() -> None:
+    absent = await reconcile_export(export(), ReconcileClient(()))
+    exact = await reconcile_export(
+        export(),
+        ReconcileClient(({"recordId": 1, "documentId": 2, "documentSerial": "CA-1"},)),
+    )
+    duplicate = await reconcile_export(
+        export(), ReconcileClient(({"documentId": 1}, {"documentId": 2}))
+    )
+    assert absent is None
+    assert exact is not None and exact.state is DeliveryState.SYNCED
+    assert exact.provider_document_serial == "CA-1"
+    assert duplicate is not None and duplicate.state is DeliveryState.REVIEW_REQUIRED
+    assert duplicate.safe_error_code == "FLOWACCOUNT_DUPLICATE_REVIEW_REQUIRED"

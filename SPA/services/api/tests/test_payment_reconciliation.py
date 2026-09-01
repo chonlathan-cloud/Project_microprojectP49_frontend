@@ -23,7 +23,7 @@ def settings() -> Settings:
         beam_merchant_id="merchant-test",
         beam_api_key=SecretStr("api-key-test"),
         beam_webhook_hmac_key=SecretStr("a2V5"),
-        beam_return_url="https://customer.invalid/my-bookings",
+        beam_return_url="https://customer.invalid/payment/result",
     )
 
 
