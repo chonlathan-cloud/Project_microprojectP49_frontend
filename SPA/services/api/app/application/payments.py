@@ -341,6 +341,9 @@ class PaymentService:
                 raw,
                 requested_method=payment_method,
                 requested_expires_at=prepared.requested_expires_at,
+                allowed_redirect_hosts=(
+                    self._settings.configured_beam_redirect_allowed_hosts
+                ),
             )
         except BeamRejectedError:
             await self._repository.mark_create_failed(prepared.attempt_id, datetime.now(UTC))
@@ -352,10 +355,11 @@ class PaymentService:
             ) from None
         except BeamRetryableError:
             raise PersistenceUnavailable("Beam payment is temporarily unavailable") from None
-        except BeamConfigurationError:
+        except BeamConfigurationError as error:
             await self._repository.mark_create_unknown(prepared.attempt_id, datetime.now(UTC))
             logger.exception(
-                "Beam charge response validation failed",
+                "Beam charge response validation failed: %s",
+                error,
                 extra={
                     "attemptId": prepared.attempt_id,
                     "paymentMethod": payment_method.value,

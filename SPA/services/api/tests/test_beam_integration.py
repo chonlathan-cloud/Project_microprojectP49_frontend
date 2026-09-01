@@ -56,6 +56,28 @@ def test_beam_payment_method_allowlist_is_ordered_deduplicated_and_fail_closed()
     assert "BEAM_PAYMENT_METHODS_INVALID" in invalid.beam_readiness_errors()
 
 
+def test_beam_redirect_host_allowlist_is_normalized_and_fail_closed() -> None:
+    configured = settings().model_copy(
+        update={
+            "beam_redirect_allowed_hosts": (
+                " beamcheckout.com,*.beamcheckout.com,BEAMCHECKOUT.COM. "
+            )
+        }
+    )
+    assert configured.configured_beam_redirect_allowed_hosts == (
+        "beamcheckout.com",
+        "*.beamcheckout.com",
+    )
+
+    invalid = settings().model_copy(
+        update={"beam_redirect_allowed_hosts": "https://checkout.beamcheckout.com"}
+    )
+    assert "BEAM_REDIRECT_ALLOWED_HOSTS_INVALID" in invalid.beam_readiness_errors()
+
+    empty = settings().model_copy(update={"beam_redirect_allowed_hosts": " , "})
+    assert "BEAM_REDIRECT_ALLOWED_HOSTS_EMPTY" in empty.beam_readiness_errors()
+
+
 def test_production_mobile_banking_requires_explicit_method_and_webhook_confirmation() -> None:
     production = settings().model_copy(
         update={
@@ -292,6 +314,46 @@ def test_mobile_banking_redirect_is_reduced_to_allowlisted_browser_fields() -> N
     assert action.payment_method is BeamPaymentMethod.KPLUS
     assert action.redirect_url == "https://checkout.beamcheckout.com/test"
     assert action.image_base64 is None
+
+
+def test_mobile_banking_redirect_accepts_environment_allowlisted_host() -> None:
+    action = normalize_charge_action(
+        {
+            "chargeId": "ch_mobile_001",
+            "paymentMethodType": "KPLUS",
+            "actionRequired": "REDIRECT",
+            "redirect": {"redirectUrl": "https://pay.example-bank.co.th/kplus"},
+        },
+        requested_method=BeamPaymentMethod.KPLUS,
+        allowed_redirect_hosts=("*.example-bank.co.th",),
+    )
+
+    assert action.redirect_url == "https://pay.example-bank.co.th/kplus"
+
+
+def test_mobile_banking_redirect_wildcard_does_not_match_root_or_lookalike() -> None:
+    payload = {
+        "chargeId": "ch_mobile_001",
+        "paymentMethodType": "KPLUS",
+        "actionRequired": "REDIRECT",
+        "redirect": {"redirectUrl": "https://example-bank.co.th/kplus"},
+    }
+    with pytest.raises(BeamConfigurationError, match="example-bank.co.th"):
+        normalize_charge_action(
+            payload,
+            requested_method=BeamPaymentMethod.KPLUS,
+            allowed_redirect_hosts=("*.example-bank.co.th",),
+        )
+
+    payload["redirect"] = {
+        "redirectUrl": "https://pay.example-bank.co.th.attacker.invalid/kplus"
+    }
+    with pytest.raises(BeamConfigurationError, match="attacker.invalid"):
+        normalize_charge_action(
+            payload,
+            requested_method=BeamPaymentMethod.KPLUS,
+            allowed_redirect_hosts=("*.example-bank.co.th",),
+        )
 
 
 @pytest.mark.parametrize(

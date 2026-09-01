@@ -83,6 +83,24 @@ def _reconciliation_target(
     )
 
 
+def _charge_link_attempt_updates(
+    attempt: dict[str, Any], charge: BeamCharge, now: datetime
+) -> dict[str, Any]:
+    """Link an authoritative charge without inventing a missing browser action.
+
+    A charge discovered after an ambiguous create may be PENDING, but the GET/list
+    contract does not return the original redirect URL or encoded image. Keeping the
+    attempt in CREATE_UNKNOWN prevents the UI from presenting an ACTIVE attempt that
+    the customer cannot complete.
+    """
+    return {
+        "providerChargeId": charge.charge_id,
+        "lastReconciledAt": now,
+        "updatedAt": now,
+        "version": int(attempt.get("version", 1)) + 1,
+    }
+
+
 async def _snapshots(transaction: AsyncTransaction, reference_or_query: Any) -> list[Any]:
     stream = await transaction.get(reference_or_query)
     return [snapshot async for snapshot in stream]
@@ -980,50 +998,16 @@ class FirestorePaymentRepository:
                 if link.get("attemptId") != attempt_ref.id:
                     raise FinancialConflict("Beam charge is already linked")
                 return True
-            payment_ref = self._client.collection("payments").document(
-                str(attempt.get("paymentId", ""))
-            )
-            guard_ref = self._client.collection("payment_attempt_guards").document(
-                str(attempt.get("bookingDocId", ""))
-            )
-            payment_snapshot = await _one(transaction, payment_ref)
-            guard_snapshot = await _one(transaction, guard_ref)
-            if not payment_snapshot.exists:
-                raise FinancialConflict("Payment no longer exists")
-            payment = _payment_from_data(payment_ref.id, payment_snapshot.to_dict() or {})
             transaction.create(
                 charge_ref,
                 {
                     "attemptId": attempt_ref.id,
-                    "paymentId": payment_ref.id,
+                    "paymentId": str(attempt.get("paymentId", "")),
                     "providerReferenceId": charge.reference_id,
                     "createdAt": now,
                 },
             )
-            updates: dict[str, Any] = {
-                "providerChargeId": charge.charge_id,
-                "lastReconciledAt": now,
-                "updatedAt": now,
-                "version": int(attempt.get("version", 1)) + 1,
-            }
-            if (
-                charge.status == "PENDING"
-                and attempt.get("status") in _RECONCILABLE_ATTEMPT_STATUSES
-            ):
-                updates["status"] = PaymentAttemptStatus.ACTIVE
-                if payment.status is not PaymentStatus.PAID:
-                    transaction.update(
-                        payment_ref,
-                        {
-                            "status": PaymentStatus.PAYMENT_PENDING,
-                            "activeAttemptId": attempt_ref.id,
-                            "updatedAt": now,
-                            "version": payment.version + 1,
-                        },
-                    )
-                guard = guard_snapshot.to_dict() or {}
-                if guard_snapshot.exists and guard.get("attemptId") == attempt_ref.id:
-                    transaction.update(guard_ref, {"active": True, "updatedAt": now})
+            updates = _charge_link_attempt_updates(attempt, charge, now)
             transaction.update(attempt_ref, updates)
             return True
 

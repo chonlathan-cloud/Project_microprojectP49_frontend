@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -5,6 +6,11 @@ from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.types import BeamPaymentMethod
+
+_BEAM_REDIRECT_HOST_PATTERN = re.compile(
+    r"^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]"
+    r"(?:[a-z0-9-]{0,61}[a-z0-9])?$"
+)
 
 
 class Settings(BaseSettings):
@@ -39,6 +45,9 @@ class Settings(BaseSettings):
     beam_return_url: str | None = None
     beam_request_timeout_seconds: float = 15.0
     beam_payment_methods: str = "QR_PROMPT_PAY"
+    beam_redirect_allowed_hosts: str = (
+        "beamcheckout.com,*.beamcheckout.com,beamcheckout.co,*.beamcheckout.co"
+    )
     beam_production_mobile_banking_confirmed: bool = False
     beam_production_webhook_registered: bool = False
     tip_custom_max_satang: int | None = None
@@ -76,6 +85,15 @@ class Settings(BaseSettings):
                 methods.append(method)
         return tuple(methods)
 
+    @property
+    def configured_beam_redirect_allowed_hosts(self) -> tuple[str, ...]:
+        hosts: list[str] = []
+        for value in self.beam_redirect_allowed_hosts.split(","):
+            normalized = value.strip().lower().rstrip(".")
+            if normalized and normalized not in hosts:
+                hosts.append(normalized)
+        return tuple(hosts)
+
     def beam_readiness_errors(self) -> tuple[str, ...]:
         if not self.beam_enabled:
             return ("BEAM_DISABLED",)
@@ -105,6 +123,14 @@ class Settings(BaseSettings):
             missing.append("BEAM_PAYMENT_METHODS_INVALID")
         if not self.configured_beam_payment_methods:
             missing.append("BEAM_PAYMENT_METHODS_EMPTY")
+        redirect_hosts = self.configured_beam_redirect_allowed_hosts
+        if not redirect_hosts:
+            missing.append("BEAM_REDIRECT_ALLOWED_HOSTS_EMPTY")
+        elif any(
+            _BEAM_REDIRECT_HOST_PATTERN.fullmatch(host) is None
+            for host in redirect_hosts
+        ):
+            missing.append("BEAM_REDIRECT_ALLOWED_HOSTS_INVALID")
         if self.deployment_environment == "prod":
             return_url = urlparse(self.beam_return_url or "")
             if (

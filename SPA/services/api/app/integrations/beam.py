@@ -49,6 +49,12 @@ def normalize_charge_action(
     *,
     requested_method: BeamPaymentMethod = BeamPaymentMethod.QR_PROMPT_PAY,
     requested_expires_at: datetime | None = None,
+    allowed_redirect_hosts: tuple[str, ...] = (
+        "beamcheckout.com",
+        "*.beamcheckout.com",
+        "beamcheckout.co",
+        "*.beamcheckout.co",
+    ),
 ) -> BeamAction:
     """Return the small provider action contract that is safe for the browser."""
     charge_id = payload.get("chargeId")
@@ -99,12 +105,31 @@ def normalize_charge_action(
         redirect_url = redirect.get("redirectUrl") if isinstance(redirect, dict) else None
         if not isinstance(redirect_url, str) or not redirect_url.startswith("https://"):
             raise BeamConfigurationError("Beam redirect URL is invalid")
-        allowed_hosts = (".beamcheckout.com", ".beamcheckout.co")
-        hostname = urlparse(redirect_url).hostname or ""
-        if hostname not in {"beamcheckout.com", "beamcheckout.co"} and not hostname.endswith(
-            allowed_hosts
+        try:
+            parsed_redirect = urlparse(redirect_url)
+            hostname = (parsed_redirect.hostname or "").lower().rstrip(".")
+            port = parsed_redirect.port
+        except ValueError as error:
+            raise BeamConfigurationError("Beam redirect URL is invalid") from error
+        if (
+            not hostname
+            or parsed_redirect.username is not None
+            or parsed_redirect.password is not None
+            or port not in {None, 443}
         ):
-            raise BeamConfigurationError("Beam redirect URL host is not allowlisted")
+            raise BeamConfigurationError("Beam redirect URL is invalid")
+        is_allowlisted = any(
+            (
+                hostname.endswith(f".{pattern[2:]}")
+                if pattern.startswith("*.")
+                else hostname == pattern
+            )
+            for pattern in allowed_redirect_hosts
+        )
+        if not is_allowlisted:
+            raise BeamConfigurationError(
+                f"Beam redirect URL host is not allowlisted: {hostname[:253]}"
+            )
 
     return BeamAction(
         charge_id=charge_id,
