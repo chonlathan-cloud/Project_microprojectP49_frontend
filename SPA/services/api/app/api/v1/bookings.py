@@ -78,6 +78,7 @@ class CreateAdminBookingRequest(ApiModel):
     consent_capture_method: Literal["VERBAL", "PAPER"]
     discount_amount_satang: int = Field(default=0, ge=0)
     discount_reason: str | None = Field(default=None, max_length=200)
+    tip_amount_satang: int = Field(default=0, ge=0)
 
 
 class AdminAvailabilityParticipant(ApiModel):
@@ -435,6 +436,8 @@ async def create_admin_booking(
     historical_record = request.booking_mode == "HISTORICAL_RECORD"
     if request.discount_amount_satang > 0 and actor.get("role") != "ADMIN":
         raise PermissionDenied("Only ADMIN may apply a booking discount")
+    if request.tip_amount_satang > 0 and not historical_record:
+        raise ValidationDomainError("Tips may only be recorded for historical records")
     return create_booking(
         client,
         branch_id=request.branch_id,
@@ -452,6 +455,7 @@ async def create_admin_booking(
         actor_role=str(actor.get("role", "")),
         discount_amount_satang=request.discount_amount_satang,
         discount_reason=request.discount_reason,
+        tip_amount_satang=request.tip_amount_satang,
     )
 
 

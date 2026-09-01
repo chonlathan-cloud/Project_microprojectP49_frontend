@@ -9,6 +9,7 @@ from app.application.payments import (
     PaymentOptions,
     PaymentReconciliationTarget,
     PaymentService,
+    PreparedAttempt,
 )
 from app.core.settings import Settings
 from app.core.types import BeamDeviceType, BeamPaymentMethod, PaymentStatus
@@ -122,6 +123,39 @@ class FakeBeamClient:
 
     async def list_charges_by_reference(self, _reference_id: str) -> BeamChargeList:
         return self.charge_list
+
+
+class AttemptRepository(Repository):
+    def __init__(self, payment_options: PaymentOptions) -> None:
+        super().__init__(payment_options, payment_options)
+        self.activated: list[dict[str, object]] = []
+
+    async def begin_attempt(self, **_kwargs) -> PreparedAttempt:
+        return PreparedAttempt(
+            attempt_id="pat_playground_001",
+            payment_id="pay_001",
+            provider_reference_id="SPA-PAY-pay_001-pat_playground_001",
+            provider_idempotency_key="provider-idempotency-key",
+            total_amount_satang=60_000,
+            requested_expires_at=datetime(2026, 9, 1, 6, 18, tzinfo=UTC),
+            status_token="opaque-payment-status-token-with-minimum-length",
+        )
+
+    async def activate_attempt(self, _prepared, **kwargs) -> None:
+        self.activated.append(kwargs)
+
+
+class FakePlaygroundCreateClient(FakeBeamClient):
+    async def create_mobile_banking_charge(self, **_kwargs) -> dict[str, object]:
+        return {
+            "chargeId": "ch_playground_001",
+            "paymentMethodType": "KPLUS",
+            "actionRequired": "ENCODED_IMAGE",
+            "encodedImage": {
+                "expiry": None,
+                "imageBase64Encoded": "iVBORw0KGgo=",
+            },
+        }
 
 
 @pytest.mark.asyncio
@@ -351,3 +385,33 @@ async def test_payment_options_expose_mobile_methods_only_to_mobile_devices() ->
 
     assert web_result.enabled_methods == (BeamPaymentMethod.QR_PROMPT_PAY,)
     assert ios_result.enabled_methods == all_methods
+
+
+@pytest.mark.asyncio
+async def test_create_attempt_activates_playground_mobile_encoded_image(monkeypatch) -> None:
+    mobile_options = replace(
+        options(eligible=True, reason=None),
+        enabled_methods=(BeamPaymentMethod.KPLUS, BeamPaymentMethod.QR_PROMPT_PAY),
+    )
+    repository = AttemptRepository(mobile_options)
+    monkeypatch.setattr(payment_application, "BeamClient", FakePlaygroundCreateClient)
+
+    result = await PaymentService(
+        repository,
+        settings().model_copy(
+            update={"beam_payment_methods": "KPLUS,QR_PROMPT_PAY"}
+        ),
+    ).create_attempt(
+        booking_public_id="BK-001",
+        principal=LinePrincipal(user_id="U-001", channel_id="line-channel"),
+        tip_amount_satang=0,
+        payment_method=BeamPaymentMethod.KPLUS,
+        device_type=BeamDeviceType.IOS,
+        idempotency_key="2d4e72d3-4ab8-4f99-a09a-c81fa1caa49c",
+    )
+
+    assert result.action_required == "ENCODED_IMAGE"
+    assert result.image_base64 == "iVBORw0KGgo="
+    assert result.redirect_url is None
+    assert repository.activated[0]["provider_charge_id"] == "ch_playground_001"
+    assert repository.activated[0]["action_required"] == "ENCODED_IMAGE"

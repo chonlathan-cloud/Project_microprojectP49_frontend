@@ -77,6 +77,8 @@ export type PreviewBooking = {
   discountAmountSatang?: number;
   discountReason?: string;
   estimatedAmountSatang?: number;
+  tipAmountSatang?: number;
+  grossAmountSatang?: number;
 };
 
 export type PaymentStatus =

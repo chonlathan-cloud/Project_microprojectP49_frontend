@@ -188,6 +188,7 @@ def create_booking(
     actor_role: str | None = None,
     discount_amount_satang: int = 0,
     discount_reason: str | None = None,
+    tip_amount_satang: int = 0,
 ) -> dict[str, object]:
     settings = get_settings()
     if not idempotency_key or not 8 <= len(idempotency_key) <= 128:
@@ -276,7 +277,14 @@ def create_booking(
             raise ValidationDomainError("Discount must be less than the booking subtotal")
     elif normalized_discount_reason:
         raise ValidationDomainError("Discount reason requires a discount amount")
+    if isinstance(tip_amount_satang, bool) or not isinstance(tip_amount_satang, int):
+        raise ValidationDomainError("Tip amount must be integer satang")
+    if tip_amount_satang < 0 or tip_amount_satang % 100:
+        raise ValidationDomainError("Tip must be a non-negative whole-baht amount")
+    if tip_amount_satang and not historical_record:
+        raise ValidationDomainError("Tips may only be recorded for historical records")
     total = subtotal - discount_amount_satang
+    gross_total = total + tip_amount_satang
 
     request_payload: dict[str, object] = {
         "branchId": branch_id,
@@ -291,6 +299,7 @@ def create_booking(
         "adminBookingMode": admin_booking_mode,
         "discountAmountSatang": discount_amount_satang,
         "discountReason": normalized_discount_reason,
+        "tipAmountSatang": tip_amount_satang,
         "lineUserIdHash": (
             hashlib.sha256(str(line_identity["sub"]).encode()).hexdigest()
             if line_identity and line_identity.get("sub")
@@ -334,6 +343,12 @@ def create_booking(
                 ),
                 "discountAmountSatang": existing.get("discountAmountSatang", 0),
                 "estimatedAmountSatang": existing["estimatedAmountSatang"],
+                "tipAmountSatang": existing.get("tipAmountSatang", 0),
+                "grossAmountSatang": existing.get(
+                    "grossAmountSatang",
+                    int(existing["estimatedAmountSatang"])
+                    + int(existing.get("tipAmountSatang", 0)),
+                ),
                 "idempotentReplay": True,
             }
             if existing.get("statusToken"):
@@ -422,6 +437,8 @@ def create_booking(
             "subtotalAmountSatang": subtotal,
             "discountAmountSatang": discount_amount_satang,
             "estimatedAmountSatang": total,
+            "tipAmountSatang": tip_amount_satang,
+            "grossAmountSatang": gross_total,
             "version": 1,
             "idempotentReplay": False,
         }
@@ -456,6 +473,8 @@ def create_booking(
             "subtotalAmountSatang": subtotal,
             "discountAmountSatang": discount_amount_satang,
             "estimatedAmountSatang": total,
+            "tipAmountSatang": tip_amount_satang,
+            "grossAmountSatang": gross_total,
             "priceIncludesVat": True,
             "paymentStatus": "UNAVAILABLE",
             "financiallyExcluded": False,
@@ -638,6 +657,8 @@ def create_booking(
             "subtotalAmountSatang": subtotal,
             "discountAmountSatang": discount_amount_satang,
             "estimatedAmountSatang": total,
+            "tipAmountSatang": tip_amount_satang,
+            "grossAmountSatang": gross_total,
             "createdAt": now,
         }
         if actor_id:
@@ -702,6 +723,8 @@ def create_booking(
             "subtotalAmountSatang": subtotal,
             "discountAmountSatang": discount_amount_satang,
             "estimatedAmountSatang": total,
+            "tipAmountSatang": tip_amount_satang,
+            "grossAmountSatang": gross_total,
             "bookingDocId": booking_ref.id,
             "expiresAt": now + timedelta(hours=24),
             "createdAt": now,

@@ -255,6 +255,63 @@ def test_mobile_banking_redirect_is_reduced_to_allowlisted_browser_fields() -> N
     assert action.image_base64 is None
 
 
+@pytest.mark.parametrize(
+    "method",
+    [BeamPaymentMethod.KPLUS, BeamPaymentMethod.SCB_EASY],
+)
+def test_mobile_banking_playground_encoded_image_is_accepted(
+    method: BeamPaymentMethod,
+) -> None:
+    requested_expiry = datetime(2026, 9, 1, 6, 18, tzinfo=UTC)
+    action = normalize_charge_action(
+        {
+            "chargeId": "ch_mobile_playground_001",
+            "paymentMethodType": method.value,
+            "actionRequired": "ENCODED_IMAGE",
+            "encodedImage": {
+                "expiry": None,
+                "imageBase64Encoded": "iVBORw0KGgo=",
+                "rawData": "must-not-be-forwarded",
+            },
+        },
+        requested_method=method,
+        requested_expires_at=requested_expiry,
+    )
+
+    assert action.payment_method is method
+    assert action.action_required == "ENCODED_IMAGE"
+    assert action.image_base64 == "iVBORw0KGgo="
+    assert action.expires_at == requested_expiry
+    assert action.redirect_url is None
+
+
+def test_mobile_banking_no_action_is_accepted_without_provider_fields() -> None:
+    action = normalize_charge_action(
+        {
+            "chargeId": "ch_mobile_none_001",
+            "paymentMethodType": "KRUNGSRI_APP",
+            "actionRequired": "NONE",
+        },
+        requested_method=BeamPaymentMethod.KRUNGSRI_APP,
+    )
+
+    assert action.action_required == "NONE"
+    assert action.image_base64 is None
+    assert action.redirect_url is None
+
+
+def test_charge_action_rejects_payment_method_mismatch() -> None:
+    with pytest.raises(BeamConfigurationError, match="does not match"):
+        normalize_charge_action(
+            {
+                "chargeId": "ch_mobile_001",
+                "paymentMethodType": "SCB_EASY",
+                "actionRequired": "NONE",
+            },
+            requested_method=BeamPaymentMethod.KPLUS,
+        )
+
+
 def test_mobile_banking_redirect_rejects_non_beam_host() -> None:
     with pytest.raises(BeamConfigurationError, match="allowlisted"):
         normalize_charge_action(

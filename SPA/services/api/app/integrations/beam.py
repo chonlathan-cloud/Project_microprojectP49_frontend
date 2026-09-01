@@ -63,13 +63,6 @@ def normalize_charge_action(
         raise BeamConfigurationError("Beam charge response is missing paymentMethodType") from error
     if response_method is not requested_method:
         raise BeamConfigurationError("Beam charge response payment method does not match request")
-    expected_action = (
-        "ENCODED_IMAGE"
-        if requested_method is BeamPaymentMethod.QR_PROMPT_PAY
-        else "REDIRECT"
-    )
-    if action_required != expected_action:
-        raise BeamConfigurationError("Beam charge response action does not match payment method")
 
     expires_at: datetime | None = None
     image_base64: str | None = None
@@ -77,26 +70,30 @@ def normalize_charge_action(
     if action_required == "ENCODED_IMAGE":
         encoded = payload.get("encodedImage")
         if not isinstance(encoded, dict):
-            raise BeamConfigurationError("Beam QR response is missing encodedImage")
+            raise BeamConfigurationError("Beam encoded-image response is missing encodedImage")
         image_base64 = encoded.get("imageBase64Encoded")
         expiry = encoded.get("expiry")
         if not isinstance(image_base64, str) or not image_base64:
-            raise BeamConfigurationError("Beam QR response is missing image data")
+            raise BeamConfigurationError("Beam encoded-image response is missing image data")
         if len(image_base64) > 2_000_000:
-            raise BeamConfigurationError("Beam QR response image is too large")
+            raise BeamConfigurationError("Beam encoded-image response image is too large")
         if expiry is None:
             expires_at = requested_expires_at
         elif isinstance(expiry, str) and expiry:
             try:
                 expires_at = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
             except ValueError as error:
-                raise BeamConfigurationError("Beam QR response expiry is invalid") from error
+                raise BeamConfigurationError(
+                    "Beam encoded-image response expiry is invalid"
+                ) from error
         else:
-            raise BeamConfigurationError("Beam QR response expiry is invalid")
+            raise BeamConfigurationError("Beam encoded-image response expiry is invalid")
         if expires_at is None:
-            raise BeamConfigurationError("Beam QR response is missing expiry")
+            raise BeamConfigurationError("Beam encoded-image response is missing expiry")
         if expires_at.tzinfo is None or expires_at.utcoffset() is None:
-            raise BeamConfigurationError("Beam QR response expiry must include timezone")
+            raise BeamConfigurationError(
+                "Beam encoded-image response expiry must include timezone"
+            )
     elif action_required == "REDIRECT":
         redirect = payload.get("redirect")
         redirect_url = redirect.get("redirectUrl") if isinstance(redirect, dict) else None

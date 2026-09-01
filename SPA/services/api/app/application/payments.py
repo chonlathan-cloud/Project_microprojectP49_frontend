@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -29,6 +30,8 @@ from app.integrations.beam import (
     BeamRetryableError,
     normalize_charge_action,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,6 +319,7 @@ class PaymentService:
             request_digest=request_digest,
             now=datetime.now(UTC),
         )
+        raw = None
         try:
             async with BeamClient(self._settings) as client:
                 if payment_method is BeamPaymentMethod.QR_PROMPT_PAY:
@@ -350,6 +354,22 @@ class PaymentService:
             raise PersistenceUnavailable("Beam payment is temporarily unavailable") from None
         except BeamConfigurationError:
             await self._repository.mark_create_unknown(prepared.attempt_id, datetime.now(UTC))
+            logger.exception(
+                "Beam charge response validation failed",
+                extra={
+                    "attemptId": prepared.attempt_id,
+                    "paymentMethod": payment_method.value,
+                    "providerChargeId": (
+                        raw.get("chargeId") if isinstance(raw, dict) else None
+                    ),
+                    "providerActionRequired": (
+                        raw.get("actionRequired") if isinstance(raw, dict) else None
+                    ),
+                    "providerPaymentMethodType": (
+                        raw.get("paymentMethodType") if isinstance(raw, dict) else None
+                    ),
+                },
+            )
             raise PersistenceUnavailable("Beam payment response is invalid") from None
 
         effective_expires_at = action.expires_at or prepared.requested_expires_at
