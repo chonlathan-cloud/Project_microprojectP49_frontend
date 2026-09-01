@@ -4,7 +4,7 @@
 | --- | --- |
 | Surface | SPA Admin Web — desktop-first |
 | ผู้ใช้หลัก | Reception / `STAFF` และ Branch Manager / `ADMIN` |
-| งานหลัก | สร้าง Walk-in, ตรวจ Booking ใหม่, ยืนยัน, มอบหมายหมอนวด, เปลี่ยนสถานะ และแก้ Notification Failure |
+| งานหลัก | สร้าง Staff-assisted Booking/บันทึกย้อนหลัง, ตรวจ Booking ใหม่, ยืนยัน, มอบหมายหมอนวด, เปลี่ยนสถานะ และแก้ Notification Failure |
 | Primary visual anchor | Pending Booking Queue และรายการที่ต้องดำเนินการตามเวลา |
 
 เอกสารนี้กำหนด operational journey ของ Admin Web โดยเชื่อมกับ LINE flow ใน [LINE-NOTIFICATION-JOURNEY.md](./LINE-NOTIFICATION-JOURNEY.md)
@@ -47,20 +47,22 @@ Notification delivery ทำงานขนาน:
                               └─ FAILED → Admin Notification Queue → Retry/โทรติดตาม
 ```
 
-### Walk-in journey
+### Staff-assisted booking journey
 
 ```text
 Booking Queue / Calendar
-  → กด “จองลูกค้า Walk-in”
-  → เลือก Service/Pax และ Slot วันนี้ที่ยังมี Capacity
+  → กด “สร้าง Booking”
+  → เลือกวันที่: วันนี้ / อนาคต / ย้อนหลัง
+  → สำหรับวันนี้หรืออนาคต เลือก Service/Pax และ Slot ที่ยังมี Capacity
+  → สำหรับย้อนหลัง ระบุเวลาที่ให้บริการจริงและเห็นคำเตือน “บันทึกประวัติเท่านั้น • ไม่มีผลทางการเงิน”
   → ระบุชื่อเล่นและเบอร์ติดต่อ (ถ้ามี)
   → บันทึก Health Declaration และหลักฐานยินยอมแบบ Verbal/Paper
-  → Review ราคา เวลา Capacity และคำเตือนไม่มีช่องทางติดต่อ
-  → สร้างเป็น CONFIRMED
-  → เปิด Booking Detail และมอบหมายหมอนวดก่อน Start
+  → Review วัน เวลา Capacity/ผลของโหมด และคำเตือนไม่มีช่องทางติดต่อ
+  → วันนี้/อนาคตสร้างเป็น CONFIRMED; ย้อนหลังสร้างเป็น RECORDED
+  → Active Booking เปิด Detail และมอบหมายหมอนวดก่อน Start; Historical record จบที่ History
 ```
 
-Drawer ต้องรักษาข้อมูลที่กรอกเมื่อ API ตอบ validation/conflict, focus trap, ปิดด้วย Escape และคืน focus ไปยังปุ่มเปิด Drawer. เมื่อ Capacity เปลี่ยนระหว่างกรอก ให้คงข้อมูลลูกค้าไว้และบังคับเลือก Slot ใหม่.
+Centered modal ต้องมี `aria-modal`, focus trap, ปิดด้วย Escape, คืน focus ไปยังปุ่มเปิด, และรักษาข้อมูลที่กรอกเมื่อ API ตอบ validation/conflict. Header และ action footer ต้องคงมองเห็นได้เมื่อเนื้อหาภายใน scroll. เมื่อ Capacity เปลี่ยนระหว่างกรอก ให้คงข้อมูลลูกค้าไว้และบังคับเลือก Slot ใหม่.
 
 ### Journey map
 
@@ -99,7 +101,7 @@ Notification badge ต้องหมายถึง **จำนวนราย�
 
 Metric หรือ analytics ไม่ควรแย่ง visual weight จาก operational queue
 
-Primary action `+ จองลูกค้า Walk-in` อยู่ใน Page Heading ของ Booking Queue และ Calendar ไม่ใช้ Summary Card หรือเมนูซ่อน
+Primary action `+ สร้าง Booking` อยู่ใน Page Heading ของ Booking Queue และ Calendar ไม่ใช้ Summary Card หรือเมนูซ่อน
 
 ## 5. Booking detail UX
 
@@ -107,7 +109,7 @@ Detail drawer ควรรักษา context ของรายการเด
 
 1. Booking ID, status และ appointment time
 2. Customer contact และ source (`LINE` / `Guest Web`)
-   สำหรับ `ADMIN_WEB` แสดง `Walk-in`; หากไม่มีเบอร์ให้แสดงข้อความ `ไม่มีเบอร์ติดต่อ` แทนพื้นที่ว่างหรือเบอร์ placeholder
+   สำหรับ `ADMIN_WEB` แสดง `Staff assisted` หรือ `บันทึกย้อนหลัง`; หากไม่มีเบอร์ให้แสดงข้อความ `ไม่มีเบอร์ติดต่อ` แทนพื้นที่ว่างหรือเบอร์ placeholder
 3. Participant cards เฉพาะเมื่อช่วยแยกข้อมูลของ 2 คน ไม่ควรสร้าง nested card เกินจำเป็น
 4. Service, Duration, Pax และราคาประเมิน
 5. Health Alert แบบ collapsed-by-default พร้อม action “เปิดดูข้อมูลสุขภาพ” และ audit เมื่อเปิด

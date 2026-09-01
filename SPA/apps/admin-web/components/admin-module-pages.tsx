@@ -77,7 +77,8 @@ const calendarStatusLabel: Record<BookingStatus, { th: string; en: string }> = {
   IN_SERVICE: { th: "กำลังให้บริการ", en: "In service" },
   COMPLETED: { th: "เสร็จสิ้น", en: "Completed" },
   CANCELLED: { th: "ยกเลิก", en: "Cancelled" },
-  NO_SHOW: { th: "ไม่มาตามนัด", en: "No show" }
+  NO_SHOW: { th: "ไม่มาตามนัด", en: "No show" },
+  RECORDED: { th: "บันทึกย้อนหลัง", en: "Recorded" }
 };
 
 function bangkokTime(value: string, locale: Locale): string {
@@ -107,7 +108,7 @@ function CalendarPage({ locale, bookings, onSelectBooking, onOpenWalkIn }: { loc
   const [date, setDate] = useState(firstDate);
   const dayBookings = useMemo(() => bookings.filter((item) => bangkokDate(item.startLocal) === date), [bookings, date]);
   return <main className="dashboard-content">
-    <div className="module-heading-action"><ModuleHeading eyebrow="BOOKING CALENDAR • ASIA/BANGKOK" title={locale === "th" ? "ปฏิทินการจอง" : "Booking calendar"} subtitle={locale === "th" ? "ดูตารางการให้บริการตามวันและเวลา" : "Review the daily service schedule"} />{onOpenWalkIn && <button className="new-booking" type="button" onClick={onOpenWalkIn}>{locale === "th" ? "+ จองลูกค้า Walk-in" : "+ Walk-in booking"}</button>}</div>
+    <div className="module-heading-action"><ModuleHeading eyebrow="BOOKING CALENDAR • ASIA/BANGKOK" title={locale === "th" ? "ปฏิทินการจอง" : "Booking calendar"} subtitle={locale === "th" ? "ดูตารางการให้บริการตามวันและเวลา" : "Review the daily service schedule"} />{onOpenWalkIn && <button className="new-booking" type="button" onClick={onOpenWalkIn}>{locale === "th" ? "+ สร้าง Booking" : "+ Create booking"}</button>}</div>
     <section className="module-panel"><div className="module-toolbar"><label>{locale === "th" ? "วันที่" : "Date"}<input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></label><strong>{dayBookings.length} {locale === "th" ? "รายการ" : "bookings"}</strong></div>
       <div className="calendar-grid">{Array.from({ length: 13 }, (_, index) => `${String(index + 10).padStart(2, "0")}:00`).map((time) => {
         const items = dayBookings.filter((item) => bangkokHour(item.startLocal) === time.slice(0, 2));
@@ -115,7 +116,7 @@ function CalendarPage({ locale, bookings, onSelectBooking, onOpenWalkIn }: { loc
           const timeRange = bookingTimeRange(item, locale);
           const serviceName = localizedServiceName(item, locale);
           const status = calendarStatusLabel[item.status][locale];
-          const therapist = item.therapistName ?? (locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned");
+          const therapist = item.status === "RECORDED" ? (locale === "th" ? "ไม่เกี่ยวข้อง" : "Not applicable") : item.therapistName ?? (locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned");
           return <button type="button" className={`calendar-booking status-${item.status.toLowerCase()}`} key={item.bookingId} onClick={() => onSelectBooking(item.bookingId)} aria-label={`${timeRange} ${item.customerName} ${serviceName} ${status}`}>
             <span className="calendar-booking-top"><time dateTime={item.startLocal}>{timeRange}</time><span className={`status status-${item.status.toLowerCase()}`}>{status}</span></span>
             <strong>{item.customerName}</strong>

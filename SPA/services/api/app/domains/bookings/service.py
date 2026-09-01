@@ -71,6 +71,42 @@ def _validate_walk_in_window(
         raise AdvanceWindowViolation("Walk-in booking time cannot be in the past")
 
 
+def _validate_staff_assisted_window(
+    start_at: datetime,
+    *,
+    now: datetime | None = None,
+    bucket_minutes: int = 15,
+) -> None:
+    local_now = (now or datetime.now(UTC)).astimezone(BRANCH_TIMEZONE)
+    current_bucket = local_now.replace(
+        minute=(local_now.minute // bucket_minutes) * bucket_minutes,
+        second=0,
+        microsecond=0,
+    )
+    if start_at < current_bucket:
+        raise AdvanceWindowViolation(
+            "Staff-assisted bookings in the past must use HISTORICAL_RECORD"
+        )
+
+
+def _validate_historical_record_window(
+    start_at: datetime,
+    *,
+    now: datetime | None = None,
+    bucket_minutes: int = 15,
+) -> None:
+    local_now = (now or datetime.now(UTC)).astimezone(BRANCH_TIMEZONE)
+    current_bucket = local_now.replace(
+        minute=(local_now.minute // bucket_minutes) * bucket_minutes,
+        second=0,
+        microsecond=0,
+    )
+    if start_at >= current_bucket:
+        raise AdvanceWindowViolation(
+            "Historical records require an appointment time in the past"
+        )
+
+
 def _validate_operating_hours(
     start_at: datetime,
     duration_minutes: int,
@@ -145,6 +181,7 @@ def create_booking(
     source: str = "GUEST_WEB",
     initial_status: str = "PENDING",
     actor_id: str | None = None,
+    admin_booking_mode: str | None = None,
     consent_capture_method: str = "SELF_SERVICE",
     booking_privacy_acknowledged: bool = False,
 ) -> dict[str, object]:
@@ -162,21 +199,40 @@ def create_booking(
 
     if source not in {"GUEST_WEB", "LINE_CUSTOMER", "ADMIN_WEB"}:
         raise ValidationDomainError("Unsupported booking source")
-    if initial_status not in {"PENDING", "CONFIRMED"}:
+    if initial_status not in {"PENDING", "CONFIRMED", "RECORDED"}:
         raise ValidationDomainError("Unsupported initial booking status")
+    historical_record = source == "ADMIN_WEB" and admin_booking_mode == "HISTORICAL_RECORD"
     if source == "ADMIN_WEB":
         if not actor_id:
-            raise ValidationDomainError("Admin actor is required for a Walk-in booking")
-        if initial_status != "CONFIRMED":
-            raise ValidationDomainError("Admin Walk-in bookings must start confirmed")
+            raise ValidationDomainError("Admin actor is required for staff-assisted booking")
+        if admin_booking_mode not in {"WALK_IN", "STAFF_ASSISTED", "HISTORICAL_RECORD"}:
+            raise ValidationDomainError("Unsupported Admin booking mode")
+        expected_status = "RECORDED" if historical_record else "CONFIRMED"
+        if initial_status != expected_status:
+            raise ValidationDomainError(
+                f"{admin_booking_mode} bookings must start {expected_status.lower()}"
+            )
         if consent_capture_method not in {"VERBAL", "PAPER"}:
-            raise ValidationDomainError("Walk-in consent must be captured verbally or on paper")
+            raise ValidationDomainError(
+                "Admin-entered consent must be captured verbally or on paper"
+            )
         if not booking_privacy_acknowledged:
             raise ValidationDomainError("Booking privacy acknowledgement is required")
-        _validate_walk_in_window(
-            start_at,
-            bucket_minutes=settings.capacity_bucket_minutes,
-        )
+        if admin_booking_mode == "WALK_IN":
+            _validate_walk_in_window(
+                start_at,
+                bucket_minutes=settings.capacity_bucket_minutes,
+            )
+        elif historical_record:
+            _validate_historical_record_window(
+                start_at,
+                bucket_minutes=settings.capacity_bucket_minutes,
+            )
+        else:
+            _validate_staff_assisted_window(
+                start_at,
+                bucket_minutes=settings.capacity_bucket_minutes,
+            )
     elif initial_status != "PENDING":
         raise ValidationDomainError("Customer bookings must start pending")
 
@@ -206,6 +262,7 @@ def create_booking(
         "initialStatus": initial_status,
         "consentCaptureMethod": consent_capture_method,
         "bookingPrivacyAcknowledged": booking_privacy_acknowledged,
+        "adminBookingMode": admin_booking_mode,
         "lineUserIdHash": (
             hashlib.sha256(str(line_identity["sub"]).encode()).hexdigest()
             if line_identity and line_identity.get("sub")
@@ -223,12 +280,14 @@ def create_booking(
     booking_ref = client.collection("bookings").document()
     public_id = f"BK-{date.replace('-', '')}-{uuid4().hex[:6].upper()}"
     now = datetime.now(UTC)
-    bucket_starts = required_bucket_starts(start_at, max_duration, 0)
+    bucket_starts = (
+        [] if historical_record else required_bucket_starts(start_at, max_duration, 0)
+    )
     bucket_refs = [
         client.collection("capacity_buckets").document(_bucket_id(branch_id, item))
         for item in bucket_starts
     ]
-    total = sum(
+    total = 0 if historical_record else sum(
         variant.price_satang
         for index, (_, _, variant) in enumerate(selections)
         if variant.pricing_mode == "PER_PARTICIPANT" or index == 0
@@ -258,26 +317,40 @@ def create_booking(
         if not branch_snapshot.exists:
             raise ValidationDomainError("Branch is not configured")
         branch = branch_snapshot.to_dict() or {}
-        if source == "ADMIN_WEB":
+        if historical_record:
+            _validate_historical_record_window(
+                start_at,
+                now=now,
+                bucket_minutes=settings.capacity_bucket_minutes,
+            )
+        elif source == "ADMIN_WEB" and admin_booking_mode == "WALK_IN":
             _validate_walk_in_window(
+                start_at,
+                now=now,
+                bucket_minutes=settings.capacity_bucket_minutes,
+            )
+        elif source == "ADMIN_WEB":
+            _validate_staff_assisted_window(
                 start_at,
                 now=now,
                 bucket_minutes=settings.capacity_bucket_minutes,
             )
         else:
             _validate_advance_window(start_at, branch)
-        _validate_operating_hours(start_at, max_duration, branch)
-        capacity = int(branch.get("activeCapacityUnits", branch.get("capacityUnits", 0)))
-        if capacity <= 0:
-            raise ValidationDomainError("Branch resource configuration is incomplete")
-        closure_refs = list(
-            client.collection("special_closures")
-            .where("branchId", "==", branch_id)
-            .where("localDate", "==", date)
-            .stream(transaction=tx)
-        )
-        if closure_refs:
-            raise CapacityUnavailable("The branch is closed on the selected date")
+        capacity = 0
+        if not historical_record:
+            _validate_operating_hours(start_at, max_duration, branch)
+            capacity = int(branch.get("activeCapacityUnits", branch.get("capacityUnits", 0)))
+            if capacity <= 0:
+                raise ValidationDomainError("Branch resource configuration is incomplete")
+            closure_refs = list(
+                client.collection("special_closures")
+                .where("branchId", "==", branch_id)
+                .where("localDate", "==", date)
+                .stream(transaction=tx)
+            )
+            if closure_refs:
+                raise CapacityUnavailable("The branch is closed on the selected date")
 
         if e164 and source == "ADMIN_WEB":
             same_slot = list(
@@ -335,8 +408,9 @@ def create_booking(
             "branchId": branch_id,
             "source": source,
             "status": initial_status,
-            "customerListBucket": "UPCOMING",
+            "customerListBucket": customer_list_bucket(initial_status),
             "contact": contact,
+            "adminEntryMode": admin_booking_mode,
             "customerName": str(selections[0][0].get("nickname", "Guest")),
             "serviceName": selections[0][1].name_en,
             "serviceId": selections[0][1].id,
@@ -351,20 +425,29 @@ def create_booking(
             "timezone": "Asia/Bangkok",
             "pax": len(selections),
             "estimatedAmountSatang": total,
-            "priceIncludesVat": True,
+            "priceIncludesVat": not historical_record,
+            "paymentStatus": "UNAVAILABLE",
+            "financiallyExcluded": historical_record,
             "healthAlert": any(bool(p.get("hasHealthInformation")) for p, _, _ in selections),
-            "assignmentState": "UNASSIGNED",
-            "capacityReleased": False,
-            "capacityReservation": {"bucketIds": [ref.id for ref in bucket_refs], "units": units},
+            "assignmentState": "NOT_REQUIRED" if historical_record else "UNASSIGNED",
+            "capacityReleased": historical_record,
             "version": 1,
             "createdAt": now,
             "updatedAt": now,
         }
         if status_token_hash:
             booking_data["statusTokenHash"] = status_token_hash
-        if source == "ADMIN_WEB":
+        if source == "ADMIN_WEB" and not historical_record:
             booking_data["confirmedAt"] = now
             booking_data["confirmedBy"] = actor_id
+        if historical_record:
+            booking_data["recordedAt"] = now
+            booking_data["recordedBy"] = actor_id
+        else:
+            booking_data["capacityReservation"] = {
+                "bucketIds": [ref.id for ref in bucket_refs],
+                "units": units,
+            }
         if line_identity:
             booking_data["lineIdentityHash"] = line_identity_hash(
                 str(line_identity["sub"]), str(line_identity.get("aud", ""))
@@ -436,9 +519,14 @@ def create_booking(
                         "unitPriceSatang": variant.price_satang,
                     },
                     "quantity": 1,
-                    "lineTotalSatang": variant.price_satang
-                    if variant.pricing_mode == "PER_PARTICIPANT" or index == 1
-                    else 0,
+                    "lineTotalSatang": 0
+                    if historical_record
+                    else (
+                        variant.price_satang
+                        if variant.pricing_mode == "PER_PARTICIPANT" or index == 1
+                        else 0
+                    ),
+                    "financiallyExcluded": historical_record,
                     "participantIds": [participant_ref.id],
                     "createdAt": now,
                 },
@@ -500,7 +588,9 @@ def create_booking(
 
         audit_ref = client.collection("audit_events").document()
         audit_data: dict[str, object] = {
-            "eventType": "BOOKING_CREATED",
+            "eventType": (
+                "BOOKING_HISTORY_RECORDED" if historical_record else "BOOKING_CREATED"
+            ),
             "bookingDocId": booking_ref.id,
             "publicBookingId": public_id,
             "actorType": "ADMIN_USER" if source == "ADMIN_WEB" else (
@@ -508,27 +598,29 @@ def create_booking(
             ),
             "source": source,
             "toStatus": initial_status,
+            "financiallyExcluded": historical_record,
             "createdAt": now,
         }
         if actor_id:
             audit_data["actorId"] = actor_id
         tx.set(audit_ref, audit_data)
 
-        event_ref = client.collection("notification_outbox").document()
-        tx.set(
-            event_ref,
-            {
-                "eventId": event_ref.id,
-                "eventType": "BOOKING_CREATED",
-                "aggregateId": booking_ref.id,
-                "publicBookingId": public_id,
-                "bookingStatus": initial_status,
-                "state": "PENDING",
-                "enqueueGeneration": 0,
-                "createdAt": now,
-                "updatedAt": now,
-            },
-        )
+        if not historical_record:
+            event_ref = client.collection("notification_outbox").document()
+            tx.set(
+                event_ref,
+                {
+                    "eventId": event_ref.id,
+                    "eventType": "BOOKING_CREATED",
+                    "aggregateId": booking_ref.id,
+                    "publicBookingId": public_id,
+                    "bookingStatus": initial_status,
+                    "state": "PENDING",
+                    "enqueueGeneration": 0,
+                    "createdAt": now,
+                    "updatedAt": now,
+                },
+            )
         if line_identity:
             pending_ack_ref = client.collection("notification_outbox").document()
             tx.set(

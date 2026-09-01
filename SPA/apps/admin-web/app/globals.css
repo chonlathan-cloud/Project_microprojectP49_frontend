@@ -114,6 +114,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .status-completed { border-color: #79b98d; background: #e3f5e8; color: #166534; }
 .status-cancelled { border-color: #e9a0a0; background: #feeaea; color: #9f1717; }
 .status-no_show { border-color: #b7bdc6; background: #eceff3; color: #394150; }
+.status-recorded { border-color: #a8a29e; background: #f5f5f4; color: #57534e; }
+.not-applicable { color: var(--muted); font-weight: 700; }
 .row-action { width: 38px; height: 38px; border: 1px solid #cfd4cc; border-radius: 8px; background: white; color: var(--forest); cursor: pointer; font-size: 18px; }
 .empty-state { padding: 42px; color: var(--muted); text-align: center; }
 .detail-drawer { width: 370px; height: 100dvh; padding: 22px; overflow-y: auto; position: fixed; z-index: 40; top: 0; right: 0; border-left: 1px solid var(--line); background: white; box-shadow: -14px 0 38px rgb(31 41 55 / 12%); }
@@ -200,6 +202,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .calendar-booking.status-in_service { border-left-color: #2563eb; background: #eef5ff; }
 .calendar-booking.status-completed { border-left-color: #16a34a; background: #eff8f1; }
 .calendar-booking.status-cancelled, .calendar-booking.status-no_show { border-left-color: #dc2626; background: #fff5f5; }
+.calendar-booking.status-recorded { border-left-color: #78716c; background: #f7f6f5; }
 .calendar-booking-top { margin-bottom: 7px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .calendar-booking-top > time { color: var(--forest-dark); font-size: 14px; font-weight: 900; }
 .calendar-booking > strong { display: block; font-size: 16px; line-height: 1.35; }
@@ -379,8 +382,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .coupon-actions { margin-top: 18px; display: flex; gap: 8px; }
 .coupon-actions button { min-height: 42px; padding: 0 16px; border-radius: 8px; font-weight: 800; }
 .drawer-scrim { display: flex; justify-content: flex-end; position: fixed; z-index: 44; inset: 0; background: rgb(20 28 19 / 32%); }
-.walk-in-scrim { z-index: 55; }
-.walk-in-drawer { width: min(600px, 100vw); height: 100dvh; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: white; box-shadow: -18px 0 44px rgb(31 41 55 / 18%); }
+.walk-in-scrim { padding: 20px; display: grid; place-items: center; justify-content: center; z-index: 55; background: rgb(20 28 19 / 48%); }
+.walk-in-drawer { width: min(920px, calc(100vw - 40px)); max-height: min(900px, calc(100dvh - 40px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 24px 64px rgb(20 28 19 / 24%); }
 .walk-in-header { padding: 16px 20px; display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
 .walk-in-header h2, .walk-in-header p { margin: 0; }
 .walk-in-header h2 { color: var(--forest-dark); font-size: 21px; }
@@ -388,6 +391,11 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .walk-in-header > button { width: 40px; min-width: 40px; height: 40px; border: 1px solid var(--line); border-radius: 8px; background: white; cursor: pointer; font-size: 22px; }
 .walk-in-form { min-height: 0; display: flex; flex: 1; flex-direction: column; }
 .walk-in-scroll { min-height: 0; flex: 1; overflow-y: auto; }
+.walk-in-mode { padding: 16px 20px 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.walk-in-mode button { min-height: 64px; padding: 10px 14px; display: grid; align-content: center; gap: 3px; border: 1px solid #b7bdb3; border-radius: 8px; background: white; color: var(--forest-dark); cursor: pointer; text-align: left; }
+.walk-in-mode button[aria-pressed="true"] { border-color: var(--forest); background: #edf2e9; box-shadow: inset 0 0 0 1px var(--forest); }
+.walk-in-mode strong { font-size: 13px; }
+.walk-in-mode span { color: var(--muted); font-size: 11px; font-weight: 650; }
 .walk-in-section { padding: 20px; border-bottom: 1px solid var(--line); }
 .walk-in-section-title { margin-bottom: 15px; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
 .walk-in-section-title > span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; background: var(--forest); color: white; font-size: 12px; font-weight: 900; }
@@ -401,6 +409,9 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .walk-in-field input, .walk-in-field select, .walk-in-field textarea { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid #aeb6aa; border-radius: 8px; background: white; color: var(--text); }
 .walk-in-field textarea { min-height: 82px; resize: vertical; line-height: 1.5; }
 .walk-in-field [aria-invalid="true"] { border-color: #b91c1c; }
+.walk-in-schedule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.walk-in-schedule-grid .walk-in-field { margin-top: 0; }
+.walk-in-selected-date { margin: 7px 0 13px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .walk-in-date { margin-top: 14px; padding: 11px 12px; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; border: 1px solid var(--line); border-radius: 8px; background: #f8f9f7; }
 .walk-in-date span { color: var(--muted); font-size: 11px; font-weight: 700; }
 .walk-in-date strong { font-size: 12px; text-align: right; }
@@ -420,6 +431,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .walk-in-notice { margin: 12px 20px 0; padding: 11px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5; }
 .walk-in-section .walk-in-notice { margin-inline: 0; }
 .walk-in-notice.warning { border: 1px solid #e7b958; background: #fff7dc; color: #754500; }
+.walk-in-notice.historical { display: grid; gap: 2px; border: 1px solid #c7b17b; border-left: 4px solid #8a6d2f; background: #fffaf0; color: #60491f; }
 .walk-in-errors { margin: 16px 20px 0; padding: 12px 14px; border: 1px solid #e9a0a0; border-radius: 8px; background: #fff0f0; color: #991b1b; font-size: 12px; }
 .walk-in-errors strong, .walk-in-errors p { margin: 0; }
 .walk-in-errors ul { margin: 7px 0 0; padding-left: 18px; }
@@ -516,6 +528,11 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .campaign-search, .campaign-editor-grid { grid-template-columns: 1fr; }
   .page-heading { align-items: stretch; flex-direction: column; }
   .new-booking { width: 100%; }
+  .walk-in-scrim { padding: 12px; }
+  .walk-in-drawer { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+  .walk-in-header, .walk-in-section, .walk-in-review { padding-inline: 15px; }
+  .walk-in-mode { padding-inline: 15px; grid-template-columns: 1fr; }
+  .walk-in-schedule-grid { grid-template-columns: 1fr; }
   .walk-in-time-grid { grid-template-columns: repeat(4, 1fr); }
   .walk-in-actions { grid-template-columns: 1fr; }
   .walk-in-review dl > div { grid-template-columns: 1fr; gap: 4px; }

@@ -19,6 +19,7 @@ class BookingStatus(StrEnum):
     CONFIRMED = "CONFIRMED"
     IN_SERVICE = "IN_SERVICE"
     COMPLETED = "COMPLETED"
+    RECORDED = "RECORDED"
     CANCELLED = "CANCELLED"
     NO_SHOW = "NO_SHOW"
 

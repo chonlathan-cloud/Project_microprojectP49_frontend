@@ -265,7 +265,8 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | --- | --- | --- |
 | `GET` | `/api/v1/admin/me` | Active admin user |
 | `GET` | `/api/v1/admin/bookings` | `booking.read` |
-| `POST` | `/api/v1/admin/bookings` | `booking.create`; create same-day `ADMIN_WEB` Walk-in as `CONFIRMED` |
+| `POST` | `/api/v1/admin/availability/search` | `booking.create`; capacity slots for Admin-selected today/future date |
+| `POST` | `/api/v1/admin/bookings` | `booking.create`; create active Staff-assisted Booking as `CONFIRMED` or past record as `RECORDED` |
 | `GET` | `/api/v1/admin/bookings/{bookingId}` | `booking.read` |
 | `PATCH` | `/api/v1/admin/bookings/{bookingId}` | `booking.update` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:confirm` | `booking.confirm` |
@@ -452,8 +453,10 @@ The creation operation has a pre-transaction validation stage and one Firestore 
 - Verify Guest reCAPTCHA and abuse policy
 - Load static catalogue/configuration needed to build candidate allocations
 - Calculate payload digest and inspect idempotency record
-- For Admin Walk-in, require an active `ADMIN`/`STAFF`, appointment date equal to the branch-local current date, a non-past 15-minute bucket, booking/privacy acknowledgement, and `VERBAL` or `PAPER` consent capture evidence
-- Normalize the optional Walk-in phone only when provided; never synthesize a placeholder number
+- For Admin Staff-assisted creation, require an active `ADMIN`/`STAFF`, a 15-minute-aligned appointment, booking/privacy acknowledgement, and `VERBAL` or `PAPER` consent capture evidence
+- `STAFF_ASSISTED` accepts the current non-past bucket or a future date and performs operating-hours, closure, duplicate, and capacity validation
+- `HISTORICAL_RECORD` requires a past appointment time, commits `RECORDED`, and skips operating-hours/closure/capacity reservations, payment eligibility, and notification outbox writes
+- Normalize the optional Admin-entered phone only when provided; never synthesize a placeholder number
 
 ### 14.2 Transaction
 
@@ -463,7 +466,7 @@ The transaction:
 2. Revalidates advance window and service/resource active states.
 3. Confirms the complete allocation for all participants.
 4. Reads and increments the branch-local appointment-date Booking counter.
-5. Creates Customer Web/LIFF Bookings as `PENDING`; creates an authenticated Admin Walk-in as `CONFIRMED` with `source=ADMIN_WEB`, `confirmedAt`, and `confirmedBy` in the same transaction.
+5. Creates Customer Web/LIFF Bookings as `PENDING`; creates an authenticated active Admin Booking as `CONFIRMED`, or a historical record as terminal `RECORDED`, with trusted actor timestamps in the same transaction.
 6. Creates price-bearing Booking line items; a `PER_BOOKING` item is written and charged once.
 7. Creates participant and immutable Booking Health Snapshot documents linked to the appropriate line item.
 8. Resolves or creates the verified/provisional Customer Profile, updates the current Health Profile, and writes versioned consent receipts.
@@ -474,7 +477,7 @@ The transaction:
 13. Writes Booking-created audit and notification outbox events.
 14. Stores the idempotent success response.
 
-Phone abuse counters, active-`PENDING` phone limits, CAPTCHA and Guest status tokens apply only to public Guest submissions. A Walk-in with a supplied phone still receives same-phone/same-time duplicate protection; a Walk-in without a phone stores `contact.mode=NONE` and cannot be automatically reconciled with a Customer Profile. All Walk-in paths retain the same atomic capacity and closure checks as public creation.
+Phone abuse counters, active-`PENDING` phone limits, CAPTCHA and Guest status tokens apply only to public Guest submissions. An Admin-created record with a supplied phone still receives same-phone/same-time duplicate protection; a record without a phone stores `contact.mode=NONE` and cannot be automatically reconciled with a Customer Profile. Active Admin paths retain atomic capacity and closure checks; historical records explicitly do not consume or mutate capacity.
 
 All reads occur before transaction writes. If contention causes a retry, allocation is recomputed from the newly read bucket values. If no complete allocation remains, the API returns `409 CAPACITY_UNAVAILABLE` and writes no Booking.
 

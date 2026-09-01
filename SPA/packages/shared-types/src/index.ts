@@ -6,7 +6,8 @@ export type BookingStatus =
   | "IN_SERVICE"
   | "COMPLETED"
   | "CANCELLED"
-  | "NO_SHOW";
+  | "NO_SHOW"
+  | "RECORDED";
 
 export type PricingMode = "PER_PARTICIPANT" | "PER_BOOKING";
 
@@ -58,6 +59,8 @@ export type PreviewBooking = {
   customerPhoneMasked: string;
   contactMode?: "PHONE" | "NONE";
   source?: "GUEST_WEB" | "LINE_CUSTOMER" | "ADMIN_WEB";
+  adminEntryMode?: "WALK_IN" | "STAFF_ASSISTED" | "HISTORICAL_RECORD";
+  financiallyExcluded?: boolean;
   serviceName: string;
   serviceId?: string;
   serviceNameTh?: string;

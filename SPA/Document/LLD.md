@@ -1110,19 +1110,21 @@ function createBooking(command, context):
     return response with status URL fragment
 ```
 
-### 11.1 Admin Walk-in Variant
+### 11.1 Admin Staff-assisted and Historical Variants
 
-`POST /api/v1/admin/bookings` accepts `bookingMode=WALK_IN`, branch/date/time, an optional phone, one or two participants, `bookingPrivacyAcknowledged=true`, and `consentCaptureMethod=VERBAL|PAPER`. The authenticated Firebase actor is authoritative; the client cannot supply creator identity or source.
+`POST /api/v1/admin/bookings` accepts `bookingMode=STAFF_ASSISTED|HISTORICAL_RECORD` plus the legacy-compatible `WALK_IN`, branch/date/time, an optional phone, one or two participants, `bookingPrivacyAcknowledged=true`, and `consentCaptureMethod=VERBAL|PAPER`. The authenticated Firebase actor is authoritative; the client cannot supply creator identity or source.
 
 The shared creation transaction applies these differences:
 
-1. Require the appointment date to equal the current `Asia/Bangkok` date and reject buckets earlier than the current 15-minute bucket.
-2. Reuse active service, operating-hours, closure, duration, pricing, and capacity validation.
+1. `WALK_IN` remains a same-day compatibility mode. `STAFF_ASSISTED` accepts the current non-past 15-minute bucket or any future date. `HISTORICAL_RECORD` requires a date/time earlier than the current branch-local bucket.
+2. Active modes reuse service, operating-hours, closure, duration, duplicate, and capacity validation. Historical mode snapshots the selected service but does not read or write Capacity buckets and does not apply current closure/operating-hours configuration retroactively.
 3. Skip public CAPTCHA, IP/phone abuse counters, active-`PENDING` phone guards, LINE linking, and Guest status-token creation.
 4. When phone is absent, write `contact={"mode":"NONE"}` without `phoneE164`, `phoneMasked`, or a fabricated value.
-5. Commit `source=ADMIN_WEB`, `status=CONFIRMED`, `confirmedAt`, `confirmedBy`, and append a privacy/health consent receipt with the capture method and staff actor.
-6. Append a safe `BOOKING_CREATED` audit and outbox event. Admin notification rendering must show the committed status, omit the call action when no phone exists, and never offer a confirm action for an already confirmed Walk-in.
+5. Active mode commits `status=CONFIRMED`, `confirmedAt`, and `confirmedBy`. Historical mode commits terminal `status=RECORDED`, `recordedAt`, `recordedBy`, `financiallyExcluded=true`, `estimatedAmountSatang=0`, `paymentStatus=UNAVAILABLE`, and no capacity reservation.
+6. Both modes append privacy/health consent receipts with the capture method and staff actor. Active mode emits `BOOKING_CREATED` audit/outbox events; historical mode emits only a safe `BOOKING_HISTORY_RECORDED` audit and no notification outbox event.
 7. Scope idempotency by the authenticated actor and endpoint so another staff member cannot replay the key.
+
+`POST /api/v1/admin/availability/search` is authenticated and returns capacity-safe slots for one Admin-selected date. It bypasses the public Min/Max Advance Booking window, removes only buckets earlier than the current branch-local bucket, and remains advisory until the create transaction commits.
 
 All transaction reads are issued before the first write. Any missing expected document or failed capacity condition aborts the transaction without partial records.
 

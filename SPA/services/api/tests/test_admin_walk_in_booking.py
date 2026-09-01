@@ -148,7 +148,7 @@ def test_admin_walk_in_endpoint_supplies_trusted_actor_and_policy(
         return {"bookingId": "BK-20260831-001", "status": "CONFIRMED"}
 
     monkeypatch.setattr(booking_routes, "create_booking", fake_create_booking)
-    previous_auth, previous_firestore = _override_dependencies(object())
+    previous_auth, previous_firestore = _override_dependencies(WalkInFirestore())
     try:
         response = client.post(
             "/api/v1/admin/bookings",
@@ -177,6 +177,7 @@ def test_admin_walk_in_endpoint_supplies_trusted_actor_and_policy(
     assert response.status_code == 201, response.text
     assert captured["source"] == "ADMIN_WEB"
     assert captured["initial_status"] == "CONFIRMED"
+    assert captured["admin_booking_mode"] == "WALK_IN"
     assert captured["actor_id"] == "staff-001"
     assert captured["phone"] is None
     assert captured["consent_capture_method"] == "PAPER"
@@ -226,6 +227,7 @@ def test_walk_in_transaction_uses_no_fake_phone_and_commits_confirmed(
         source="ADMIN_WEB",
         initial_status="CONFIRMED",
         actor_id="staff-001",
+        admin_booking_mode="WALK_IN",
         consent_capture_method="VERBAL",
         booking_privacy_acknowledged=True,
     )
@@ -264,3 +266,154 @@ def test_walk_in_transaction_uses_no_fake_phone_and_commits_confirmed(
     ]
     assert audits[-1]["actorType"] == "ADMIN_USER"
     assert audits[-1]["toStatus"] == "CONFIRMED"
+
+
+def test_staff_assisted_and_historical_windows_are_mutually_exclusive() -> None:
+    now = datetime(2026, 9, 1, 7, 7, tzinfo=UTC)  # 14:07 in Bangkok
+    future = datetime.fromisoformat("2026-09-05T14:00:00+07:00")
+    past = datetime.fromisoformat("2026-08-31T14:00:00+07:00")
+
+    booking_service._validate_staff_assisted_window(future, now=now)
+    booking_service._validate_historical_record_window(past, now=now)
+    with pytest.raises(AdvanceWindowViolation, match="HISTORICAL_RECORD"):
+        booking_service._validate_staff_assisted_window(past, now=now)
+    with pytest.raises(AdvanceWindowViolation, match="past"):
+        booking_service._validate_historical_record_window(future, now=now)
+
+
+def test_historical_record_is_terminal_non_financial_and_skips_capacity_and_outbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    monkeypatch.setattr(booking_service.firestore, "transactional", lambda function: function)
+    monkeypatch.setattr(
+        booking_service,
+        "_validate_historical_record_window",
+        lambda *args, **kwargs: None,
+    )
+
+    result = booking_service.create_booking(
+        database,  # type: ignore[arg-type]
+        branch_id="branch_001",
+        date="2026-08-20",
+        time="14:00",
+        phone=None,
+        participants=[
+            {
+                "nickname": "Som",
+                "serviceVariantId": "traditional-thai-60",
+                "hasHealthInformation": False,
+                "healthDetails": None,
+                "healthConsent": True,
+            }
+        ],
+        idempotency_key="historical-record-001",
+        source="ADMIN_WEB",
+        initial_status="RECORDED",
+        actor_id="staff-001",
+        admin_booking_mode="HISTORICAL_RECORD",
+        consent_capture_method="VERBAL",
+        booking_privacy_acknowledged=True,
+    )
+
+    assert result["status"] == "RECORDED"
+    assert result["estimatedAmountSatang"] == 0
+    booking = next(
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "bookings"
+    )
+    assert booking["customerListBucket"] == "HISTORY"
+    assert booking["financiallyExcluded"] is True
+    assert booking["paymentStatus"] == "UNAVAILABLE"
+    assert booking["capacityReleased"] is True
+    assert "capacityReservation" not in booking
+    assert booking["recordedBy"] == "staff-001"
+    assert not any(
+        collection == "capacity_buckets" for collection, _ in database.documents
+    )
+    assert not any(
+        collection == "notification_outbox" for collection, _ in database.documents
+    )
+    line_item = next(
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "booking_line_items"
+    )
+    assert line_item["lineTotalSatang"] == 0
+    assert line_item["financiallyExcluded"] is True
+    audit = next(
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "audit_events"
+    )
+    assert audit["eventType"] == "BOOKING_HISTORY_RECORDED"
+
+
+def test_admin_historical_endpoint_maps_to_recorded_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_create_booking(_client: object, **kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"bookingId": "BK-20260820-001", "status": "RECORDED"}
+
+    monkeypatch.setattr(booking_routes, "create_booking", fake_create_booking)
+    previous_auth, previous_firestore = _override_dependencies(object())
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings",
+            headers={"Idempotency-Key": "historical-record-001"},
+            json={
+                "bookingMode": "HISTORICAL_RECORD",
+                "date": "2026-08-20",
+                "time": "14:00",
+                "phone": None,
+                "bookingPrivacyAcknowledged": True,
+                "consentCaptureMethod": "PAPER",
+                "participants": [
+                    {
+                        "nickname": "Som",
+                        "serviceVariantId": "traditional-thai-60",
+                        "hasHealthInformation": False,
+                        "healthDetails": None,
+                        "healthConsent": True,
+                    }
+                ],
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 201, response.text
+    assert captured["initial_status"] == "RECORDED"
+    assert captured["admin_booking_mode"] == "HISTORICAL_RECORD"
+
+
+def test_admin_availability_uses_authenticated_admin_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_search(_client: object, **kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"slots": [], "configurationState": "CAPACITY_UNAVAILABLE"}
+
+    monkeypatch.setattr(booking_routes, "search_capacity_slots", fake_search)
+    previous_auth, previous_firestore = _override_dependencies(WalkInFirestore())
+    try:
+        response = client.post(
+            "/api/v1/admin/availability/search",
+            json={
+                "date": "2026-09-05",
+                "participants": [{"serviceVariantId": "traditional-thai-60"}],
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 200, response.text
+    assert captured["mode"] == "ADMIN"
+    assert captured["date_from"] == "2026-09-05"
+    assert captured["date_to"] == "2026-09-05"

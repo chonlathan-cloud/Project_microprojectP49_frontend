@@ -4,9 +4,9 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Business Logic |
-| Version | 1.4 |
+| Version | 1.5 |
 | Status | Approved business baseline |
-| Last updated | 31 สิงหาคม 2026 |
+| Last updated | 1 กันยายน 2026 |
 | Initial branch scope | 1 สาขา |
 | Timezone / Currency | Asia/Bangkok / THB |
 
@@ -91,11 +91,12 @@ Google Stitch ที่อนุญาตให้ใช้อ้างอิง
 
 ### 5.2 Admin Operations
 
-- สร้างและยืนยัน Booking สำหรับลูกค้า Walk-in จาก Admin Web
-- Walk-in ต้องเข้ารับบริการในวันเดียวกับวันที่สร้าง Booking และยังต้องตรวจ Operating Hours, Slot Block และ Capacity แบบ Transaction
-- Walk-in ใช้ชื่อเล่นเป็นข้อมูลขั้นต่ำ เบอร์โทรศัพท์เป็นข้อมูลทางเลือก และห้ามใช้เบอร์ร้านหรือเบอร์ปลอมแทนลูกค้าที่ไม่มีช่องทางติดต่อ
+- สร้าง Booking แบบ Staff-assisted จาก Admin Web สำหรับลูกค้า Walk-in วันนี้ ลูกค้าที่ติดต่อผ่าน LINE เพื่อจองล่วงหน้า และการบันทึกประวัติย้อนหลังที่พนักงานลืมลงระบบ
+- Booking วันนี้หรืออนาคตต้องตรวจ Operating Hours, Slot Block และ Capacity แบบ Transaction และเริ่มต้นเป็น `CONFIRMED`
+- วันที่/เวลาที่ผ่านไปแล้วสร้างได้เฉพาะโหมด `HISTORICAL_RECORD` เป็นสถานะปลายทาง `RECORDED`; ใช้เพื่อเก็บประวัติเท่านั้น ไม่กัน Capacity, ไม่สร้างยอดที่ต้องชำระ, ไม่เข้าสู่ Accounting และไม่ส่ง Booking notification
+- Staff-assisted Booking ใช้ชื่อเล่นเป็นข้อมูลขั้นต่ำ เบอร์โทรศัพท์เป็นข้อมูลทางเลือก และห้ามใช้เบอร์ร้านหรือเบอร์ปลอมแทนลูกค้าที่ไม่มีช่องทางติดต่อ
 - เมื่อไม่มีเบอร์โทร ระบบไม่สร้าง Phone Guard, Phone Duplicate Key, Customer LINE Link หรือ Secure Status Link และต้องแสดงว่า `ไม่มีเบอร์ติดต่อ` ใน Admin Web
-- Booking ที่สร้างโดย `ADMIN`/`STAFF` สำหรับ Walk-in เริ่มต้นเป็น `CONFIRMED` ได้ เพราะผู้สร้างเป็นผู้ตรวจสอบและยืนยันรายการใน interaction เดียวกัน โดยต้องบันทึก Actor และ Audit Trail
+- Booking วันนี้หรืออนาคตที่สร้างโดย `ADMIN`/`STAFF` เริ่มต้นเป็น `CONFIRMED` ได้ เพราะผู้สร้างเป็นผู้ตรวจสอบและยืนยันรายการใน interaction เดียวกัน โดยต้องบันทึก Actor และ Audit Trail
 - พนักงานต้องอ่าน Privacy Notice/Booking Terms และข้อความขอความยินยอมด้านข้อมูลสุขภาพให้ลูกค้ารับทราบ แล้วบันทึกวิธีรับหลักฐานเป็น `VERBAL` หรือ `PAPER`; ห้ามพนักงานให้ความยินยอมแทนลูกค้า
 - ดู Booking แบบปฏิทิน รายการ และตารางเวลา
 - ค้นหาด้วย Booking ID, ชื่อลูกค้า หรือเบอร์โทรศัพท์
@@ -234,7 +235,8 @@ Website Guest ไม่ใช้ OTP ใน Phase 1 จึงต้องมี�
 - การคำนวณใช้วันและเวลาของสาขาใน `Asia/Bangkok`
 - ลูกค้าเลือก Slot ได้เฉพาะช่วงเวลาทำการที่ไม่ถูก Block และมี Capacity เพียงพอ
 - เมื่อ Admin เปลี่ยนกฎ ค่าใหม่ใช้กับการจองใหม่ ไม่ยกเลิก Booking ที่มีอยู่โดยอัตโนมัติ
-- กฎ Min/Max Advance Booking ใช้กับ Customer Web และ LIFF; Admin Walk-in เป็นข้อยกเว้นเฉพาะวันปัจจุบันของสาขาและต้องไม่ใช้เพื่อสร้าง Booking ย้อนหลัง
+- กฎ Min/Max Advance Booking ใช้กับ Customer Web และ LIFF; Admin Staff-assisted Booking เลือกวันวันนี้หรืออนาคตได้โดยไม่ใช้ Min/Max Window แต่ยังต้องผ่าน Availability และ Capacity
+- วัน/เวลาที่ผ่านไปแล้วต้องใช้ `HISTORICAL_RECORD` เท่านั้น และไม่ถือเป็นการจอง Capacity ย้อนหลัง
 
 ## 10. Availability และ Capacity Logic
 
@@ -283,20 +285,22 @@ PENDING ───────→ CONFIRMED ───────→ IN_SERVICE �
 | `CONFIRMED` | ร้านรับรองวัน เวลา Service และ Capacity แล้ว | ใช้ | LINE Group Approver, `ADMIN` หรือ `STAFF` |
 | `IN_SERVICE` | ลูกค้าเริ่มรับบริการ | ใช้ | `ADMIN`/`STAFF` |
 | `COMPLETED` | ให้บริการเสร็จแล้ว | ไม่ใช้ | `ADMIN`/`STAFF` |
+| `RECORDED` | ประวัติย้อนหลังแบบไม่มีผลทางการเงิน | ไม่ใช้ | `ADMIN`/`STAFF` ขณะสร้าง record |
 | `CANCELLED` | ร้านหรือลูกค้าติดต่อให้ยกเลิก โดยผู้ใช้ Admin Web บันทึกเหตุผล | ไม่ใช้ | `ADMIN`/`STAFF` |
 | `NO_SHOW` | Booking ที่ Confirm แล้วแต่ลูกค้าไม่มาตามนัด | ไม่ใช้ | `ADMIN`/`STAFF` |
 
 ### 11.1 Transition Rules
 
 - Booking ใหม่จาก Customer Web หรือ LIFF เริ่มต้นเป็น `PENDING` เสมอ
-- ข้อยกเว้นคือ Walk-in ที่สร้างโดย `ADMIN`/`STAFF` ผ่าน Admin Web เริ่มต้นเป็น `CONFIRMED` และ Audit ต้องระบุ `source=ADMIN_WEB`, ผู้สร้าง และการยืนยันใน interaction เดียวกัน
+- Staff-assisted Booking วันนี้หรืออนาคตที่สร้างโดย `ADMIN`/`STAFF` ผ่าน Admin Web เริ่มต้นเป็น `CONFIRMED` และ Audit ต้องระบุ `source=ADMIN_WEB`, ผู้สร้าง และการยืนยันใน interaction เดียวกัน
+- Historical record เริ่มต้นและจบที่ `RECORDED`; ต้องระบุ `financiallyExcluded=true`, ผู้บันทึก และเวลาที่บันทึกใน Audit
 - `PENDING → CONFIRMED` ทำได้ครั้งเดียว
 - `PENDING → CANCELLED` ทำได้โดย `ADMIN`/`STAFF` พร้อมเหตุผล
 - `CONFIRMED → IN_SERVICE` ต้องมีหมอนวดถูกมอบหมายแล้ว
 - `CONFIRMED → CANCELLED` ต้องมีเหตุผล
 - `CONFIRMED → NO_SHOW` ใช้เมื่อลูกค้าไม่มาตามนัดเท่านั้น
 - `IN_SERVICE → COMPLETED` ใช้เมื่อจบการให้บริการ
-- `COMPLETED`, `CANCELLED` และ `NO_SHOW` เป็นสถานะปลายทาง การเปิด Booking กลับมาใหม่ต้องเป็นการดำเนินการที่มี Audit Trail
+- `COMPLETED`, `RECORDED`, `CANCELLED` และ `NO_SHOW` เป็นสถานะปลายทาง การเปิด Booking กลับมาใหม่ต้องเป็นการดำเนินการที่มี Audit Trail
 - คำสั่งซ้ำหรือคำสั่งที่ขัดกับสถานะปัจจุบันต้องไม่เปลี่ยนข้อมูลซ้ำ
 
 ## 12. Therapist Assignment

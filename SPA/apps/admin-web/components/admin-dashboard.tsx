@@ -16,8 +16,14 @@ const statusLabel: Record<BookingStatus, { th: string; en: string }> = {
   IN_SERVICE: { th: "กำลังให้บริการ", en: "In service" },
   COMPLETED: { th: "เสร็จสิ้น", en: "Completed" },
   CANCELLED: { th: "ยกเลิก", en: "Cancelled" },
-  NO_SHOW: { th: "ไม่มาตามนัด", en: "No show" }
+  NO_SHOW: { th: "ไม่มาตามนัด", en: "No show" },
+  RECORDED: { th: "บันทึกย้อนหลัง", en: "Recorded" }
 };
+
+function adminEntryLabel(booking: PreviewBooking, locale: Locale): string {
+  if (booking.adminEntryMode === "HISTORICAL_RECORD") return locale === "th" ? "บันทึกย้อนหลัง" : "Historical";
+  return locale === "th" ? "Admin จองให้" : "Staff assisted";
+}
 
 const navItems = [
   ["bookings", "▦", "รายการจอง", "Bookings"],
@@ -421,7 +427,7 @@ export function AdminDashboard({ user }: { user: User }) {
         </header>
 
         {activeView === "bookings" ? <main className="dashboard-content">
-          <div className="page-heading"><div><p className="eyebrow">FRONT DESK • ASIA/BANGKOK</p><h1>{text.title}</h1><p>{text.subtitle}</p></div><button className="new-booking" type="button" onClick={() => { setSelectedId(""); setWalkInOpen(true); }}>{locale === "th" ? "+ จองลูกค้า Walk-in" : "+ Walk-in booking"}</button></div>
+          <div className="page-heading"><div><p className="eyebrow">FRONT DESK • ASIA/BANGKOK</p><h1>{text.title}</h1><p>{text.subtitle}</p></div><button className="new-booking" type="button" onClick={() => { setSelectedId(""); setWalkInOpen(true); }}>{locale === "th" ? "+ สร้าง Booking" : "+ Create booking"}</button></div>
 
           {bookingState === "error" && <div className="module-state error" role="alert">{locale === "th" ? "โหลดรายการจองไม่สำเร็จ กรุณาลองเข้าสู่ระบบใหม่หรือตรวจสอบสิทธิ์" : "Bookings could not be loaded. Sign in again or check your permissions."}</div>}
 
@@ -439,8 +445,8 @@ export function AdminDashboard({ user }: { user: User }) {
                 <tbody>
                   {filtered.map((booking) => <tr key={booking.bookingId} className={selectedId === booking.bookingId ? "selected-row" : undefined}>
                     <td><strong className="date-cell">{formatDate(booking.startLocal, locale)}</strong><span className="time-cell">{formatTime(booking.startLocal)}</span><small>{booking.bookingId}</small></td>
-                    <td><strong>{booking.customerName}</strong><small>{booking.customerPhoneMasked || (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</small>{booking.source === "ADMIN_WEB" && <span className="walk-in-source">Walk-in</span>}{booking.healthAlert && <span className="health-alert">⚠ {locale === "th" ? "ตรวจสุขภาพ" : "Health review"}</span>}</td>
-                    <td>{formatServiceName(booking, locale)}</td><td>{booking.pax}</td><td>{booking.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</td><td><span className={`status status-${booking.status.toLowerCase()}`}>{statusLabel[booking.status][locale]}</span></td><td><button className="row-action" onClick={() => setSelectedId(booking.bookingId)} aria-label={`${text.detail} ${booking.bookingId}`}>→</button></td>
+                    <td><strong>{booking.customerName}</strong><small>{booking.customerPhoneMasked || (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</small>{booking.source === "ADMIN_WEB" && <span className="walk-in-source">{adminEntryLabel(booking, locale)}</span>}{booking.healthAlert && <span className="health-alert">⚠ {locale === "th" ? "ตรวจสุขภาพ" : "Health review"}</span>}</td>
+                    <td>{formatServiceName(booking, locale)}</td><td>{booking.pax}</td><td>{booking.status === "RECORDED" ? <span className="not-applicable">{locale === "th" ? "ไม่เกี่ยวข้อง" : "Not applicable"}</span> : booking.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</td><td><span className={`status status-${booking.status.toLowerCase()}`}>{statusLabel[booking.status][locale]}</span></td><td><button className="row-action" onClick={() => setSelectedId(booking.bookingId)} aria-label={`${text.detail} ${booking.bookingId}`}>→</button></td>
                   </tr>)}
                 </tbody>
               </table>
@@ -452,13 +458,13 @@ export function AdminDashboard({ user }: { user: User }) {
 
       {selected && <aside ref={detailDrawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title">
         <div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button ref={closeDrawerButtonRef} aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div>
-        <div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked || (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</p>{selected.source === "ADMIN_WEB" && <span className="walk-in-source">Walk-in</span>}</div></div>
+        <div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked || (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</p>{selected.source === "ADMIN_WEB" && <span className="walk-in-source">{adminEntryLabel(selected, locale)}</span>}</div></div>
         {selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดจะแสดงเฉพาะผู้ดูแลที่มีสิทธิ์" : "Details are restricted to authorized operators"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}
         <dl>
           <div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div>
           <div><dt>{text.service}</dt><dd>{formatServiceName(selected, locale)}</dd></div>
           <div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div>
-          <div><dt>{text.therapist}</dt><dd>{selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div>
+          <div><dt>{text.therapist}</dt><dd>{selected.status === "RECORDED" ? <span className="not-applicable">{locale === "th" ? "ไม่เกี่ยวข้อง" : "Not applicable"}</span> : selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div>
           <div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div>
           {selected.status === "COMPLETED" && <div><dt>{locale === "th" ? "การชำระเงิน" : "Payment"}</dt><dd>{paymentOptions?.status === "PAID" ? (locale === "th" ? "ชำระแล้ว" : "Paid") : (locale === "th" ? "รอชำระ" : "Payment due")}</dd></div>}
         </dl>
@@ -484,7 +490,7 @@ export function AdminDashboard({ user }: { user: User }) {
         {selected.status === "IN_SERVICE" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button></div>}
         {selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}
       </aside>}
-      {walkInOpen && <WalkInBookingDrawer user={user} locale={locale} onClose={() => setWalkInOpen(false)} onCreated={(bookingId) => { setWalkInOpen(false); setBookingRefresh((value) => value + 1); setSelectedId(bookingId); notify({ tone: "success", title: locale === "th" ? "สร้างและยืนยัน Walk-in แล้ว" : "Walk-in booking confirmed", message: bookingId }); }} />}
+      {walkInOpen && <WalkInBookingDrawer user={user} locale={locale} onClose={() => setWalkInOpen(false)} onCreated={(bookingId, status) => { setWalkInOpen(false); setBookingRefresh((value) => value + 1); setSelectedId(bookingId); notify({ tone: "success", title: status === "RECORDED" ? (locale === "th" ? "บันทึกรายการย้อนหลังแล้ว" : "Historical record saved") : (locale === "th" ? "สร้างและยืนยัน Booking แล้ว" : "Booking created and confirmed"), message: bookingId }); }} />}
     </div>
   );
 }

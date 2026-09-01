@@ -11,7 +11,7 @@
 
 ## 2. Screen 1: Booking Calendar & List View (Main Screen)
 - **Top Control Bar:**
-  - Primary Action: `+ Walk-in Booking` opens a right-side staff-assisted creation drawer while preserving the queue/calendar context.
+  - Primary Action: `+ Create Booking` opens a centered staff-assisted modal. Staff selects today, a future date, or a non-financial historical record while preserving the queue/calendar context behind the modal.
   - Date Filter Bar: Interactive Date Picker with quick buttons (`Today`, `Tomorrow`, `This Week`).
   - View Switcher Toggle: `Timeline Grid View` (Rooms vs Time) vs `Data Table View`.
   - Search & Filter: Filter by status (`All`, `Pending`, `In-Service`, `Completed`).

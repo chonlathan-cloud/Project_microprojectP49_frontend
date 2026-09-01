@@ -16,11 +16,13 @@ from app.core.errors import ConflictDomainError, NotFoundDomainError, Validation
 from app.core.settings import get_settings
 from app.core.types import BookingStatus
 from app.domains.bookings.service import (
+    _variant,
     create_booking,
     customer_list_bucket,
     serialize_booking,
 )
 from app.domains.bookings.state_machine import BookingStateMachine
+from app.domains.capacity.availability import search_capacity_slots
 from app.infrastructure.firestore import get_firestore_client
 from app.integrations.line_identity import (
     line_identity_hash,
@@ -58,8 +60,10 @@ class CreateBookingRequest(ApiModel):
     line_id_token: str | None = Field(default=None, min_length=20, max_length=4096)
 
 
-class CreateAdminWalkInBookingRequest(ApiModel):
-    booking_mode: Literal["WALK_IN"] = "WALK_IN"
+class CreateAdminBookingRequest(ApiModel):
+    booking_mode: Literal["WALK_IN", "STAFF_ASSISTED", "HISTORICAL_RECORD"] = (
+        "STAFF_ASSISTED"
+    )
     branch_id: str = "branch_001"
     date: str
     time: str
@@ -67,6 +71,16 @@ class CreateAdminWalkInBookingRequest(ApiModel):
     participants: list[ParticipantInput] = Field(min_length=1, max_length=2)
     booking_privacy_acknowledged: bool
     consent_capture_method: Literal["VERBAL", "PAPER"]
+
+
+class AdminAvailabilityParticipant(ApiModel):
+    service_variant_id: str = Field(min_length=1)
+
+
+class AdminAvailabilityRequest(ApiModel):
+    branch_id: str = "branch_001"
+    date: str
+    participants: list[AdminAvailabilityParticipant] = Field(min_length=1, max_length=2)
 
 
 class TransitionRequest(ApiModel):
@@ -399,8 +413,8 @@ async def list_admin_bookings(
 
 
 @router.post("/api/v1/admin/bookings", status_code=status.HTTP_201_CREATED)
-async def create_admin_walk_in_booking(
-    request: CreateAdminWalkInBookingRequest,
+async def create_admin_booking(
+    request: CreateAdminBookingRequest,
     actor: Annotated[dict[str, object], Depends(require_admin_user)],
     client: Annotated[firestore.Client, Depends(get_firestore_client)],
     idempotency_key: Annotated[str | None, Header()] = None,
@@ -411,6 +425,7 @@ async def create_admin_walk_in_booking(
         )
     if not request.booking_privacy_acknowledged:
         raise ValidationDomainError("Booking privacy acknowledgement is required")
+    historical_record = request.booking_mode == "HISTORICAL_RECORD"
     return create_booking(
         client,
         branch_id=request.branch_id,
@@ -420,10 +435,36 @@ async def create_admin_walk_in_booking(
         participants=[p.model_dump(by_alias=True) for p in request.participants],
         idempotency_key=idempotency_key,
         source="ADMIN_WEB",
-        initial_status="CONFIRMED",
+        initial_status="RECORDED" if historical_record else "CONFIRMED",
         actor_id=str(actor["uid"]),
+        admin_booking_mode=request.booking_mode,
         consent_capture_method=request.consent_capture_method,
         booking_privacy_acknowledged=request.booking_privacy_acknowledged,
+    )
+
+
+@router.post("/api/v1/admin/availability/search")
+async def search_admin_booking_availability(
+    request: AdminAvailabilityRequest,
+    _: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> dict[str, object]:
+    variants = [
+        _variant(client, participant.service_variant_id)[1]
+        for participant in request.participants
+    ]
+    if any(item.required_pax == 2 for item in variants) and (
+        len(variants) != 2 or len({item.id for item in variants}) != 1
+    ):
+        raise ValidationDomainError("Invalid participant configuration")
+    return search_capacity_slots(
+        client,
+        branch_id=request.branch_id,
+        date_from=request.date,
+        date_to=request.date,
+        duration_minutes=max(item.duration_minutes for item in variants),
+        units=len(variants),
+        mode="ADMIN",
     )
 
 
