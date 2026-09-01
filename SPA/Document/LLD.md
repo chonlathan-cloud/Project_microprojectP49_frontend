@@ -837,6 +837,12 @@ The corresponding `bookings/{bookingDocId}` stores only the derived list index:
 
 `customerListBucket` remains a status-derived compatibility field: it is `UPCOMING` for `PENDING`, `CONFIRMED`, and `IN_SERVICE`, and every status transition updates it transactionally. The customer list API does not use it as the final view decision because a `PENDING` or `CONFIRMED` Booking can become historical as time passes without a write. Instead, the API queries by `lineIdentityHash`, orders by `startAt`, and classifies against a signed, pagination-stable `asOf` timestamp. Future `PENDING`/`CONFIRMED` and `IN_SERVICE` are Upcoming; terminal statuses and past `PENDING`/`CONFIRMED` are History. Composite indexes cover `(lineIdentityHash ASC, startAt ASC)` and its descending equivalent. The list response is an explicit safe projection and never reuses the Admin serializer.
 
+### 6.14.1 Admin Booking Queue query contract
+
+`GET /api/v1/admin/bookings` accepts `branch_id`, optional `local_date`, `status`, `search`, `pageSize` (default 25, maximum 100), and an optional signed `pageToken`. The query order is always `startAt DESC, __name__ DESC`, which gives stable newest-to-oldest pages when multiple Bookings share the same appointment time. The cursor payload contains the last `startAt`, document ID, and a SHA-256 fingerprint of branch/date/status/search; a cursor reused with different filters returns `422 VALIDATION_FAILED`.
+
+Firestore applies branch/date/status equality filters and the descending index before pagination. Because Firestore does not provide case-insensitive substring search, `search` performs a bounded 100-document cursor scan over that ordered query and matches Booking ID, customer name, masked phone, or normalized E.164 phone until one page plus a look-ahead row is found. The API returns `items`, `nextPageToken`, `hasMore`, `pageSize`, and branch-wide aggregate counts for `PENDING` and confirmed/unassigned work. The Admin Web must not calculate those operational counts from the current page.
+
 ### 6.15 Guard and Idempotency Documents
 
 `phone_booking_guards/{branchId_phoneKey}`:

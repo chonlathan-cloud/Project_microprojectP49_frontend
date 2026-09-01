@@ -14,12 +14,14 @@
   - Primary Action: `+ Create Booking` opens a centered staff-assisted modal. Staff selects today, a future date, or a historical financial record while preserving the queue/calendar context behind the modal. Historical mode records immutable service subtotal, optional Admin discount, net service amount, separate optional tip, and gross total while skipping capacity reservation and customer notification. Tip input is available only in historical mode. An erroneous historical record can be cancelled from Booking detail with a required reason; cancellation excludes its financial total without changing Capacity or notifying the customer.
   - Date Filter Bar: Interactive Date Picker with quick buttons (`Today`, `Tomorrow`, `This Week`).
   - View Switcher Toggle: `Timeline Grid View` (Rooms vs Time) vs `Data Table View`.
-  - Search & Filter: Filter by status (`All`, `Pending`, `In-Service`, `Completed`).
+  - Search & Filter: Server-side search by Booking ID/name/phone and status filter (`All`, `Pending`, `Confirmed`, `In-Service`). Changing either returns to page 1.
 - **Main View A: Timeline Grid View (Gantt style):**
   - X-Axis: Time Slots (10:00 to 21:00).
   - Y-Axis: Rooms / Beds (Room 1, Room 2, Couple Room, Foot Area).
   - Booking Blocks: Color-coded cards showing Customer Name, Course, and Health Alert Tag (`⚠️`).
 - **Main View B: Data Table View:**
+  - Default order is newest appointment to oldest (`startAt DESC`), with 25 rows per page and selectable 50/100 row sizes.
+  - Signed cursor pagination provides Previous/Next controls and stores query, status, page size, page number, and cursor in URL/history.
   - Columns: Booking Time, Customer Name & Phone, Service Course, Duration, Pax, Health Warning Tag, Assigned Therapist, Status Badge, Quick Actions.
   - **Quick Action Column:** One-click status dropdown (`Confirmed` -> `In-Service` -> `Completed`), plus `Call Customer` button.
 

@@ -7,7 +7,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, Query as FastAPIQuery, status
+from fastapi import APIRouter, Depends, Header, status
+from fastapi import Query as FastAPIQuery
 from google.cloud import firestore
 from pydantic import BaseModel, ConfigDict, Field
 

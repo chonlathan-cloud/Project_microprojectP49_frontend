@@ -72,7 +72,7 @@ Centered modal ต้องมี `aria-modal`, focus trap, ปิดด้ว�
 | Stage | Staff goal | Screen / touchpoint | Information hierarchy | Primary action | Recovery |
 | --- | --- | --- | --- | --- | --- |
 | 1. Orient | รู้ว่างานเร่งด่วนมีอะไร | Dashboard | Pending ตามเวลานัด → Unassigned → Failed delivery | เปิด Queue ที่ต้องจัดการ | หากโหลด count ไม่ได้ ให้คงค่าล่าสุดพร้อมสถานะ stale |
-| 2. Review | ตรวจว่ารับ Booking ได้ | Booking list + detail drawer | สถานะ/เวลา → ลูกค้า → Service/Pax → Capacity → Health Alert | Confirm | หากข้อมูล version เก่า ให้ refresh และแสดงค่าปัจจุบัน |
+| 2. Review | ตรวจว่ารับ Booking ได้ | Booking list + detail drawer | รายการใหม่ไปเก่า → สถานะ/เวลา → ลูกค้า → Service/Pax → Capacity → Health Alert | Confirm | ใช้ server-side search/filter และ cursor pagination; หากข้อมูล version เก่า ให้ refresh และแสดงค่าปัจจุบัน |
 | 3. Decide | รับหรือปฏิเสธคำขอ | Confirmation dialog | Booking ID, ผลของ action และ warning ที่เกี่ยวข้อง | ยืนยัน action | Cancel ต้องบังคับเหตุผล; validation ต้องรักษาข้อมูลที่กรอก |
 | 4. Prepare | เตรียมห้อง/หมอนวด/ข้อมูลสุขภาพ | Calendar + assignment | เวลา, duration, participant, therapist, warning | Assign therapist | ห้าม Start จนมอบหมายครบทุก participant |
 | 5. Serve | อัปเดตสถานะตามหน้างาน | Booking drawer | สถานะปัจจุบันและ valid next action | Start / Complete / No-show | Invalid transition แสดงเหตุผลและ state ล่าสุด |
@@ -105,6 +105,8 @@ Notification badge ต้องหมายถึง **จำนวนราย�
 Metric หรือ analytics ไม่ควรแย่ง visual weight จาก operational queue
 
 Primary action `+ สร้าง Booking` อยู่ใน Page Heading ของ Booking Queue และ Calendar ไม่ใช้ Summary Card หรือเมนูซ่อน
+
+Booking Queue แสดง 25 รายการต่อหน้าเป็นค่าเริ่มต้นและเลือก 50/100 ได้ โดยเรียง `startAt` จากใหม่ไปเก่าเสมอ ปุ่มก่อนหน้า/ถัดไปต้องมี disabled state ชัดเจนและคง search, status, page size และ cursor ใน URL/history เพื่อให้ refresh หรือ browser Back กลับมาที่ context เดิมได้ จำนวน Pending/Unassigned ด้านบนเป็นยอดระดับสาขา ไม่ใช่จำนวนเฉพาะหน้าปัจจุบัน ระหว่างเปลี่ยนหน้าต้องคงข้อมูลเดิมไว้พร้อมสถานะกำลังโหลดเพื่อลด layout shift.
 
 ## 5. Booking detail UX
 

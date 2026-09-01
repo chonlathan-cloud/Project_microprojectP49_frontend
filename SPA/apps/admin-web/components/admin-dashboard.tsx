@@ -97,6 +97,38 @@ const DEFAULT_BOOKING_PAGE_SIZE = 25;
 const BOOKING_PAGE_SIZES = [25, 50, 100] as const;
 const BOOKING_FILTERS = new Set<string>(["ALL", ...Object.keys(statusLabel)]);
 
+function bookingListUrl({
+  query,
+  filter,
+  pageSize,
+  pageToken,
+  pageNumber,
+  previousPageTokens,
+}: {
+  query: string;
+  filter: "ALL" | BookingStatus;
+  pageSize: number;
+  pageToken: string | null;
+  pageNumber: number;
+  previousPageTokens: Array<string | null>;
+}) {
+  const url = new URL(window.location.href);
+  if (query) url.searchParams.set("q", query);
+  else url.searchParams.delete("q");
+  if (filter !== "ALL") url.searchParams.set("status", filter);
+  else url.searchParams.delete("status");
+  if (pageSize !== DEFAULT_BOOKING_PAGE_SIZE) url.searchParams.set("pageSize", String(pageSize));
+  else url.searchParams.delete("pageSize");
+  if (pageToken) url.searchParams.set("pageToken", pageToken);
+  else url.searchParams.delete("pageToken");
+  if (pageNumber > 1) url.searchParams.set("page", String(pageNumber));
+  else url.searchParams.delete("page");
+  return {
+    url,
+    state: { ...window.history.state, bookingPageTokens: previousPageTokens },
+  };
+}
+
 export function AdminDashboard({ user }: { user: User }) {
   const { notify, requestConfirmation } = useAdminFeedback();
   const [activeView, setActiveView] = useState<"bookings" | AdminView>("bookings");
@@ -129,29 +161,6 @@ export function AdminDashboard({ user }: { user: User }) {
   const closeDrawerButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
-  function bookingListUrl(
-    nextToken: string | null,
-    nextPageNumber: number,
-    nextPreviousTokens: Array<string | null>,
-  ) {
-    const url = new URL(window.location.href);
-    const normalizedQuery = debouncedQuery.trim();
-    if (normalizedQuery) url.searchParams.set("q", normalizedQuery);
-    else url.searchParams.delete("q");
-    if (filter !== "ALL") url.searchParams.set("status", filter);
-    else url.searchParams.delete("status");
-    if (pageSize !== DEFAULT_BOOKING_PAGE_SIZE) url.searchParams.set("pageSize", String(pageSize));
-    else url.searchParams.delete("pageSize");
-    if (nextToken) url.searchParams.set("pageToken", nextToken);
-    else url.searchParams.delete("pageToken");
-    if (nextPageNumber > 1) url.searchParams.set("page", String(nextPageNumber));
-    else url.searchParams.delete("page");
-    return {
-      url,
-      state: { ...window.history.state, bookingPageTokens: nextPreviousTokens },
-    };
-  }
-
   function resetPagination() {
     setPageToken(null);
     setNextPageToken(null);
@@ -168,7 +177,7 @@ export function AdminDashboard({ user }: { user: User }) {
     if (!nextPageToken || bookingState === "loading") return;
     const nextHistory = [...previousPageTokens, pageToken];
     const nextPage = pageNumber + 1;
-    const destination = bookingListUrl(nextPageToken, nextPage, nextHistory);
+    const destination = bookingListUrl({ query: debouncedQuery, filter, pageSize, pageToken: nextPageToken, pageNumber: nextPage, previousPageTokens: nextHistory });
     window.history.pushState(destination.state, "", destination.url);
     setPreviousPageTokens(nextHistory);
     setPageToken(nextPageToken);
@@ -227,7 +236,7 @@ export function AdminDashboard({ user }: { user: User }) {
 
   useEffect(() => {
     if (!paginationReady || activeView !== "bookings") return;
-    const destination = bookingListUrl(pageToken, pageNumber, previousPageTokens);
+    const destination = bookingListUrl({ query: debouncedQuery, filter, pageSize, pageToken, pageNumber, previousPageTokens });
     window.history.replaceState(destination.state, "", destination.url);
   }, [activeView, debouncedQuery, filter, pageNumber, pageSize, pageToken, paginationReady, previousPageTokens]);
 

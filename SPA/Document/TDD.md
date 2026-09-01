@@ -153,7 +153,9 @@ Admin list APIs use opaque cursor pagination:
 
 - `pageSize`: default 25, maximum 100
 - `pageToken`: base64url-encoded, signed cursor state
-- Response: `items`, `nextPageToken`, and optional `totalEstimate`
+- Response: `items`, `nextPageToken`, `hasMore`, and optional summary/estimate fields
+- Admin Booking Queue orders by `startAt DESC, documentId DESC` so the newest appointment is always shown first; the signed cursor is bound to branch/date/status/search filters
+- Booking status/search filters execute on the API, not against only the rows loaded in the browser; operational summary counts remain branch-wide and are not derived from the current page
 
 Offset pagination is not used for Firestore operational lists.
 
