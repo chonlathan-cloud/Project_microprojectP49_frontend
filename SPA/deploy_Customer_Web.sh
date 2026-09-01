@@ -13,6 +13,7 @@ ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/apps/customer-web/.env}"
 REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-false}"
 SPA_API_URL="${SPA_API_URL:-}"
 APP_ENV="${APP_ENV:-production}"
+PRODUCTION_SERVICE_NAME="${PRODUCTION_SERVICE_NAME:-spa-customer-web}"
 
 if [[ "$APP_ENV" == "production" ]]; then
   DEFAULT_LINE_LIFF_ID_SECRET_NAME="spa-line-prod-customer-liff-id-Prod"
@@ -25,6 +26,10 @@ LINE_LIFF_ID_SECRET_NAME="${LINE_LIFF_ID_SECRET_NAME:-$DEFAULT_LINE_LIFF_ID_SECR
 LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME="${LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME:-$DEFAULT_LINE_CAMPAIGN_V1_LIFF_ID_SECRET_NAME}"
 
 if [[ "$SERVICE_NAME" != *-test ]]; then
+  if [[ "$SERVICE_NAME" != "$PRODUCTION_SERVICE_NAME" ]]; then
+    echo "ERROR: Production Customer Web must deploy to canonical service '$PRODUCTION_SERVICE_NAME', not '$SERVICE_NAME'." >&2
+    exit 1
+  fi
   if [[ "$APP_ENV" != "production" ]]; then
     echo "ERROR: Production Customer Web requires APP_ENV=production." >&2
     exit 1

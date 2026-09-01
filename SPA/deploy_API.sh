@@ -30,6 +30,16 @@ esac
 APP_ENV="$DEPLOY_ENVIRONMENT"
 ENV_FILE="${ENV_FILE:-$SOURCE_DIR/.env-${DEPLOY_ENVIRONMENT}}"
 REQUIRE_ENV_FILE="${REQUIRE_ENV_FILE:-true}"
+PRODUCTION_SERVICE_NAME="${PRODUCTION_SERVICE_NAME:-spa-api}"
+if [[ "$DEPLOY_ENVIRONMENT" == "prod" && "$SERVICE_NAME" != "$PRODUCTION_SERVICE_NAME" ]]; then
+  echo "ERROR: Production SPA API must deploy to canonical service '$PRODUCTION_SERVICE_NAME', not '$SERVICE_NAME'." >&2
+  echo "Customer/Admin production traffic currently targets '$PRODUCTION_SERVICE_NAME'." >&2
+  exit 1
+fi
+if [[ "$DEPLOY_ENVIRONMENT" == "test" && "$SERVICE_NAME" != *-test ]]; then
+  echo "ERROR: Test SPA API service name must end in '-test'; got '$SERVICE_NAME'." >&2
+  exit 1
+fi
 if [[ "$DEPLOY_ENVIRONMENT" == "test" ]]; then
   FIRESTORE_DATABASE="${FIRESTORE_DATABASE:-spa-test-db}"
   SERVICE_ASSETS_ENVIRONMENT="test"
@@ -115,6 +125,59 @@ fi
 if [[ ! -f "$SOURCE_DIR/$DOCKERFILE" ]]; then
   echo "ERROR: Dockerfile not found: $SOURCE_DIR/$DOCKERFILE"
   exit 1
+fi
+
+if [[ "$DEPLOY_ENVIRONMENT" == "prod" ]]; then
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "ERROR: Production environment file not found: $ENV_FILE" >&2
+    exit 1
+  fi
+  python3 - "$ENV_FILE" <<'PY'
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+values = {}
+for raw_line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    values[key.strip()] = value.strip().strip("\"'")
+
+errors = []
+if values.get("BEAM_ENABLED", "").lower() != "true":
+    errors.append("BEAM_ENABLED must be true")
+if values.get("BEAM_API_BASE_URL", "").rstrip("/") != "https://api.beamcheckout.com":
+    errors.append("BEAM_API_BASE_URL must be https://api.beamcheckout.com")
+
+return_url = urlparse(values.get("BEAM_RETURN_URL", ""))
+if return_url.scheme != "https" or not return_url.hostname or "-test" in return_url.hostname:
+    errors.append("BEAM_RETURN_URL must be a non-test HTTPS production URL")
+
+methods = {
+    method.strip().upper()
+    for method in values.get("BEAM_PAYMENT_METHODS", "").split(",")
+    if method.strip()
+}
+mobile_methods = methods - {"QR_PROMPT_PAY"}
+if mobile_methods and values.get("BEAM_PRODUCTION_MOBILE_BANKING_CONFIRMED", "").lower() != "true":
+    errors.append(
+        "set BEAM_PRODUCTION_MOBILE_BANKING_CONFIRMED=true only after Production Lighthouse "
+        "shows every configured mobile method as available"
+    )
+if values.get("BEAM_PRODUCTION_WEBHOOK_REGISTERED", "").lower() != "true":
+    errors.append(
+        "set BEAM_PRODUCTION_WEBHOOK_REGISTERED=true only after the production webhook "
+        "is registered for charge.succeeded and charge.failed"
+    )
+
+if errors:
+    print("ERROR: Production Beam preflight failed:", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
 fi
 
 if [[ -z "$IMAGE_TAG" ]]; then

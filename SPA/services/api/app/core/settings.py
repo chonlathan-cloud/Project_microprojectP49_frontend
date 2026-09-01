@@ -1,4 +1,5 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,6 +39,8 @@ class Settings(BaseSettings):
     beam_return_url: str | None = None
     beam_request_timeout_seconds: float = 15.0
     beam_payment_methods: str = "QR_PROMPT_PAY"
+    beam_production_mobile_banking_confirmed: bool = False
+    beam_production_webhook_registered: bool = False
     tip_custom_max_satang: int | None = None
 
     @property
@@ -102,6 +105,23 @@ class Settings(BaseSettings):
             missing.append("BEAM_PAYMENT_METHODS_INVALID")
         if not self.configured_beam_payment_methods:
             missing.append("BEAM_PAYMENT_METHODS_EMPTY")
+        if self.deployment_environment == "prod":
+            return_url = urlparse(self.beam_return_url or "")
+            if (
+                return_url.scheme != "https"
+                or not return_url.hostname
+                or "-test" in return_url.hostname
+            ):
+                missing.append("BEAM_PRODUCTION_RETURN_URL_INVALID")
+            mobile_methods = {
+                method
+                for method in self.configured_beam_payment_methods
+                if method is not BeamPaymentMethod.QR_PROMPT_PAY
+            }
+            if mobile_methods and not self.beam_production_mobile_banking_confirmed:
+                missing.append("BEAM_PRODUCTION_MOBILE_BANKING_NOT_CONFIRMED")
+            if not self.beam_production_webhook_registered:
+                missing.append("BEAM_PRODUCTION_WEBHOOK_NOT_CONFIRMED")
         return tuple(missing)
 
 

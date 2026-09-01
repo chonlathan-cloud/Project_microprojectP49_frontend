@@ -56,6 +56,45 @@ def test_beam_payment_method_allowlist_is_ordered_deduplicated_and_fail_closed()
     assert "BEAM_PAYMENT_METHODS_INVALID" in invalid.beam_readiness_errors()
 
 
+def test_production_mobile_banking_requires_explicit_method_and_webhook_confirmation() -> None:
+    production = settings().model_copy(
+        update={
+            "app_env": "production",
+            "beam_api_base_url": "https://api.beamcheckout.com",
+            "beam_return_url": "https://spa-customer-web.example/my-bookings",
+            "beam_payment_methods": "KPLUS,QR_PROMPT_PAY",
+        }
+    )
+
+    assert "BEAM_PRODUCTION_MOBILE_BANKING_NOT_CONFIRMED" in (
+        production.beam_readiness_errors()
+    )
+    assert "BEAM_PRODUCTION_WEBHOOK_NOT_CONFIRMED" in (
+        production.beam_readiness_errors()
+    )
+
+    confirmed = production.model_copy(
+        update={
+            "beam_production_mobile_banking_confirmed": True,
+            "beam_production_webhook_registered": True,
+        }
+    )
+    assert confirmed.beam_readiness_errors() == ()
+
+
+def test_production_beam_return_url_rejects_test_host() -> None:
+    production = settings().model_copy(
+        update={
+            "app_env": "prod",
+            "beam_api_base_url": "https://api.beamcheckout.com",
+            "beam_return_url": "https://spa-customer-web-test.example/my-bookings",
+            "beam_production_webhook_registered": True,
+        }
+    )
+
+    assert "BEAM_PRODUCTION_RETURN_URL_INVALID" in production.beam_readiness_errors()
+
+
 def test_webhook_signature_uses_raw_body_and_decoded_hmac_key() -> None:
     raw_body = b'{"chargeId":"ch_001","status":"SUCCEEDED"}'
     assert verify_beam_webhook_signature(
