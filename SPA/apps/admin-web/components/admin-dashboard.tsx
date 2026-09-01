@@ -2,7 +2,7 @@
 
 import { INITIAL_SERVICE_CATALOG, type BookingStatus, type Locale, type PreviewBooking } from "@spa/shared-types";
 import type { User } from "firebase/auth";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AdminModulePage, type AdminView } from "@/components/admin-module-pages";
 import { useAdminFeedback } from "@/components/admin-feedback";
@@ -82,12 +82,35 @@ type AdminPaymentOptions = {
   version: number;
 };
 
+type AdminBookingListResponse = {
+  items?: PreviewBooking[];
+  nextPageToken?: string | null;
+  hasMore?: boolean;
+  pageSize?: number;
+  summary?: {
+    pending?: number;
+    unassigned?: number;
+  };
+};
+
+const DEFAULT_BOOKING_PAGE_SIZE = 25;
+const BOOKING_PAGE_SIZES = [25, 50, 100] as const;
+const BOOKING_FILTERS = new Set<string>(["ALL", ...Object.keys(statusLabel)]);
+
 export function AdminDashboard({ user }: { user: User }) {
   const { notify, requestConfirmation } = useAdminFeedback();
   const [activeView, setActiveView] = useState<"bookings" | AdminView>("bookings");
   const [locale, setLocale] = useState<Locale>("th");
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [filter, setFilter] = useState<"ALL" | BookingStatus>("ALL");
+  const [paginationReady, setPaginationReady] = useState(false);
+  const [pageSize, setPageSize] = useState(DEFAULT_BOOKING_PAGE_SIZE);
+  const [pageToken, setPageToken] = useState<string | null>(null);
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
+  const [pageNumber, setPageNumber] = useState(1);
+  const [previousPageTokens, setPreviousPageTokens] = useState<Array<string | null>>([]);
+  const [bookingSummary, setBookingSummary] = useState({ pending: 0, unassigned: 0 });
   const [selectedId, setSelectedId] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [liveBookings, setLiveBookings] = useState<PreviewBooking[]>([]);
@@ -106,9 +129,107 @@ export function AdminDashboard({ user }: { user: User }) {
   const closeDrawerButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
+  function bookingListUrl(
+    nextToken: string | null,
+    nextPageNumber: number,
+    nextPreviousTokens: Array<string | null>,
+  ) {
+    const url = new URL(window.location.href);
+    const normalizedQuery = debouncedQuery.trim();
+    if (normalizedQuery) url.searchParams.set("q", normalizedQuery);
+    else url.searchParams.delete("q");
+    if (filter !== "ALL") url.searchParams.set("status", filter);
+    else url.searchParams.delete("status");
+    if (pageSize !== DEFAULT_BOOKING_PAGE_SIZE) url.searchParams.set("pageSize", String(pageSize));
+    else url.searchParams.delete("pageSize");
+    if (nextToken) url.searchParams.set("pageToken", nextToken);
+    else url.searchParams.delete("pageToken");
+    if (nextPageNumber > 1) url.searchParams.set("page", String(nextPageNumber));
+    else url.searchParams.delete("page");
+    return {
+      url,
+      state: { ...window.history.state, bookingPageTokens: nextPreviousTokens },
+    };
+  }
+
+  function resetPagination() {
+    setPageToken(null);
+    setNextPageToken(null);
+    setPageNumber(1);
+    setPreviousPageTokens([]);
+  }
+
+  function changeBookingFilter(nextFilter: "ALL" | BookingStatus) {
+    setFilter(nextFilter);
+    resetPagination();
+  }
+
+  function goToNextPage() {
+    if (!nextPageToken || bookingState === "loading") return;
+    const nextHistory = [...previousPageTokens, pageToken];
+    const nextPage = pageNumber + 1;
+    const destination = bookingListUrl(nextPageToken, nextPage, nextHistory);
+    window.history.pushState(destination.state, "", destination.url);
+    setPreviousPageTokens(nextHistory);
+    setPageToken(nextPageToken);
+    setNextPageToken(null);
+    setPageNumber(nextPage);
+    setSelectedId("");
+  }
+
+  function goToPreviousPage() {
+    if (previousPageTokens.length === 0 || bookingState === "loading") return;
+    window.history.back();
+  }
+
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
+
+  useEffect(() => {
+    const restorePagination = () => {
+      const params = new URLSearchParams(window.location.search);
+      const bookingId = params.get("booking") ?? "";
+      const restoredQuery = params.get("q") ?? bookingId;
+      const restoredFilter = params.get("status") ?? "ALL";
+      const restoredPageSize = Number(params.get("pageSize") ?? DEFAULT_BOOKING_PAGE_SIZE);
+      const restoredPageNumber = Math.max(1, Number(params.get("page") ?? 1) || 1);
+      const restoredHistory = Array.isArray(window.history.state?.bookingPageTokens)
+        ? window.history.state.bookingPageTokens.filter((token: unknown) => token === null || typeof token === "string")
+        : [];
+      setQuery(restoredQuery);
+      setDebouncedQuery(restoredQuery.trim());
+      setFilter(BOOKING_FILTERS.has(restoredFilter) ? restoredFilter as "ALL" | BookingStatus : "ALL");
+      setPageSize(BOOKING_PAGE_SIZES.includes(restoredPageSize as (typeof BOOKING_PAGE_SIZES)[number]) ? restoredPageSize : DEFAULT_BOOKING_PAGE_SIZE);
+      setPageToken(params.get("pageToken"));
+      setNextPageToken(null);
+      setPageNumber(restoredPageNumber);
+      setPreviousPageTokens(restoredHistory);
+      setSelectedId("");
+      setPaginationReady(true);
+    };
+    restorePagination();
+    window.addEventListener("popstate", restorePagination);
+    return () => window.removeEventListener("popstate", restorePagination);
+  }, []);
+
+  useEffect(() => {
+    if (!paginationReady) return;
+    const timer = window.setTimeout(() => {
+      const normalizedQuery = query.trim();
+      if (normalizedQuery !== debouncedQuery) {
+        setDebouncedQuery(normalizedQuery);
+        resetPagination();
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [debouncedQuery, paginationReady, query]);
+
+  useEffect(() => {
+    if (!paginationReady || activeView !== "bookings") return;
+    const destination = bookingListUrl(pageToken, pageNumber, previousPageTokens);
+    window.history.replaceState(destination.state, "", destination.url);
+  }, [activeView, debouncedQuery, filter, pageNumber, pageSize, pageToken, paginationReady, previousPageTokens]);
 
   useEffect(() => {
     if (bookingState !== "ready") return;
@@ -117,7 +238,6 @@ export function AdminDashboard({ user }: { user: User }) {
       queueMicrotask(() => {
         setActiveView("bookings");
         setSelectedId(bookingId);
-        setQuery(bookingId);
       });
     }
   }, [bookingState, liveBookings]);
@@ -130,21 +250,38 @@ export function AdminDashboard({ user }: { user: User }) {
   }, []);
 
   useEffect(() => {
+    if (!paginationReady) return;
     let active = true;
     (async () => {
       try {
-        const payload = await adminApi<{ items?: PreviewBooking[] }>(user, "/bookings");
+        setBookingState("loading");
+        const params = new URLSearchParams();
+        if (activeView === "bookings") {
+          params.set("pageSize", String(pageSize));
+          if (pageToken) params.set("pageToken", pageToken);
+          if (filter !== "ALL") params.set("status", filter);
+          if (debouncedQuery) params.set("search", debouncedQuery);
+        } else {
+          params.set("pageSize", "100");
+        }
+        const payload = await adminApi<AdminBookingListResponse>(user, `/bookings?${params.toString()}`);
         if (!active) return;
         setLiveBookings(payload.items ?? []);
+        if (activeView === "bookings") {
+          setNextPageToken(payload.nextPageToken ?? null);
+          setBookingSummary((current) => ({
+            pending: payload.summary?.pending ?? current.pending,
+            unassigned: payload.summary?.unassigned ?? current.unassigned,
+          }));
+        }
         setBookingState("ready");
       } catch {
         if (!active) return;
-        setLiveBookings([]);
         setBookingState("error");
       }
     })();
     return () => { active = false; };
-  }, [user, bookingRefresh]);
+  }, [activeView, bookingRefresh, debouncedQuery, filter, pageSize, pageToken, paginationReady, user]);
 
   useEffect(() => {
     let active = true;
@@ -249,6 +386,7 @@ export function AdminDashboard({ user }: { user: User }) {
       setLiveBookings((items) => items.map((item) => item.bookingId === booking.bookingId
         ? { ...item, status: payload.status as BookingStatus, version: payload.version ?? item.version + 1 }
         : item));
+      setBookingRefresh((value) => value + 1);
       notify({
         tone: "success",
         title: action === "cancel" && booking.status === "RECORDED"
@@ -324,13 +462,10 @@ export function AdminDashboard({ user }: { user: User }) {
   }
 
   const bookings = liveBookings;
-  const filtered = useMemo(() => [...bookings.filter((booking) => {
-    const haystack = `${booking.bookingId} ${booking.customerName} ${booking.customerPhoneMasked}`.toLowerCase();
-    return (filter === "ALL" || booking.status === filter) && haystack.includes(query.trim().toLowerCase());
-  })].sort((a, b) => new Date(a.startLocal).getTime() - new Date(b.startLocal).getTime()), [bookings, filter, query]);
+  const filtered = bookings;
   const selected = bookings.find((booking) => booking.bookingId === selectedId);
-  const pending = bookings.filter((booking) => booking.status === "PENDING").length;
-  const unassigned = bookings.filter((booking) => booking.status === "CONFIRMED" && !booking.therapistName).length;
+  const pending = bookingSummary.pending;
+  const unassigned = bookingSummary.unassigned;
 
   useEffect(() => {
     if (!selected || selected.status !== "COMPLETED") return;
@@ -365,7 +500,7 @@ export function AdminDashboard({ user }: { user: User }) {
 
   const text = locale === "th" ? {
     title: "คิวการจอง",
-    subtitle: "เรียงตามวันและเวลา เพื่อจัดการงานหน้าร้านได้อย่างถูกต้อง",
+    subtitle: "เรียงจากรายการใหม่ไปเก่า เพื่อให้เห็นงานล่าสุดก่อน",
     search: "ค้นหา Booking ID ชื่อ หรือเบอร์โทร",
     branch: "SPA 49 • สาขาหลัก",
     pending: "รอยืนยัน",
@@ -384,7 +519,7 @@ export function AdminDashboard({ user }: { user: User }) {
     cancel: "ยกเลิก"
   } : {
     title: "Booking queue",
-    subtitle: "Sorted by date and time for accurate front-desk operations",
+    subtitle: "Newest bookings first, so recent work stays visible",
     search: "Search booking ID, name, or phone",
     branch: "SPA 49 • Main branch",
     pending: "Pending review",
@@ -446,8 +581,8 @@ export function AdminDashboard({ user }: { user: User }) {
           </section>
 
           <section className="operations-panel" aria-labelledby="bookings-table-title">
-            <div className="table-toolbar"><div><h2 id="bookings-table-title">{locale === "th" ? "คิวการจอง" : "Booking queue"}</h2><p>{filtered.length} {locale === "th" ? "รายการ" : "records"}</p></div><div className="filter-pills" role="group" aria-label="Status filter"><button aria-pressed={filter === "ALL"} onClick={() => setFilter("ALL")}>{text.all}</button><button aria-pressed={filter === "PENDING"} onClick={() => setFilter("PENDING")}>{statusLabel.PENDING[locale]}</button><button aria-pressed={filter === "CONFIRMED"} onClick={() => setFilter("CONFIRMED")}>{statusLabel.CONFIRMED[locale]}</button><button aria-pressed={filter === "IN_SERVICE"} onClick={() => setFilter("IN_SERVICE")}>{statusLabel.IN_SERVICE[locale]}</button></div></div>
-            <div className="table-scroll">
+            <div className="table-toolbar"><div><h2 id="bookings-table-title">{locale === "th" ? "คิวการจอง" : "Booking queue"}</h2><p>{filtered.length} {locale === "th" ? `รายการในหน้านี้ • หน้า ${pageNumber} • ใหม่ไปเก่า` : `records on this page • Page ${pageNumber} • Newest first`}</p></div><div className="filter-pills" role="group" aria-label="Status filter"><button aria-pressed={filter === "ALL"} onClick={() => changeBookingFilter("ALL")}>{text.all}</button><button aria-pressed={filter === "PENDING"} onClick={() => changeBookingFilter("PENDING")}>{statusLabel.PENDING[locale]}</button><button aria-pressed={filter === "CONFIRMED"} onClick={() => changeBookingFilter("CONFIRMED")}>{statusLabel.CONFIRMED[locale]}</button><button aria-pressed={filter === "IN_SERVICE"} onClick={() => changeBookingFilter("IN_SERVICE")}>{statusLabel.IN_SERVICE[locale]}</button></div></div>
+            <div className="table-scroll" aria-busy={bookingState === "loading"}>
               <table>
                 <thead><tr><th>{text.time}</th><th>{text.customer}</th><th>{text.service}</th><th>{text.pax}</th><th>{text.therapist}</th><th>{text.status}</th><th><span className="sr-only">Actions</span></th></tr></thead>
                 <tbody>
@@ -459,7 +594,15 @@ export function AdminDashboard({ user }: { user: User }) {
                 </tbody>
               </table>
             </div>
-            {filtered.length === 0 && <div className="empty-state">{locale === "th" ? "ไม่พบรายการที่ตรงกับตัวกรอง" : "No bookings match these filters"}</div>}
+            {bookingState === "ready" && filtered.length === 0 && <div className="empty-state">{locale === "th" ? "ไม่พบรายการที่ตรงกับตัวกรอง" : "No bookings match these filters"}</div>}
+            <nav className="booking-pagination" aria-label={locale === "th" ? "เปลี่ยนหน้ารายการจอง" : "Booking list pagination"}>
+              <p role="status" aria-live="polite">{bookingState === "loading" ? (locale === "th" ? "กำลังโหลดรายการ…" : "Loading bookings…") : (locale === "th" ? `หน้า ${pageNumber}` : `Page ${pageNumber}`)}</p>
+              <label><span>{locale === "th" ? "แสดงต่อหน้า" : "Per page"}</span><select value={pageSize} disabled={bookingState === "loading"} onChange={(event) => { setPageSize(Number(event.target.value)); resetPagination(); }}>{BOOKING_PAGE_SIZES.map((size) => <option value={size} key={size}>{size}</option>)}</select></label>
+              <div>
+                <button type="button" disabled={previousPageTokens.length === 0 || bookingState === "loading"} onClick={goToPreviousPage}>← {locale === "th" ? "ก่อนหน้า" : "Previous"}</button>
+                <button type="button" disabled={!nextPageToken || bookingState === "loading"} onClick={goToNextPage}>{locale === "th" ? "ถัดไป" : "Next"} →</button>
+              </div>
+            </nav>
           </section>
         </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} notificationFilter={notificationFilter} onNotificationFilterChange={setNotificationFilter} onNotificationCountChange={setNotificationFailures} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} onSelectBooking={(bookingId) => { setSelectedId(bookingId); setHealthDetails(null); }} onOpenWalkIn={() => { setSelectedId(""); setWalkInOpen(true); }} />}
       </div>

@@ -7,7 +7,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, Query as FastAPIQuery, status
 from google.cloud import firestore
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -115,6 +115,7 @@ class CustomerBookingListRequest(ApiModel):
 
 CUSTOMER_BOOKING_SCAN_BATCH_SIZE = 100
 CUSTOMER_ACTIVE_STATUSES = {"PENDING", "CONFIRMED"}
+ADMIN_BOOKING_SCAN_BATCH_SIZE = 100
 
 
 def _utc_now() -> datetime:
@@ -124,7 +125,7 @@ def _utc_now() -> datetime:
 def _cursor_secret() -> bytes:
     secret = get_settings().line_customer_messaging_channel_secret
     if not secret:
-        raise ValidationDomainError("Customer booking pagination is not configured")
+        raise ValidationDomainError("Booking pagination is not configured")
     return secret.encode()
 
 
@@ -177,6 +178,97 @@ def _decode_customer_cursor(
         return start_at, document_id, as_of
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise ValidationDomainError("Invalid customer booking page token") from error
+
+
+def _admin_booking_filter_fingerprint(
+    *, branch_id: str, local_date: str | None, status_filter: str | None, search: str
+) -> str:
+    payload = json.dumps(
+        {
+            "branchId": branch_id,
+            "localDate": local_date,
+            "status": status_filter,
+            "search": search.casefold(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _encode_admin_booking_cursor(
+    *, start_at: datetime, document_id: str, filter_fingerprint: str
+) -> str:
+    payload = json.dumps(
+        {
+            "startAt": start_at.isoformat(),
+            "documentId": document_id,
+            "filterFingerprint": filter_fingerprint,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    signature = hmac.new(
+        _cursor_secret(), b"admin-bookings:v1:" + payload, hashlib.sha256
+    ).digest()
+    encoded_payload = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
+    return f"{encoded_payload}.{encoded_signature}"
+
+
+def _decode_admin_booking_cursor(
+    token: str, *, expected_filter_fingerprint: str
+) -> tuple[datetime, str]:
+    try:
+        encoded_payload, encoded_signature = token.split(".", 1)
+        payload = base64.urlsafe_b64decode(
+            encoded_payload + "=" * (-len(encoded_payload) % 4)
+        )
+        signature = base64.urlsafe_b64decode(
+            encoded_signature + "=" * (-len(encoded_signature) % 4)
+        )
+        expected = hmac.new(
+            _cursor_secret(), b"admin-bookings:v1:" + payload, hashlib.sha256
+        ).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError
+        state = json.loads(payload)
+        if state.get("filterFingerprint") != expected_filter_fingerprint:
+            raise ValueError
+        start_at = datetime.fromisoformat(str(state["startAt"]))
+        document_id = str(state["documentId"])
+        if not document_id or start_at.tzinfo is None:
+            raise ValueError
+        return start_at, document_id
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValidationDomainError("Invalid Admin booking page token") from error
+
+
+def _admin_booking_matches_search(data: dict[str, object], search: str) -> bool:
+    needle = search.strip().casefold()
+    if not needle:
+        return True
+    contact = data.get("contact")
+    contact_data = contact if isinstance(contact, dict) else {}
+    values = (
+        data.get("publicBookingId", ""),
+        data.get("customerName", ""),
+        contact_data.get("phoneMasked", ""),
+        contact_data.get("phoneE164", ""),
+    )
+    haystack = " ".join(str(value) for value in values).casefold()
+    if needle in haystack:
+        return True
+    compact_needle = "".join(character for character in needle if character.isalnum())
+    compact_haystack = "".join(character for character in haystack if character.isalnum())
+    return bool(compact_needle) and compact_needle in compact_haystack
+
+
+def _aggregation_count(query: object) -> int:
+    results = query.count(alias="count").get()  # type: ignore[attr-defined]
+    if not results or not results[0]:
+        return 0
+    return int(results[0][0].value)
 
 
 def _customer_booking_view(data: dict[str, object], *, as_of: datetime) -> str:
@@ -411,13 +503,89 @@ async def list_admin_bookings(
     client: Annotated[firestore.Client, Depends(get_firestore_client)],
     branch_id: str = "branch_001",
     local_date: str | None = None,
-    limit: int = 100,
+    page_size: Annotated[int, FastAPIQuery(alias="pageSize", ge=1, le=100)] = 25,
+    page_token: Annotated[
+        str | None, FastAPIQuery(alias="pageToken", min_length=20, max_length=2048)
+    ] = None,
+    status_filter: Annotated[
+        BookingStatus | None, FastAPIQuery(alias="status")
+    ] = None,
+    search: Annotated[str | None, FastAPIQuery(max_length=100)] = None,
+    limit: Annotated[int | None, FastAPIQuery(ge=1, le=200)] = None,
 ) -> dict[str, object]:
-    query = client.collection("bookings").where("branchId", "==", branch_id)
+    effective_page_size = min(limit or page_size, 100)
+    normalized_search = (search or "").strip()
+    status_value = status_filter.value if status_filter else None
+    filter_fingerprint = _admin_booking_filter_fingerprint(
+        branch_id=branch_id,
+        local_date=local_date,
+        status_filter=status_value,
+        search=normalized_search,
+    )
+
+    collection = client.collection("bookings")
+    base_query = collection.where("branchId", "==", branch_id)
     if local_date:
-        query = query.where("localDate", "==", local_date)
-    query = query.order_by("startAt").limit(min(max(limit, 1), 200))
-    return {"items": [serialize_booking(snapshot) for snapshot in query.stream()]}
+        base_query = base_query.where("localDate", "==", local_date)
+    if status_value:
+        base_query = base_query.where("status", "==", status_value)
+    base_query = base_query.order_by(
+        "startAt", direction=firestore.Query.DESCENDING
+    ).order_by("__name__", direction=firestore.Query.DESCENDING)
+
+    query = base_query
+    if page_token:
+        start_at, document_id = _decode_admin_booking_cursor(
+            page_token, expected_filter_fingerprint=filter_fingerprint
+        )
+        query = query.start_after([start_at, document_id])
+
+    matching_snapshots: list[firestore.DocumentSnapshot] = []
+    while len(matching_snapshots) <= effective_page_size:
+        snapshots = list(query.limit(ADMIN_BOOKING_SCAN_BATCH_SIZE).stream())
+        for snapshot in snapshots:
+            data = snapshot.to_dict() or {}
+            if _admin_booking_matches_search(data, normalized_search):
+                matching_snapshots.append(snapshot)
+                if len(matching_snapshots) > effective_page_size:
+                    break
+        if len(matching_snapshots) > effective_page_size:
+            break
+        if len(snapshots) < ADMIN_BOOKING_SCAN_BATCH_SIZE:
+            break
+        last_data = snapshots[-1].to_dict() or {}
+        last_start_at = last_data.get("startAt")
+        if not isinstance(last_start_at, datetime):
+            break
+        query = base_query.start_after([last_start_at, snapshots[-1].id])
+
+    page = matching_snapshots[:effective_page_size]
+    next_page_token = None
+    if len(matching_snapshots) > effective_page_size and page:
+        last_data = page[-1].to_dict() or {}
+        last_start_at = last_data.get("startAt")
+        if isinstance(last_start_at, datetime):
+            next_page_token = _encode_admin_booking_cursor(
+                start_at=last_start_at,
+                document_id=page[-1].id,
+                filter_fingerprint=filter_fingerprint,
+            )
+
+    pending_count = _aggregation_count(
+        collection.where("branchId", "==", branch_id).where("status", "==", "PENDING")
+    )
+    unassigned_count = _aggregation_count(
+        collection.where("branchId", "==", branch_id)
+        .where("status", "==", "CONFIRMED")
+        .where("assignmentState", "==", "UNASSIGNED")
+    )
+    return {
+        "items": [serialize_booking(snapshot) for snapshot in page],
+        "nextPageToken": next_page_token,
+        "hasMore": next_page_token is not None,
+        "pageSize": effective_page_size,
+        "summary": {"pending": pending_count, "unassigned": unassigned_count},
+    }
 
 
 @router.post("/api/v1/admin/bookings", status_code=status.HTTP_201_CREATED)
