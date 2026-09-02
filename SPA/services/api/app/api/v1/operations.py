@@ -266,11 +266,21 @@ async def assign_therapists(
         raise ConflictDomainError("Booking changed; reload before trying again")
     if len(request.therapist_ids) != int(data.get("pax", 1)):
         raise ValidationDomainError("Every participant requires one therapist assignment")
+    if len(set(request.therapist_ids)) != len(request.therapist_ids):
+        raise ValidationDomainError(
+            "Every participant in a multi-guest Booking requires a different therapist"
+        )
     therapists = [
         client.collection("therapists").document(item).get() for item in request.therapist_ids
     ]
     if any(not item.exists or not (item.to_dict() or {}).get("active") for item in therapists):
         raise ValidationDomainError("Every assigned therapist must be active")
+    if any(
+        (item.to_dict() or {}).get("branchId")
+        and (item.to_dict() or {}).get("branchId") != data.get("branchId", "branch_001")
+        for item in therapists
+    ):
+        raise ValidationDomainError("Every assigned therapist must belong to the Booking branch")
     next_version = request.expected_version + 1
     names = [(item.to_dict() or {}).get("displayName") for item in therapists]
     ref.update(
@@ -283,7 +293,13 @@ async def assign_therapists(
         }
     )
     _audit(client, actor=actor, event_type="THERAPISTS_ASSIGNED", target_id=booking_id)
-    return {"bookingId": booking_id, "assignmentState": "ASSIGNED", "version": next_version}
+    return {
+        "bookingId": booking_id,
+        "assignmentState": "ASSIGNED",
+        "therapistIds": request.therapist_ids,
+        "therapistName": ", ".join(str(name) for name in names),
+        "version": next_version,
+    }
 
 
 @router.get("/services")

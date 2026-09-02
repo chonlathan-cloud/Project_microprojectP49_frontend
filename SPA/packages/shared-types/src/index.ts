@@ -69,7 +69,17 @@ export type PreviewBooking = {
   pax: number;
   status: BookingStatus;
   healthAlert: boolean;
+  therapistIds?: string[];
   therapistName?: string;
+  participants?: Array<{
+    participantId: string;
+    sequence: number;
+    nickname: string;
+    serviceNameTh: string;
+    serviceNameEn: string;
+    durationMinutes: number;
+    therapistId?: string;
+  }>;
   version: number;
   paymentStatus?: PaymentStatus;
   paidAmountSatang?: number;

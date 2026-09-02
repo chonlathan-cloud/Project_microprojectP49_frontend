@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import csv
+import io
 from collections import defaultdict
 from datetime import UTC, date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from google.cloud import firestore
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.auth import require_admin_user
 from app.core.errors import ConflictDomainError, NotFoundDomainError, ValidationDomainError
+from app.domains.analytics.insight import (
+    InsightFilters,
+    InsightView,
+    allocate_discount as _allocate_discount,
+    build_insight_payload,
+)
 from app.domains.settlements.service import (
     SettlementAllocation,
     calculate_settlement_totals,
@@ -42,6 +51,25 @@ class SettlementAllocationInput(ApiModel):
 class SettlementInput(ApiModel):
     expected_version: int = Field(ge=0)
     allocations: list[SettlementAllocationInput] = Field(min_length=1, max_length=2)
+
+
+class InsightExportInput(ApiModel):
+    date_from: str
+    date_to: str
+    branch_id: str = "branch_001"
+    view: Literal["BOOKINGS", "REVENUE", "SERVICES", "THERAPISTS"] = "BOOKINGS"
+    source: Literal["GUEST_WEB", "LINE_CUSTOMER", "ADMIN_WEB"] | None = None
+    admin_entry_mode: Literal["WALK_IN", "STAFF_ASSISTED", "HISTORICAL_RECORD"] | None = None
+    booking_status: Literal["COMPLETED", "RECORDED"] | None = None
+    payment_status: str | None = Field(default=None, max_length=40)
+    service_id: str | None = Field(default=None, max_length=160)
+    variant_id: str | None = Field(default=None, max_length=160)
+    therapist_id: str | None = Field(default=None, max_length=160)
+    settlement_state: Literal["ALLOCATED", "PENDING", "STALE"] | None = None
+    has_discount: bool | None = None
+    has_tip: bool | None = None
+    hour_from: int | None = Field(default=None, ge=0, le=23)
+    hour_to: int | None = Field(default=None, ge=0, le=23)
 
 
 def _require_admin(actor: dict[str, object]) -> None:
@@ -429,26 +457,6 @@ def _related_documents(
     return items
 
 
-def _allocate_discount(
-    groups: list[tuple[tuple[str, str], dict[str, object]]], discount_satang: int
-) -> dict[tuple[str, str], int]:
-    positive = [(key, max(0, int(value["grossServiceSatang"]))) for key, value in groups]
-    subtotal = sum(value for _, value in positive)
-    if discount_satang <= 0 or subtotal <= 0:
-        return {key: 0 for key, _ in positive}
-    result: dict[tuple[str, str], int] = {}
-    allocated = 0
-    for index, (key, value) in enumerate(positive):
-        share = (
-            discount_satang - allocated
-            if index == len(positive) - 1
-            else (discount_satang * value) // subtotal
-        )
-        result[key] = share
-        allocated += share
-    return result
-
-
 @router.get("/analytics/overview")
 def analytics_overview(
     actor: Annotated[dict[str, object], Depends(require_admin_user)],
@@ -738,3 +746,282 @@ def analytics_overview(
             for hour in sorted(set(scheduled_hours) | set(actual_hours))
         ],
     }
+
+
+def _insight_filters(
+    *,
+    source: str | None,
+    admin_entry_mode: str | None,
+    booking_status: str | None,
+    payment_status: str | None,
+    service_id: str | None,
+    variant_id: str | None,
+    therapist_id: str | None,
+    settlement_state: str | None,
+    has_discount: bool | None,
+    has_tip: bool | None,
+    hour_from: int | None,
+    hour_to: int | None,
+) -> InsightFilters:
+    if hour_from is not None and hour_to is not None and hour_to < hour_from:
+        raise ValidationDomainError("Insight end hour cannot be before start hour")
+    return InsightFilters(
+        source=source,
+        admin_entry_mode=admin_entry_mode,
+        booking_status=booking_status,
+        payment_status=payment_status,
+        service_id=service_id,
+        variant_id=variant_id,
+        therapist_id=therapist_id,
+        settlement_state=settlement_state,  # type: ignore[arg-type]
+        has_discount=has_discount,
+        has_tip=has_tip,
+        hour_from=hour_from,
+        hour_to=hour_to,
+    )
+
+
+def _load_insight_payload(
+    *,
+    client: firestore.Client,
+    date_from: str,
+    date_to: str,
+    branch_id: str,
+    filters: InsightFilters,
+    view: InsightView,
+    page: int,
+    page_size: int,
+) -> dict[str, object]:
+    _validate_date_range(date_from, date_to)
+    booking_snapshots = list(
+        client.collection("bookings")
+        .where("branchId", "==", branch_id)
+        .where("localDate", ">=", date_from)
+        .where("localDate", "<=", date_to)
+        .stream()
+    )
+    bookings = {snapshot.id: snapshot.to_dict() or {} for snapshot in booking_snapshots}
+    booking_ids = list(bookings)
+    line_snapshots = _related_documents(client, "booking_line_items", booking_ids)
+    settlement_snapshots = (
+        list(
+            client.get_all(
+                [client.collection("service_settlements").document(item) for item in booking_ids]
+            )
+        )
+        if booking_ids
+        else []
+    )
+    payload = build_insight_payload(
+        bookings=bookings,
+        lines=[snapshot.to_dict() or {} for snapshot in line_snapshots],
+        settlements={
+            snapshot.id: snapshot.to_dict() or {}
+            for snapshot in settlement_snapshots
+            if snapshot.exists
+        },
+        filters=filters,
+        view=view,
+        page=page,
+        page_size=page_size,
+    )
+    return {
+        "dateFrom": date_from,
+        "dateTo": date_to,
+        "timezone": "Asia/Bangkok",
+        **payload,
+    }
+
+
+@router.get("/analytics/insight")
+def analytics_insight(
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+    date_from: Annotated[str, Query(alias="dateFrom")],
+    date_to: Annotated[str, Query(alias="dateTo")],
+    branch_id: Annotated[str, Query(alias="branchId")] = "branch_001",
+    view: Literal["BOOKINGS", "REVENUE", "SERVICES", "THERAPISTS"] = "BOOKINGS",
+    source: Literal["GUEST_WEB", "LINE_CUSTOMER", "ADMIN_WEB"] | None = None,
+    admin_entry_mode: Annotated[
+        Literal["WALK_IN", "STAFF_ASSISTED", "HISTORICAL_RECORD"] | None,
+        Query(alias="adminEntryMode"),
+    ] = None,
+    booking_status: Annotated[
+        Literal["COMPLETED", "RECORDED"] | None, Query(alias="bookingStatus")
+    ] = None,
+    payment_status: Annotated[str | None, Query(alias="paymentStatus", max_length=40)] = None,
+    service_id: Annotated[str | None, Query(alias="serviceId", max_length=160)] = None,
+    variant_id: Annotated[str | None, Query(alias="variantId", max_length=160)] = None,
+    therapist_id: Annotated[str | None, Query(alias="therapistId", max_length=160)] = None,
+    settlement_state: Annotated[
+        Literal["ALLOCATED", "PENDING", "STALE"] | None,
+        Query(alias="settlementState"),
+    ] = None,
+    has_discount: Annotated[bool | None, Query(alias="hasDiscount")] = None,
+    has_tip: Annotated[bool | None, Query(alias="hasTip")] = None,
+    hour_from: Annotated[int | None, Query(alias="hourFrom", ge=0, le=23)] = None,
+    hour_to: Annotated[int | None, Query(alias="hourTo", ge=0, le=23)] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(alias="pageSize", ge=1, le=100)] = 50,
+) -> dict[str, object]:
+    _require_admin(actor)
+    filters = _insight_filters(
+        source=source,
+        admin_entry_mode=admin_entry_mode,
+        booking_status=booking_status,
+        payment_status=payment_status,
+        service_id=service_id,
+        variant_id=variant_id,
+        therapist_id=therapist_id,
+        settlement_state=settlement_state,
+        has_discount=has_discount,
+        has_tip=has_tip,
+        hour_from=hour_from,
+        hour_to=hour_to,
+    )
+    return _load_insight_payload(
+        client=client,
+        date_from=date_from,
+        date_to=date_to,
+        branch_id=branch_id,
+        filters=filters,
+        view=view,
+        page=page,
+        page_size=page_size,
+    )
+
+
+INSIGHT_CSV_FIELDS: dict[InsightView, tuple[str, ...]] = {
+    "BOOKINGS": (
+        "bookingId",
+        "localDate",
+        "localStartTime",
+        "status",
+        "source",
+        "adminEntryMode",
+        "serviceNamesTh",
+        "serviceNamesEn",
+        "pax",
+        "subtotalAmountSatang",
+        "discountAmountSatang",
+        "netServiceAmountSatang",
+        "tipAmountSatang",
+        "grossAmountSatang",
+        "paymentStatus",
+        "paidAmountSatang",
+        "outstandingAmountSatang",
+        "settlementState",
+        "therapistNames",
+        "therapistPaySatang",
+        "therapistTipSatang",
+        "shopTotalSatang",
+    ),
+    "REVENUE": (
+        "localDate",
+        "bookingCount",
+        "netServiceAmountSatang",
+        "tipAmountSatang",
+        "grossAmountSatang",
+        "paidAmountSatang",
+        "outstandingAmountSatang",
+        "therapistPaySatang",
+        "therapistTipSatang",
+        "shopTotalSatang",
+    ),
+    "SERVICES": (
+        "serviceId",
+        "variantId",
+        "serviceNameTh",
+        "serviceNameEn",
+        "durationMinutes",
+        "sessionCount",
+        "participantCount",
+        "grossServiceSatang",
+        "discountAllocatedSatang",
+        "netServiceSatang",
+    ),
+    "THERAPISTS": (
+        "therapistId",
+        "therapistName",
+        "serviceCount",
+        "durationMinutes",
+        "therapistPaySatang",
+        "tipSatang",
+    ),
+}
+
+
+@router.post("/analytics/insight:export")
+def export_analytics_insight(
+    request: InsightExportInput,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> Response:
+    _require_admin(actor)
+    filters = _insight_filters(
+        source=request.source,
+        admin_entry_mode=request.admin_entry_mode,
+        booking_status=request.booking_status,
+        payment_status=request.payment_status,
+        service_id=request.service_id,
+        variant_id=request.variant_id,
+        therapist_id=request.therapist_id,
+        settlement_state=request.settlement_state,
+        has_discount=request.has_discount,
+        has_tip=request.has_tip,
+        hour_from=request.hour_from,
+        hour_to=request.hour_to,
+    )
+    payload = _load_insight_payload(
+        client=client,
+        date_from=request.date_from,
+        date_to=request.date_to,
+        branch_id=request.branch_id,
+        filters=filters,
+        view=request.view,
+        page=1,
+        page_size=5_000,
+    )
+    items = payload["items"]
+    rows = items if isinstance(items, list) else []
+    fields = INSIGHT_CSV_FIELDS[request.view]
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        writer.writerow(
+            {
+                key: " | ".join(str(value) for value in item.get(key, []))
+                if isinstance(item.get(key), list)
+                else item.get(key)
+                for key in fields
+            }
+        )
+    client.collection("audit_events").document().set(
+        {
+            "eventType": "ANALYTICS_CSV_EXPORTED",
+            "actorId": actor["uid"],
+            "actorType": "ADMIN_USER",
+            "branchId": request.branch_id,
+            "view": request.view,
+            "dateFrom": request.date_from,
+            "dateTo": request.date_to,
+            "filters": request.model_dump(
+                by_alias=True,
+                exclude={"date_from", "date_to", "branch_id", "view"},
+                exclude_none=True,
+            ),
+            "recordCount": len(rows),
+            "createdAt": datetime.now(UTC),
+        }
+    )
+    filename = (
+        f"spa49-insight-{request.view.lower()}-{request.date_from}-{request.date_to}.csv"
+    )
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

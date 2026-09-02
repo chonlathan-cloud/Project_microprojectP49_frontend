@@ -222,6 +222,8 @@ function PaymentMethodLogo({ method }: { method: BeamPaymentMethod }) {
       alt=""
       width={40}
       height={40}
+      loading="eager"
+      unoptimized
       aria-hidden="true"
     />;
   }
