@@ -41,8 +41,29 @@ if [[ "$DEPLOY_ENVIRONMENT" == "prod" && "$SERVICE_NAME" != "spa-accounting-work
   echo "ERROR: Production Accounting Worker must use canonical service 'spa-accounting-worker'."
   exit 1
 fi
-FLOWACCOUNT_SYNC_ENABLED="${FLOWACCOUNT_SYNC_ENABLED:-false}"
 ENV_FILE="${ENV_FILE:-$SOURCE_DIR/.env-${DEPLOY_ENVIRONMENT}}"
+if [[ -z "${FLOWACCOUNT_SYNC_ENABLED+x}" ]]; then
+  FLOWACCOUNT_SYNC_ENABLED="false"
+  if [[ -f "$ENV_FILE" ]]; then
+    while IFS= read -r raw_line; do
+      line="${raw_line#export }"
+      if [[ "$line" == FLOWACCOUNT_SYNC_ENABLED=* ]]; then
+        FLOWACCOUNT_SYNC_ENABLED="${line#*=}"
+        FLOWACCOUNT_SYNC_ENABLED="${FLOWACCOUNT_SYNC_ENABLED%\"}"
+        FLOWACCOUNT_SYNC_ENABLED="${FLOWACCOUNT_SYNC_ENABLED#\"}"
+        FLOWACCOUNT_SYNC_ENABLED="${FLOWACCOUNT_SYNC_ENABLED%\'}"
+        FLOWACCOUNT_SYNC_ENABLED="${FLOWACCOUNT_SYNC_ENABLED#\'}"
+      fi
+    done < "$ENV_FILE"
+  fi
+fi
+case "$FLOWACCOUNT_SYNC_ENABLED" in
+  true | false) ;;
+  *)
+    echo "ERROR: FLOWACCOUNT_SYNC_ENABLED must be true or false."
+    exit 1
+    ;;
+esac
 FLOWACCOUNT_CLIENT_ID_SECRET="${FLOWACCOUNT_CLIENT_ID_SECRET:-spa-flowaccount-client-id-${DEPLOY_ENVIRONMENT}}"
 FLOWACCOUNT_CLIENT_SECRET="${FLOWACCOUNT_CLIENT_SECRET:-spa-flowaccount-client-secret-${DEPLOY_ENVIRONMENT}}"
 if [[ "$FLOWACCOUNT_CLIENT_ID_SECRET" != "spa-flowaccount-client-id-${DEPLOY_ENVIRONMENT}" \
@@ -106,10 +127,7 @@ from pathlib import Path
 
 source = Path(sys.argv[1])
 destination = Path(sys.argv[2])
-environment = {
-    "FLOWACCOUNT_ENVIRONMENT": sys.argv[3],
-    "FLOWACCOUNT_SYNC_ENABLED": sys.argv[4],
-}
+environment = {}
 valid_key = re.compile(r"^FLOWACCOUNT_[A-Z0-9_]+$")
 secret_keys = {"FLOWACCOUNT_CLIENT_ID", "FLOWACCOUNT_CLIENT_SECRET"}
 if source.exists():
@@ -124,6 +142,8 @@ if source.exists():
             if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
                 value = value[1:-1]
             environment[key] = value
+environment["FLOWACCOUNT_ENVIRONMENT"] = sys.argv[3]
+environment["FLOWACCOUNT_SYNC_ENABLED"] = sys.argv[4]
 with destination.open("w", encoding="utf-8") as output:
     for key, value in environment.items():
         output.write(f"{key}: {json.dumps(value, ensure_ascii=False)}\n")

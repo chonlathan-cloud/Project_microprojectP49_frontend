@@ -752,6 +752,33 @@ Alerts:
 
 Admin dashboard shows integration health, last successful nightly run, backlog count/age, and review count. Send failures and `REVIEW_REQUIRED` alerts to the existing LINE Admin Group through the current privacy-safe notification path. Alert content contains run/export references, environment, safe error class, count, and Admin deep link only—never customer identity, phone, health data, credentials, or financial line-item detail.
 
+### 15.1 Historical cash-payment backfill
+
+`HISTORICAL_RECORD` remains a service/amount snapshot and is never payment
+evidence by itself. A one-time migration may create the separate authorized cash
+payment event only when Finance/Admin supplies an authoritative timezone-aware
+`paidAt` for every selected Booking and an approval reference.
+
+Use `services/api/scripts/backfill_historical_cash_payments.py`. The evidence CSV
+contains no customer identity:
+
+```csv
+bookingPublicId,paidAt
+BK-20260820-001,2026-08-20T14:00:00+07:00
+```
+
+The script is dry-run by default. Apply requires both the exact target database
+and the reviewed plan digest. It creates the CASH Payment, READY accounting
+export, Booking payment projection, append-only audit event, and migration run in
+one atomic batch; it does not call FlowAccount. Because old branch-deposit
+evidence is unknown, migrated cash payments use `cashSettlementStatus=REVIEW`
+and do not enter the current unsettled-cash workflow automatically.
+
+Anonymized Production copies are excluded by default. They may be selected only
+in `spa-test-db` with `--allow-test-fixtures`; zero-value records are not valid
+customer-sale exports. Production apply and Production provider sync are separate
+release gates.
+
 ## 16. Implementation work packages
 
 ### WP0 — Sandbox bootstrap and contract proof
