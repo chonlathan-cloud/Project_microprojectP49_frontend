@@ -4,9 +4,11 @@ from functools import lru_cache
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Request, Response, status
+from fastapi import APIRouter, Depends, Header, Path, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+from app.api.v1.cash_deposits import get_cash_deposit_service
+from app.application.cash_deposits import CashDepositService
 from app.application.payments import (
     CustomerPaymentResult,
     PaymentService,
@@ -242,7 +244,7 @@ async def create_payment_attempt(
     response_model=CustomerPaymentResultResponse,
 )
 async def resolve_customer_payment_attempt(
-    attempt_id: str,
+    attempt_id: Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]{1,128}$")],
     request: LinePaymentRequest,
     response: Response,
     payments: Annotated[PaymentService, Depends(get_payment_service)],
@@ -298,6 +300,7 @@ async def record_cash_payment(
 async def beam_webhook(
     request: Request,
     payments: Annotated[PaymentService, Depends(get_payment_service)],
+    cash_deposits: Annotated[CashDepositService, Depends(get_cash_deposit_service)],
     x_beam_signature: Annotated[str | None, Header(alias="X-Beam-Signature")] = None,
     x_beam_event: Annotated[str | None, Header(alias="X-Beam-Event")] = None,
 ) -> dict[str, bool]:
@@ -330,4 +333,10 @@ async def beam_webhook(
         charge_id=charge_id,
         raw_body=raw_body,
     )
+    if not processed:
+        processed = await cash_deposits.process_webhook_charge(
+            event_type=x_beam_event or "",
+            charge_id=charge_id,
+            raw_body=raw_body,
+        )
     return {"accepted": processed}

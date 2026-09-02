@@ -8,6 +8,7 @@ from app.api.v1.accounting import router as accounting_router
 from app.api.v1.bookings import router as bookings_router
 from app.api.v1.campaign_admin import router as campaign_admin_router
 from app.api.v1.campaigns import router as campaigns_router
+from app.api.v1.cash_deposits import router as cash_deposit_router
 from app.api.v1.operations import router as operations_router
 from app.api.v1.payments import admin_router as payment_admin_router
 from app.api.v1.payments import public_router as payment_public_router
@@ -36,6 +37,7 @@ app.include_router(payment_public_router)
 app.include_router(payment_admin_router)
 app.include_router(payment_webhook_router)
 app.include_router(accounting_router)
+app.include_router(cash_deposit_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
@@ -79,6 +81,13 @@ async def ready() -> dict[str, object]:
         "accountingConfiguration": (
             "ready" if not settings.accounting_readiness_errors() else "not_ready"
         ),
+        "cashDepositConfiguration": (
+            "disabled"
+            if not settings.cash_deposit_enabled
+            else "ready"
+            if not settings.cash_deposit_readiness_errors()
+            else "not_ready"
+        ),
         "firestore": {
             "status": "ready" if firestore_ready else "unavailable",
             "database": settings.firestore_database,
@@ -93,6 +102,7 @@ async def ready() -> dict[str, object]:
     reason_codes = [
         *settings.beam_readiness_errors(),
         *settings.accounting_readiness_errors(),
+        *(settings.cash_deposit_readiness_errors() if settings.cash_deposit_enabled else ()),
     ]
     return {
         "status": "ready" if firestore_ready and not reason_codes else "degraded",

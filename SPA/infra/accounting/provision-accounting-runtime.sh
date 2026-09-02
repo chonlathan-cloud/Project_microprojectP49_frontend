@@ -54,6 +54,7 @@ done
 
 TASKS_INVOKER_SERVICE_ACCOUNT="${TASKS_INVOKER_ID}@${PROJECT_ID}.iam.gserviceaccount.com"
 SCHEDULER_INVOKER_SERVICE_ACCOUNT="${SCHEDULER_INVOKER_ID}@${PROJECT_ID}.iam.gserviceaccount.com"
+WORKER_SERVICE_ACCOUNT_ID="${WORKER_SERVICE_ACCOUNT%%@*}"
 
 gcloud services enable cloudtasks.googleapis.com cloudscheduler.googleapis.com run.googleapis.com secretmanager.googleapis.com --project "$PROJECT_ID" --quiet
 
@@ -67,6 +68,7 @@ ensure_service_account() {
 
 ensure_service_account "$TASKS_INVOKER_ID" "SPA Accounting Tasks invoker (${DEPLOY_ENVIRONMENT})"
 ensure_service_account "$SCHEDULER_INVOKER_ID" "SPA Accounting Scheduler invoker (${DEPLOY_ENVIRONMENT})"
+ensure_service_account "$WORKER_SERVICE_ACCOUNT_ID" "SPA Accounting Worker (${DEPLOY_ENVIRONMENT})"
 
 if gcloud tasks queues describe "$QUEUE_NAME" --project "$PROJECT_ID" --location "$REGION" >/dev/null 2>&1; then
   gcloud tasks queues update "$QUEUE_NAME" --project "$PROJECT_ID" --location "$REGION" \
@@ -80,9 +82,9 @@ else
     --max-attempts 12 --min-backoff 60s --max-backoff 3600s --max-doublings 5 --quiet
 fi
 
-gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${WORKER_SERVICE_ACCOUNT}" --role="roles/datastore.user" --quiet
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${WORKER_SERVICE_ACCOUNT}" --role="roles/datastore.user" --condition=None --quiet
 for enqueuer in "$API_SERVICE_ACCOUNT" "$WORKER_SERVICE_ACCOUNT"; do
-  gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${enqueuer}" --role="roles/cloudtasks.enqueuer" --quiet
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${enqueuer}" --role="roles/cloudtasks.enqueuer" --condition=None --quiet
   gcloud iam service-accounts add-iam-policy-binding "$TASKS_INVOKER_SERVICE_ACCOUNT" --project "$PROJECT_ID" \
     --member="serviceAccount:${enqueuer}" --role="roles/iam.serviceAccountUser" --quiet
 done

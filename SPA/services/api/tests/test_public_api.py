@@ -67,7 +67,11 @@ def test_public_catalog_is_available() -> None:
     response = client.get("/api/v1/public/services")
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload["items"]) == 11
+    # Admin can add or retire services after the phase-one seed. The public
+    # contract must not freeze the live catalog at the seed's original count.
+    assert len(payload["items"]) >= 11
+    service_ids = [item["id"] for item in payload["items"]]
+    assert len(service_ids) == len(set(service_ids))
     assert all(item["descriptionTh"] for item in payload["items"])
     assert all(item["descriptionEn"] for item in payload["items"])
     serialized = str(payload)

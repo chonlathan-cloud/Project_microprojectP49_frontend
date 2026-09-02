@@ -4,6 +4,7 @@ import type { User } from "firebase/auth";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAdminFeedback } from "@/components/admin-feedback";
+import { CashDepositWorkflow } from "@/components/cash-deposit-workflow";
 import { adminApi } from "@/lib/admin-api";
 import type { Locale } from "@spa/shared-types";
 
@@ -45,7 +46,7 @@ type ListResponse = {
     syncedCount: number;
     attentionCount: number;
   };
-  permissions: { read: boolean; sync: boolean };
+  permissions: { read: boolean; sync: boolean; cashDeposit: boolean };
 };
 type SyncRun = {
   runId: string;
@@ -96,7 +97,7 @@ function dateTime(value: string | null | undefined, locale: Locale): string {
 export function AccountingOperations({ locale, user }: { locale: Locale; user: User }) {
   const { notify, requestConfirmation } = useAdminFeedback();
   const [items, setItems] = useState<PaymentRow[]>([]);
-  const [permissions, setPermissions] = useState({ read: true, sync: false });
+  const [permissions, setPermissions] = useState({ read: true, sync: false, cashDeposit: false });
   const [summary, setSummary] = useState<ListResponse["summary"]>({ paidGrossSatang: 0, beamGrossSatang: 0, cashGrossSatang: 0, syncedCount: 0, attentionCount: 0 });
   const [dateFrom, setDateFrom] = useState(todayBangkok);
   const [dateTo, setDateTo] = useState(todayBangkok);
@@ -114,6 +115,9 @@ export function AccountingOperations({ locale, user }: { locale: Locale; user: U
   const [run, setRun] = useState<SyncRun | null>(null);
   const [detail, setDetail] = useState<DetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [cashDepositOpen, setCashDepositOpen] = useState(false);
+  const [cashDepositId, setCashDepositId] = useState<string | null>(null);
+  const [cashPaymentId, setCashPaymentId] = useState<string | null>(null);
   const closeDetailRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -247,11 +251,19 @@ export function AccountingOperations({ locale, user }: { locale: Locale; user: U
   const toggleAll = () => setSelected(selected.size === eligibleOnPage.length ? new Set() : new Set(eligibleOnPage.map((item) => item.exportId)));
   const toggleOne = (id: string) => setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const resetPage = () => { setPageToken(null); setPreviousTokens([]); };
+  const openCashDeposit = (options: { depositId?: string | null; paymentId?: string | null } = {}) => {
+    setCashDepositId(options.depositId ?? null);
+    setCashPaymentId(options.paymentId ?? null);
+    setCashDepositOpen(true);
+  };
 
   return <main className="dashboard-content accounting-page">
     <div className="module-heading-action">
       <div className="module-heading"><p className="eyebrow">PAYMENTS • FLOWACCOUNT • ASIA/BANGKOK</p><h1>{locale === "th" ? "การชำระเงินและบัญชี" : "Payments & Accounting"}</h1><p>{locale === "th" ? "ตรวจสอบยอดรับ สถานะเงินสด และส่ง Cash Invoice แบบ VAT รวม 7%" : "Review customer payments, cash settlement, and VAT-inclusive Cash Invoice sync."}</p></div>
-      {permissions.sync && <button className="new-booking" type="button" disabled={loading || Boolean(run && !terminalRuns.has(run.status))} onClick={() => { void startRun(); }}>{locale === "th" ? "ส่ง backlog ตอนนี้" : "Run backlog now"}</button>}
+      <div className="accounting-heading-actions">
+        {permissions.sync && <button className="accounting-secondary-action" type="button" disabled={loading || Boolean(run && !terminalRuns.has(run.status))} onClick={() => { void startRun(); }}>{locale === "th" ? "ส่ง FlowAccount backlog" : "Run FlowAccount backlog"}</button>}
+        <button className="new-booking" type="button" disabled={loading || !permissions.cashDeposit} title={!permissions.cashDeposit ? (locale === "th" ? "ยังไม่เปิด Cash Deposit configuration ใน environment นี้" : "Cash Deposit configuration is not enabled in this environment") : undefined} onClick={() => openCashDeposit()}>{locale === "th" ? "นำเงินสดเข้าบัญชี" : "Deposit cash"}</button>
+      </div>
     </div>
 
     {run && <section className={`accounting-run ${run.status === "PARTIAL_FAILURE" ? "warning" : ""}`} aria-live="polite"><div><strong>{locale === "th" ? "รอบส่งบัญชี" : "Accounting run"}</strong><span>{run.runId}</span></div><div><span>{run.status}</span><strong>{run.processedCount ?? 0}/{run.enqueuedCount ?? run.selectedCount ?? 0}</strong></div></section>}
@@ -288,7 +300,7 @@ export function AccountingOperations({ locale, user }: { locale: Locale; user: U
             <td><span className={`payment-source source-${row.paymentSource.toLowerCase()}`}>{row.paymentSource === "CASH" ? (locale === "th" ? "เงินสด" : "Cash") : "Beam"}</span><small>{dateTime(row.paidAt, locale)}</small></td>
             <td><span className={`accounting-status accounting-status-${row.exportStatus.toLowerCase()}`}>{statusText[row.exportStatus][locale]}</span>{row.flowAccountDocumentSerial && <small>{row.flowAccountDocumentSerial}</small>}{row.lastErrorCode && <small className="accounting-error-code">{row.lastErrorCode}</small>}</td>
             <td><span>{row.paymentSource === "CASH" ? row.cashSettlementStatus : (locale === "th" ? "ไม่เกี่ยวข้อง" : "N/A")}</span>{row.cashDepositId && <small>{row.cashDepositId}</small>}</td>
-            <td><div className="accounting-row-actions"><button type="button" disabled={detailLoading} onClick={() => { void openDetail(row); }} aria-label={`${locale === "th" ? "รายละเอียด" : "Details"} ${row.bookingId}`}>→</button>{permissions.sync && row.exportStatus === "READY" && <button type="button" onClick={() => { void startRun([row.exportId]); }}>{locale === "th" ? "ส่ง" : "Sync"}</button>}{permissions.sync && row.exportStatus === "RETRYABLE" && <button type="button" onClick={() => { void exportAction(row, "retry"); }}>{locale === "th" ? "ลองใหม่" : "Retry"}</button>}{permissions.sync && row.exportStatus === "RECONCILE_REQUIRED" && <button type="button" onClick={() => { void exportAction(row, "reconcile"); }}>{locale === "th" ? "ตรวจผล" : "Reconcile"}</button>}</div></td>
+            <td><div className="accounting-row-actions"><button type="button" disabled={detailLoading} onClick={() => { void openDetail(row); }} aria-label={`${locale === "th" ? "รายละเอียด" : "Details"} ${row.bookingId}`}>→</button>{permissions.cashDeposit && row.paymentSource === "CASH" && row.cashSettlementStatus === "UNSETTLED" && <button type="button" onClick={() => openCashDeposit({ paymentId: row.paymentId })}>{locale === "th" ? "รวมยอด" : "Deposit"}</button>}{permissions.cashDeposit && row.paymentSource === "CASH" && row.cashDepositId && <button type="button" onClick={() => openCashDeposit({ depositId: row.cashDepositId })}>{locale === "th" ? "ดูชุด" : "Batch"}</button>}{permissions.sync && row.exportStatus === "READY" && <button type="button" onClick={() => { void startRun([row.exportId]); }}>{locale === "th" ? "ส่ง" : "Sync"}</button>}{permissions.sync && row.exportStatus === "RETRYABLE" && <button type="button" onClick={() => { void exportAction(row, "retry"); }}>{locale === "th" ? "ลองใหม่" : "Retry"}</button>}{permissions.sync && row.exportStatus === "RECONCILE_REQUIRED" && <button type="button" onClick={() => { void exportAction(row, "reconcile"); }}>{locale === "th" ? "ตรวจผล" : "Reconcile"}</button>}</div></td>
           </tr>)}</tbody>
         </table>
       </div>
@@ -298,5 +310,6 @@ export function AccountingOperations({ locale, user }: { locale: Locale; user: U
     </section>
 
     {detail && <><div className="accounting-scrim" aria-hidden="true" onClick={() => setDetail(null)} /><aside ref={drawerRef} className="detail-drawer accounting-detail" role="dialog" aria-modal="true" aria-labelledby="accounting-detail-title"><div className="drawer-header"><div><p className="eyebrow">{detail.payment.bookingId}</p><h2 id="accounting-detail-title">{locale === "th" ? "รายละเอียดบัญชี" : "Accounting detail"}</h2></div><button ref={closeDetailRef} type="button" aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => setDetail(null)}>×</button></div><dl><div><dt>{locale === "th" ? "Payment ID" : "Payment ID"}</dt><dd>{detail.payment.paymentId}</dd></div><div><dt>FlowAccount</dt><dd>{statusText[detail.payment.exportStatus][locale]}<small>{detail.payment.flowAccountDocumentSerial || detail.payment.flowAccountDocumentId || "—"}</small></dd></div><div><dt>{locale === "th" ? "ความพยายาม" : "Attempts"}</dt><dd>{detail.payment.attemptCount}</dd></div><div><dt>{locale === "th" ? "ยอดรับ" : "Gross"}</dt><dd>{baht(detail.payment.grossAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "เงินสดเข้าบัญชี" : "Cash settlement"}</dt><dd>{detail.payment.cashSettlementStatus}</dd></div></dl>{detail.payment.flowAccountDocumentUrl && <a className="accounting-document-link" href={detail.payment.flowAccountDocumentUrl} target="_blank" rel="noopener noreferrer">{locale === "th" ? "เปิดเอกสารใน FlowAccount ↗" : "Open in FlowAccount ↗"}</a>}<section className="attempt-list" aria-label={locale === "th" ? "ประวัติการส่ง" : "Sync attempts"}><h3>{locale === "th" ? "ประวัติการส่ง" : "Sync attempts"}</h3>{detail.attempts.length ? detail.attempts.map((attempt, index) => <div key={String(attempt.attemptId ?? index)}><strong>{String(attempt.result ?? "—")}</strong><span>{String(attempt.safeErrorCode ?? attempt.operation ?? "—")}</span></div>) : <p>{locale === "th" ? "ยังไม่มีการส่ง" : "No attempts yet"}</p>}</section></aside></>}
+    {cashDepositOpen && <CashDepositWorkflow locale={locale} user={user} initialDepositId={cashDepositId} initialPaymentId={cashPaymentId} onClose={() => setCashDepositOpen(false)} onChanged={load} />}
   </main>;
 }

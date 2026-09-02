@@ -504,6 +504,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .pii-detail { padding: 0 18px; }
 
 .accounting-page { max-width: 1840px; }
+.accounting-heading-actions { display: flex; align-items: center; gap: 9px; }
+.accounting-secondary-action { min-height: 44px; padding: 0 14px; border: 1px solid var(--forest); border-radius: 8px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 12px; font-weight: 850; }
 .accounting-run { margin: 0 0 16px; padding: 11px 14px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-left: 4px solid #39754a; background: #eaf4eb; color: #23482c; }
 .accounting-run.warning { border-left-color: #b36b00; background: #fff5da; color: #754500; }
 .accounting-run div { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
@@ -550,6 +552,62 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .attempt-list h3 { margin: 0 0 9px; font-size: 14px; }
 .attempt-list > div { padding: 9px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); font-size: 11px; }
 .attempt-list > div span, .attempt-list p { color: var(--muted); overflow-wrap: anywhere; }
+.cash-deposit-drawer { width: min(760px, 100vw); z-index: 42; padding: 0; }
+.cash-deposit-header { padding: 20px 22px 16px; position: sticky; z-index: 2; top: 0; border-bottom: 1px solid var(--line); background: rgb(255 255 255 / 96%); backdrop-filter: blur(10px); }
+.cash-deposit-header h2 { margin: 0; color: var(--forest-dark); font-size: 22px; }
+.cash-deposit-header p:last-child { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+.cash-deposit-alert { margin: 14px 22px 0; padding: 11px 12px; border-left: 4px solid #b91c1c; background: #fff0f0; color: #8f1717; font-size: 12px; font-weight: 750; overflow-wrap: anywhere; }
+.cash-deposit-loading { padding: 36px 22px; color: var(--muted); text-align: center; }
+.cash-deposit-body { padding: 18px 22px 26px; display: grid; gap: 18px; }
+.cash-deposit-body > section { padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.cash-step-heading { margin-bottom: 13px; display: flex; align-items: center; gap: 10px; }
+.cash-step-heading > span { width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--forest); color: white; font-size: 12px; font-weight: 900; }
+.cash-step-heading strong, .cash-step-heading small { display: block; }
+.cash-step-heading strong { color: var(--forest-dark); font-size: 14px; }
+.cash-step-heading small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.cash-candidate-list { max-height: 320px; overflow-y: auto; border-block: 1px solid var(--line); }
+.cash-candidate-list label { min-height: 62px; padding: 10px 4px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid #edf0eb; cursor: pointer; }
+.cash-candidate-list label:last-child { border-bottom: 0; }
+.cash-candidate-list input { width: 18px; height: 18px; accent-color: var(--forest); }
+.cash-candidate-list strong, .cash-candidate-list small { display: block; }
+.cash-candidate-list strong { font-size: 12px; }
+.cash-candidate-list small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.cash-candidate-list b { color: var(--forest-dark); font-size: 13px; }
+.cash-empty { padding: 24px; color: var(--muted); text-align: center; }
+.cash-confirm-total { display: grid; grid-template-columns: minmax(0, 1fr) 220px; align-items: end; gap: 12px 18px; background: #f8faf7 !important; }
+.cash-confirm-total > div span, .cash-confirm-total > div strong { display: block; }
+.cash-confirm-total > div span { color: var(--muted); font-size: 11px; font-weight: 750; }
+.cash-confirm-total > div strong { margin-top: 4px; color: var(--forest-dark); font-size: 24px; }
+.cash-confirm-total label, .cash-evidence-upload label { display: grid; gap: 6px; color: var(--text); font-size: 11px; font-weight: 800; }
+.cash-confirm-total input, .cash-evidence-upload input { min-height: 42px; padding: 8px 10px; border: 1px solid #aeb6aa; border-radius: 7px; background: white; }
+.cash-confirm-total > small { grid-column: 1 / -1; color: #991b1b; font-weight: 750; }
+.cash-deposit-actions { display: grid; grid-template-columns: 150px 1fr; gap: 9px; }
+.cash-deposit-actions button, .cash-evidence-upload button, .cash-create-qr, .cash-reconcile { min-height: 44px; padding: 0 14px; border: 1px solid var(--forest); border-radius: 8px; background: white; color: var(--forest-dark); cursor: pointer; font-weight: 850; }
+.cash-deposit-actions .primary, .cash-create-qr { background: var(--forest); color: white; }
+.cash-deposit-state { padding: 13px 15px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 3px 16px; border-left: 4px solid #a67f3e; background: #fbf7ed; }
+.cash-deposit-state span { color: #754500; font-size: 10px; font-weight: 900; letter-spacing: .08em; }
+.cash-deposit-state strong { grid-row: span 2; color: var(--forest-dark); font-size: 24px; }
+.cash-deposit-state small { color: var(--muted); font-size: 11px; }
+.cash-deposit-state.state-completed { border-left-color: #39754a; background: #eaf4eb; }
+.cash-deposit-state.state-review, .cash-deposit-state.state-failed { border-left-color: #b91c1c; background: #fff0f0; }
+.cash-evidence-upload { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.cash-evidence-upload input { padding: 7px; }
+.cash-evidence-ready { margin: 0; padding: 11px; background: #eaf4eb; color: #225a31; font-size: 12px; font-weight: 800; }
+.cash-create-qr, .cash-reconcile { width: 100%; }
+.cash-reconcile { margin-top: 10px; }
+.cash-qr { display: grid; grid-template-columns: 170px minmax(0, 1fr); align-items: center; gap: 14px; }
+.cash-qr img { width: 170px; height: 170px; object-fit: contain; border: 1px solid var(--line); background: white; }
+.cash-qr strong, .cash-qr span, .cash-qr small { display: block; }
+.cash-qr span { margin: 7px 0; color: var(--forest-dark); font-size: 24px; font-weight: 900; }
+.cash-qr small { color: #754500; font-weight: 750; }
+.cash-qr button { min-height: 38px; margin-top: 12px; padding: 0 12px; border: 1px solid var(--forest); border-radius: 7px; background: white; color: var(--forest-dark); cursor: pointer; font-weight: 800; }
+.cash-success, .cash-review { padding: 13px; display: grid; gap: 4px; }
+.cash-success { background: #eaf4eb; color: #225a31; }
+.cash-review { background: #fff0f0; color: #991b1b; }
+.cash-success span, .cash-review span { font-size: 11px; overflow-wrap: anywhere; }
+.cash-allocation-summary { border: 1px solid var(--line); border-radius: 8px; background: white; }
+.cash-allocation-summary summary { padding: 12px 14px; cursor: pointer; font-size: 12px; font-weight: 850; }
+.cash-allocation-summary div { margin-inline: 14px; padding: 9px 0; display: flex; justify-content: space-between; border-top: 1px solid var(--line); font-size: 11px; }
 
 @media (max-width: 1279px) {
   .admin-layout { grid-template-columns: 76px minmax(0, 1fr); }
@@ -603,6 +661,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .accounting-summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .accounting-filter-grid { grid-template-columns: 1fr 1fr; }
   .accounting-search { grid-column: 1 / -1; }
+  .cash-deposit-drawer { width: min(680px, 100vw); }
 }
 
 @media (max-width: 560px) {
@@ -650,6 +709,9 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .accounting-summary > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .accounting-summary > div:last-child { border-bottom: 0; }
   .accounting-search { grid-column: auto; }
+  .accounting-heading-actions, .cash-evidence-upload, .cash-confirm-total, .cash-deposit-actions, .cash-qr { grid-template-columns: 1fr; }
+  .accounting-heading-actions { width: 100%; display: grid; }
+  .cash-qr img { width: min(230px, 100%); height: auto; justify-self: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {

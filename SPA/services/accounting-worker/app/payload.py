@@ -44,7 +44,10 @@ def build_cash_invoice_payload(
                 "sku": "SPA-TIP",
                 "type": 1,
                 "name": f"ทิปสำหรับ Booking {export.booking_public_id}",
-                "description": f"Tip for {export.booking_public_id}",
+                # The Simple document contract currently ignores the request's
+                # `sku` field, so keep the stable SKU in the persisted description
+                # as the provider-visible trace fallback.
+                "description": f"SPA-TIP | Tip for {export.booking_public_id}",
                 "quantity": 1,
                 "unitName": "รายการ",
                 "pricePerUnit": satang_to_baht(export.tip_amount_satang),

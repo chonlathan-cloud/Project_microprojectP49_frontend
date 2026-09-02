@@ -114,6 +114,16 @@
       ]
     },
     {
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "branchId", "order": "ASCENDING"},
+        {"fieldPath": "paymentMethod", "order": "ASCENDING"},
+        {"fieldPath": "status", "order": "ASCENDING"},
+        {"fieldPath": "cashSettlementStatus", "order": "ASCENDING"}
+      ]
+    },
+    {
       "collectionGroup": "accounting_exports",
       "queryScope": "COLLECTION",
       "fields": [
@@ -157,6 +167,12 @@
     {
       "collectionGroup": "notification_outbox",
       "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "cash_deposits",
+      "fieldPath": "retentionUntil",
       "ttl": true,
       "indexes": []
     }

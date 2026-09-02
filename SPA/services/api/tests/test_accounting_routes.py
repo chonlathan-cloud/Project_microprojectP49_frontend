@@ -83,7 +83,11 @@ def test_staff_can_read_accounting_without_sync_permission() -> None:
         )
         detail = client.get("/api/v1/admin/payments/pay_001")
     assert response.status_code == 200
-    assert response.json()["permissions"] == {"read": True, "sync": False}
+    assert response.json()["permissions"] == {
+        "read": True,
+        "sync": False,
+        "cashDeposit": False,
+    }
     assert response.json()["summary"]["scope"] == "CURRENT_PAGE"
     assert detail.status_code == 200
 

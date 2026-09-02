@@ -119,3 +119,21 @@ class AccountingExportPurposeUnsupported(DomainError):
 
 class AccountingExportAlreadySynced(DomainError):
     code = "ACCOUNTING_EXPORT_ALREADY_SYNCED"
+
+
+class CashDepositDisabled(DomainError):
+    code = "CASH_DEPOSIT_DISABLED"
+    status_code = 503
+
+
+class CashDepositNotEligible(DomainError):
+    code = "CASH_DEPOSIT_NOT_ELIGIBLE"
+
+
+class CashDepositEvidenceInvalid(DomainError):
+    code = "CASH_DEPOSIT_EVIDENCE_INVALID"
+    status_code = 422
+
+
+class CashDepositReconciliationRequired(DomainError):
+    code = "CASH_DEPOSIT_RECONCILIATION_REQUIRED"

@@ -31,7 +31,7 @@ ExportStatusFilter = Literal[
 ]
 PaymentSourceFilter = Literal["BEAM", "CASH"]
 CashSettlementFilter = Literal[
-    "NOT_APPLICABLE", "UNSETTLED", "DEPOSIT_PENDING", "SETTLED"
+    "NOT_APPLICABLE", "UNSETTLED", "DEPOSIT_PENDING", "SETTLED", "REVIEW"
 ]
 
 
@@ -155,6 +155,8 @@ def list_accounting_payments(
     result["permissions"] = {
         "read": True,
         "sync": actor.get("role") == "ADMIN",
+        "cashDeposit": actor.get("role") == "ADMIN"
+        and not get_settings().cash_deposit_readiness_errors(),
     }
     return result
 

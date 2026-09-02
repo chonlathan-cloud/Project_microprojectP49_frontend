@@ -136,10 +136,33 @@ if ! gcloud "${GCLOUD_ARGS[@]}" artifacts repositories describe "$ARTIFACT_REPOS
 fi
 
 echo "Building Accounting Worker image..."
-gcloud "${GCLOUD_ARGS[@]}" builds submit "$SOURCE_DIR" \
+build_id="$(gcloud "${GCLOUD_ARGS[@]}" builds submit "$SOURCE_DIR" \
   --project "$PROJECT_ID" \
   --tag "$IMAGE_URI" \
-  --quiet
+  --async \
+  --format='value(id)' \
+  --quiet)"
+if [[ -z "$build_id" ]]; then
+  echo "ERROR: Cloud Build did not return a build ID."
+  exit 1
+fi
+while true; do
+  build_status="$(gcloud "${GCLOUD_ARGS[@]}" builds describe "$build_id" \
+    --project "$PROJECT_ID" --format='value(status)')"
+  case "$build_status" in
+    SUCCESS)
+      break
+      ;;
+    FAILURE | INTERNAL_ERROR | TIMEOUT | CANCELLED | EXPIRED)
+      echo "ERROR: Cloud Build '$build_id' finished with status '$build_status'."
+      exit 1
+      ;;
+    *)
+      echo "Cloud Build '$build_id' status: ${build_status:-UNKNOWN}"
+      sleep 5
+      ;;
+  esac
+done
 
 echo "Deploying private Accounting Worker (sync=${FLOWACCOUNT_SYNC_ENABLED})..."
 deploy_args=(run deploy "$SERVICE_NAME" \

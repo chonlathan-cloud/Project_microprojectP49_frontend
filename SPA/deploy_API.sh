@@ -48,6 +48,7 @@ else
   SERVICE_ASSETS_ENVIRONMENT="production"
 fi
 SERVICE_ASSETS_BUCKET="${SERVICE_ASSETS_BUCKET:-${PROJECT_ID}-spa-service-assets-${SERVICE_ASSETS_ENVIRONMENT}}"
+CASH_EVIDENCE_BUCKET="${CASH_EVIDENCE_BUCKET:-${PROJECT_ID}-spa-cash-evidence-${SERVICE_ASSETS_ENVIRONMENT}}"
 
 if [[ "$DEPLOY_ENVIRONMENT" == "prod" ]]; then
   DEFAULT_LINE_CUSTOMER_MESSAGING_CHANNEL_SECRET_NAME="spa-line-prod-customer-messaging-channel-secret-Prod"
@@ -201,6 +202,20 @@ if values.get("BEAM_PRODUCTION_WEBHOOK_REGISTERED", "").lower() != "true":
         "set BEAM_PRODUCTION_WEBHOOK_REGISTERED=true only after the production webhook "
         "is registered for charge.succeeded and charge.failed"
     )
+if values.get("CASH_DEPOSIT_ENABLED", "").lower() == "true":
+    if values.get("CASH_DEPOSIT_PROVIDER_CONTRACT_CONFIRMED", "").lower() != "true":
+        errors.append(
+            "CASH_DEPOSIT_PROVIDER_CONTRACT_CONFIRMED must remain false until Beam/UOB "
+            "provides written Production merchant self-funding approval"
+        )
+    cash_return_url = urlparse(values.get("CASH_DEPOSIT_RETURN_URL", ""))
+    if (
+        cash_return_url.scheme != "https"
+        or not cash_return_url.hostname
+        or "-test" in cash_return_url.hostname
+        or cash_return_url.fragment
+    ):
+        errors.append("CASH_DEPOSIT_RETURN_URL must be a production HTTPS Admin URL")
 
 if errors:
     print("ERROR: Production Beam preflight failed:", file=sys.stderr)
@@ -354,7 +369,7 @@ YAML
 env_args=()
 if [[ -f "$ENV_FILE" ]]; then
   tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_api_env.XXXXXX.yaml")"
-  python3 - "$ENV_FILE" "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" "$SERVICE_ASSETS_BUCKET" <<'PY'
+  python3 - "$ENV_FILE" "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" "$SERVICE_ASSETS_BUCKET" "$CASH_EVIDENCE_BUCKET" "$RUNTIME_SERVICE_ACCOUNT" <<'PY'
 import json
 import re
 import sys
@@ -365,6 +380,8 @@ destination = Path(sys.argv[2])
 firestore_database = sys.argv[3]
 app_env = sys.argv[4]
 service_assets_bucket = sys.argv[5]
+cash_evidence_bucket = sys.argv[6]
+runtime_service_account = sys.argv[7]
 valid_key = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 environment = {}
 
@@ -399,6 +416,8 @@ for raw_line in source.read_text(encoding="utf-8").splitlines():
 environment["FIRESTORE_DATABASE"] = firestore_database
 environment["APP_ENV"] = app_env
 environment["SERVICE_ASSETS_BUCKET"] = service_assets_bucket
+environment["CASH_EVIDENCE_BUCKET"] = cash_evidence_bucket
+environment["CASH_EVIDENCE_SIGNER_SERVICE_ACCOUNT"] = runtime_service_account
 
 with destination.open("w", encoding="utf-8") as output:
     for key, value in environment.items():

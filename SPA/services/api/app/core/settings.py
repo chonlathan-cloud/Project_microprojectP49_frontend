@@ -65,9 +65,7 @@ class Settings(BaseSettings):
         "beamcheckout.com,*.beamcheckout.com,beamcheckout.co,*.beamcheckout.co"
     )
     beam_redirect_allowed_schemes: str = (
-        "SCB_EASY=scbeasy,"
-        "KRUNGSRI_APP=krungsri-kma,"
-        "BANGKOK_BANK_APP=bualuangmbanking"
+        "SCB_EASY=scbeasy,KRUNGSRI_APP=krungsri-kma,BANGKOK_BANK_APP=bualuangmbanking"
     )
     beam_production_mobile_banking_confirmed: bool = False
     beam_production_webhook_registered: bool = False
@@ -79,6 +77,15 @@ class Settings(BaseSettings):
     accounting_tasks_queue: str | None = None
     accounting_tasks_invoker_service_account: str | None = None
     flowaccount_document_allowed_hosts: str = "flowaccount.com,*.flowaccount.com"
+    cash_deposit_enabled: bool = False
+    cash_deposit_provider_contract_confirmed: bool = False
+    cash_evidence_bucket: str = ""
+    cash_evidence_signer_service_account: str = ""
+    cash_evidence_max_bytes: int = 10 * 1024 * 1024
+    cash_evidence_upload_ttl_minutes: int = 10
+    cash_evidence_read_ttl_minutes: int = 5
+    cash_deposit_qr_expiry_minutes: int = 30
+    cash_deposit_return_url: str | None = None
 
     @property
     def allowed_origins(self) -> list[str]:
@@ -149,6 +156,38 @@ class Settings(BaseSettings):
             missing.append("ACCOUNTING_WORKER_URL_INVALID")
         return tuple(missing)
 
+    def cash_deposit_readiness_errors(self) -> tuple[str, ...]:
+        if not self.cash_deposit_enabled:
+            return ("CASH_DEPOSIT_DISABLED",)
+        missing: list[str] = []
+        if self.beam_readiness_errors():
+            missing.append("CASH_DEPOSIT_BEAM_NOT_READY")
+        for code, value in (
+            ("CASH_EVIDENCE_BUCKET_MISSING", self.cash_evidence_bucket),
+            (
+                "CASH_EVIDENCE_SIGNER_SERVICE_ACCOUNT_MISSING",
+                self.cash_evidence_signer_service_account,
+            ),
+            ("CASH_DEPOSIT_RETURN_URL_MISSING", self.cash_deposit_return_url),
+        ):
+            if not value:
+                missing.append(code)
+        return_url = urlparse(self.cash_deposit_return_url or "")
+        if (
+            return_url.scheme not in {"http", "https"}
+            or not return_url.hostname
+            or return_url.username is not None
+            or return_url.password is not None
+            or return_url.fragment
+        ):
+            missing.append("CASH_DEPOSIT_RETURN_URL_INVALID")
+        if (
+            self.deployment_environment == "prod"
+            and not self.cash_deposit_provider_contract_confirmed
+        ):
+            missing.append("CASH_DEPOSIT_PROVIDER_CONTRACT_NOT_CONFIRMED")
+        return tuple(missing)
+
     @property
     def configured_beam_redirect_allowed_schemes(
         self,
@@ -216,9 +255,7 @@ class Settings(BaseSettings):
         if self.beam_api_base_url.rstrip("/") != expected_url:
             missing.append("BEAM_BASE_URL_ENVIRONMENT_MISMATCH")
         raw_methods = {
-            value.strip().upper()
-            for value in self.beam_payment_methods.split(",")
-            if value.strip()
+            value.strip().upper() for value in self.beam_payment_methods.split(",") if value.strip()
         }
         supported_methods = {method.value for method in BeamPaymentMethod}
         if raw_methods - supported_methods:
@@ -228,10 +265,7 @@ class Settings(BaseSettings):
         redirect_hosts = self.configured_beam_redirect_allowed_hosts
         if not redirect_hosts:
             missing.append("BEAM_REDIRECT_ALLOWED_HOSTS_EMPTY")
-        elif any(
-            _BEAM_REDIRECT_HOST_PATTERN.fullmatch(host) is None
-            for host in redirect_hosts
-        ):
+        elif any(_BEAM_REDIRECT_HOST_PATTERN.fullmatch(host) is None for host in redirect_hosts):
             missing.append("BEAM_REDIRECT_ALLOWED_HOSTS_INVALID")
         if not self._beam_redirect_schemes_are_valid():
             missing.append("BEAM_REDIRECT_ALLOWED_SCHEMES_INVALID")

@@ -107,6 +107,28 @@ class CashSettlementStatus(StrEnum):
     UNSETTLED = "UNSETTLED"
     DEPOSIT_PENDING = "DEPOSIT_PENDING"
     SETTLED = "SETTLED"
+    REVIEW = "REVIEW"
+
+
+class CashDepositStatus(StrEnum):
+    DRAFT = "DRAFT"
+    EVIDENCE_UPLOADING = "EVIDENCE_UPLOADING"
+    READY_FOR_QR = "READY_FOR_QR"
+    QR_CREATING = "QR_CREATING"
+    QR_ACTIVE = "QR_ACTIVE"
+    VERIFYING = "VERIFYING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    EXPIRED = "EXPIRED"
+    REVIEW = "REVIEW"
+    CANCELLED = "CANCELLED"
+
+
+class CashEvidenceStatus(StrEnum):
+    PENDING = "PENDING"
+    UPLOADING = "UPLOADING"
+    READY = "READY"
+    INVALID = "INVALID"
 
 
 class AccountingExportStatus(StrEnum):

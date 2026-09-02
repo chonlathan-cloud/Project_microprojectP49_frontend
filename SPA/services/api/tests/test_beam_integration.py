@@ -350,7 +350,10 @@ async def test_qr_charge_uses_satang_and_idempotency_header() -> None:
     assert captured.headers["x-beam-idempotency-key"] == "attempt_001"
     assert b'"amount":40000' in captured.content
     assert b'"paymentMethodType":"QR_PROMPT_PAY"' in captured.content
-    assert b'"returnUrl":"https://customer.invalid/payment/result?attempt=attempt_001"' in captured.content
+    assert (
+        b'"returnUrl":"https://customer.invalid/payment/result?attempt=attempt_001"'
+        in captured.content
+    )
 
 
 @pytest.mark.parametrize(
@@ -398,7 +401,10 @@ async def test_mobile_banking_charge_uses_method_device_and_idempotency(
     assert b'"deviceType":"IOS"' in captured.content
     assert f'"paymentMethodType":"{method.value}"'.encode() in captured.content
     assert provider_field in captured.content
-    assert b'"returnUrl":"https://customer.invalid/payment/result?attempt=attempt_mobile_001"' in captured.content
+    assert (
+        b'"returnUrl":"https://customer.invalid/payment/result?attempt=attempt_mobile_001"'
+        in captured.content
+    )
 
 
 def test_mobile_banking_redirect_is_reduced_to_allowlisted_browser_fields() -> None:

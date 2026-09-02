@@ -128,3 +128,35 @@ async def test_configuration_validation_rejects_wrong_company() -> None:
     async with FlowAccountClient(settings(), httpx.MockTransport(handler)) as client:
         with pytest.raises(FlowAccountConfigurationError, match="identity"):
             await client.validate_configuration()
+
+
+@pytest.mark.asyncio
+async def test_cash_invoice_lookup_accepts_sandbox_total_document_contract() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/token":
+            return httpx.Response(200, json={"access_token": "token"})
+        assert request.url.path == "/cash-invoices"
+        return httpx.Response(
+            200,
+            json={
+                "status": True,
+                "data": {
+                    "list": [
+                        {
+                            "id": 10001,
+                            "externalDocumentId": "SPATST-20260901-SVC001",
+                        }
+                    ],
+                    "totalDocument": "1",
+                },
+            },
+        )
+
+    async with FlowAccountClient(settings(), httpx.MockTransport(handler)) as client:
+        matches = await client.find_cash_invoices(
+            external_document_id="SPATST-20260901-SVC001",
+            accounting_date="2026-09-01",
+        )
+
+    assert len(matches) == 1
+    assert matches[0]["id"] == 10001

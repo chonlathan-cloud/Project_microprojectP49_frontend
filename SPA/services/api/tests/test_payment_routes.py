@@ -155,6 +155,12 @@ def test_customer_payment_routes_use_line_identity_and_no_store(monkeypatch) -> 
         assert customer_result.json()["attemptId"] == "pat_001"
         assert customer_result.json()["paymentMethod"] == "KPLUS"
         assert customer_result.json()["status"] == "PAID"
+
+        invalid_attempt = client.post(
+            "/api/v1/public/payment-attempts/invalid.attempt:resolve",
+            json={"lineIdToken": "line-token"},
+        )
+        assert invalid_attempt.status_code == 422
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous_overrides)

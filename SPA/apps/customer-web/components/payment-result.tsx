@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { loadLiff } from "@/lib/line-liff";
@@ -132,6 +133,7 @@ function stateForPayment(result: CustomerPaymentResult): ResultState | null {
 }
 
 export function PaymentResult({ attemptId }: { attemptId: string | null }) {
+  const router = useRouter();
   const validAttemptId = attemptId && ATTEMPT_ID_PATTERN.test(attemptId) ? attemptId : null;
   const [locale, setLocale] = useState<Locale>("th");
   const [state, setState] = useState<ResultState>(validAttemptId ? "authenticating" : "missing");
@@ -223,7 +225,7 @@ export function PaymentResult({ attemptId }: { attemptId: string | null }) {
       const liff = await loadLiff();
       liff.closeWindow?.();
     } catch {
-      window.location.assign("/my-bookings");
+      router.push("/my-bookings");
     }
   }
 

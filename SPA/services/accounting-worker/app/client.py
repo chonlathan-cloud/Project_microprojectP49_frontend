@@ -254,8 +254,20 @@ class FlowAccountClient:
                 },
             )
             records = body.get("list") if isinstance(body, dict) else None
-            total = body.get("total") if isinstance(body, dict) else None
-            if not isinstance(records, list) or not isinstance(total, int):
+            total_value = (
+                body.get("totalDocument", body.get("total"))
+                if isinstance(body, dict)
+                else None
+            )
+            try:
+                total = int(total_value)
+            except (TypeError, ValueError):
+                total = -1
+            if (
+                not isinstance(records, list)
+                or isinstance(total_value, bool)
+                or total < 0
+            ):
                 raise FlowAccountConfigurationError(
                     "FlowAccount reconciliation response is invalid"
                 )

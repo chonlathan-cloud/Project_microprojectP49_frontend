@@ -77,6 +77,7 @@ def test_tip_is_a_separate_traceable_line() -> None:
     payload = build_cash_invoice_payload(projection, settings())
     assert len(payload["items"]) == 2
     assert payload["items"][1]["sku"] == "SPA-TIP"
+    assert payload["items"][1]["description"] == "SPA-TIP | Tip for BK-20260831-001"
     assert payload["items"][1]["pricePerUnit"] == "50.00"
     assert payload["internalNotes"] == "Tip for BK-20260831-001"
 

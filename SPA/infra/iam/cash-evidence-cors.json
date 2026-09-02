@@ -1,0 +1,14 @@
+[
+  {
+    "origin": [
+      "https://spa-admin-web-test-im54hje3yq-as.a.run.app",
+      "https://spa-admin-web-test-439060579730.asia-southeast1.run.app",
+      "https://spa-admin-web-im54hje3yq-as.a.run.app",
+      "https://spa-admin-web-439060579730.asia-southeast1.run.app",
+      "http://localhost:3001"
+    ],
+    "method": ["PUT", "GET", "HEAD"],
+    "responseHeader": ["Content-Type", "x-goog-generation", "ETag"],
+    "maxAgeSeconds": 600
+  }
+]
