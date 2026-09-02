@@ -200,7 +200,7 @@ if ! gcloud "${GCLOUD_AUTH_ARGS[@]}" artifacts repositories describe "$ARTIFACT_
 fi
 
 IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}:${IMAGE_TAG}"
-tmp_build_config="$(mktemp "${TMPDIR:-/tmp}/spa_worker_build.XXXXXX.yaml")"
+tmp_build_config="$(mktemp "${TMPDIR:-/tmp}/spa_worker_build.XXXXXX")"
 tmp_env_yaml=""
 cleanup() {
   rm -f "$tmp_build_config"
@@ -222,7 +222,7 @@ YAML
 
 env_args=()
 if [[ -f "$ENV_FILE" ]]; then
-  tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_worker_env.XXXXXX.yaml")"
+  tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_worker_env.XXXXXX")"
   python3 - "$ENV_FILE" "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" "$TASK_QUEUE_NAME" "$WORKER_TASK_URL" "$TASK_SERVICE_ACCOUNT" "$ADMIN_WEB_URL" <<'PY'
 import json
 import re
@@ -272,7 +272,7 @@ elif [[ "$REQUIRE_ENV_FILE" == "true" ]]; then
   exit 1
 else
   echo "Environment file not found; using FIRESTORE_DATABASE=$FIRESTORE_DATABASE: $ENV_FILE"
-  tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_worker_env.XXXXXX.yaml")"
+  tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_worker_env.XXXXXX")"
   python3 - "$tmp_env_yaml" "$FIRESTORE_DATABASE" "$APP_ENV" "$TASK_QUEUE_NAME" "$WORKER_TASK_URL" "$TASK_SERVICE_ACCOUNT" "$ADMIN_WEB_URL" <<'PY'
 import json
 import sys

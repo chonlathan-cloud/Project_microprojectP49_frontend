@@ -130,7 +130,8 @@ if ! gcloud "${GCLOUD_AUTH_ARGS[@]}" artifacts repositories describe "$ARTIFACT_
 fi
 
 IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}:${IMAGE_TAG}"
-tmp_build_config="$(mktemp "${TMPDIR:-/tmp}/spa_admin_web_build.XXXXXX.yaml")"
+tmp_dir="${TMPDIR:-/tmp}"
+tmp_build_config="$(mktemp "${tmp_dir%/}/spa_admin_web_build.XXXXXX")"
 tmp_env_yaml=""
 cleanup() {
   rm -f "$tmp_build_config"
@@ -152,7 +153,7 @@ YAML
 
 env_args=()
 if [[ -f "$ENV_FILE" ]]; then
-  tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_admin_web_env.XXXXXX.yaml")"
+  tmp_env_yaml="$(mktemp "${tmp_dir%/}/spa_admin_web_env.XXXXXX")"
   python3 - "$ENV_FILE" "$tmp_env_yaml" "$SPA_API_URL" <<'PY'
 import json
 import re
@@ -194,7 +195,7 @@ elif [[ "$REQUIRE_ENV_FILE" == "true" ]]; then
   exit 1
 else
   if [[ -n "$SPA_API_URL" ]]; then
-    tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_admin_env.XXXXXX.yaml")"
+    tmp_env_yaml="$(mktemp "${tmp_dir%/}/spa_admin_env.XXXXXX")"
     python3 - "$tmp_env_yaml" "$SPA_API_URL" <<'PY'
 import json
 import sys

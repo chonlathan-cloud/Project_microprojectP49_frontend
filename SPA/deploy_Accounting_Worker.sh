@@ -94,7 +94,7 @@ fi
 
 GCLOUD_ARGS=(--impersonate-service-account="$IMPERSONATE_SERVICE_ACCOUNT")
 IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY}/${IMAGE_NAME}:${IMAGE_TAG}"
-tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_accounting_worker_env.XXXXXX.yaml")"
+tmp_env_yaml="$(mktemp "${TMPDIR:-/tmp}/spa_accounting_worker_env.XXXXXX")"
 cleanup() {
   rm -f "$tmp_env_yaml"
 }
