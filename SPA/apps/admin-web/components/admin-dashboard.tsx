@@ -2,6 +2,7 @@
 
 import { INITIAL_SERVICE_CATALOG, type BookingStatus, type Locale, type PreviewBooking } from "@spa/shared-types";
 import type { User } from "firebase/auth";
+import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 
 import { AdminModulePage, type AdminView } from "@/components/admin-module-pages";
@@ -24,6 +25,22 @@ const statusLabel: Record<BookingStatus, { th: string; en: string }> = {
 function adminEntryLabel(booking: PreviewBooking, locale: Locale): string {
   if (booking.adminEntryMode === "HISTORICAL_RECORD") return locale === "th" ? "บันทึกย้อนหลัง" : "Historical";
   return locale === "th" ? "Admin จองให้" : "Staff assisted";
+}
+
+function googleProfilePhoto(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "lh3.googleusercontent.com" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function accountInitials(displayName: string): string {
+  const words = displayName.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "A";
+  return words.slice(0, 2).map((word) => Array.from(word)[0]).join("").toUpperCase();
 }
 
 const navItems = [
@@ -99,6 +116,7 @@ type AdminBookingListResponse = {
 const DEFAULT_BOOKING_PAGE_SIZE = 25;
 const BOOKING_PAGE_SIZES = [25, 50, 100] as const;
 const BOOKING_FILTERS = new Set<string>(["ALL", ...Object.keys(statusLabel)]);
+const SIDEBAR_COLLAPSED_KEY = "spa-admin-sidebar-collapsed";
 
 function bookingListUrl({
   query,
@@ -132,7 +150,7 @@ function bookingListUrl({
   };
 }
 
-export function AdminDashboard({ user }: { user: User }) {
+export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () => Promise<void> }) {
   const { notify, requestConfirmation } = useAdminFeedback();
   const [activeView, setActiveView] = useState<"bookings" | AdminView>("bookings");
   const [locale, setLocale] = useState<Locale>("th");
@@ -147,7 +165,9 @@ export function AdminDashboard({ user }: { user: User }) {
   const [previousPageTokens, setPreviousPageTokens] = useState<Array<string | null>>([]);
   const [bookingSummary, setBookingSummary] = useState({ pending: 0, unassigned: 0 });
   const [selectedId, setSelectedId] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
   const [liveBookings, setLiveBookings] = useState<PreviewBooking[]>([]);
   const [bookingState, setBookingState] = useState<"loading" | "ready" | "error">("loading");
   const [actionState, setActionState] = useState<"idle" | "submitting">("idle");
@@ -165,6 +185,8 @@ export function AdminDashboard({ user }: { user: User }) {
   const detailDrawerRef = useRef<HTMLElement>(null);
   const closeDrawerButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
+  const mobileSidebarCloseRef = useRef<HTMLButtonElement>(null);
 
   function resetPagination() {
     setPageToken(null);
@@ -196,9 +218,59 @@ export function AdminDashboard({ user }: { user: User }) {
     window.history.back();
   }
 
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+      return next;
+    });
+  }
+
+  function openMobileSidebar() {
+    setMobileSidebarOpen(true);
+    window.requestAnimationFrame(() => mobileSidebarCloseRef.current?.focus());
+  }
+
+  function closeMobileSidebar(returnFocus = false) {
+    setMobileSidebarOpen(false);
+    if (returnFocus) window.requestAnimationFrame(() => mobileMenuButtonRef.current?.focus());
+  }
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    try {
+      await onSignOut();
+    } catch (caught) {
+      setSigningOut(false);
+      notify({
+        tone: "error",
+        title: locale === "th" ? "ออกจากระบบไม่สำเร็จ" : "Could not sign out",
+        message: caught instanceof Error ? caught.message : undefined,
+      });
+    }
+  }
+
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
+
+  useEffect(() => {
+    setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true");
+  }, []);
+
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMobileSidebar(true);
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [mobileSidebarOpen]);
 
   useEffect(() => {
     let active = true;
@@ -562,29 +634,50 @@ export function AdminDashboard({ user }: { user: User }) {
     cancel: "Cancel"
   };
 
+  const accountName = user.displayName?.trim() || user.email?.split("@")[0] || (locale === "th" ? "ผู้ดูแลระบบ" : "Administrator");
+  const accountEmail = user.email ?? (locale === "th" ? "บัญชี Google" : "Google account");
+  const profilePhoto = googleProfilePhoto(user.photoURL);
+  const detailDrawerOpen = Boolean(selected && ["bookings", "calendar"].includes(activeView));
+  const layoutClassName = `admin-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}${detailDrawerOpen ? " drawer-open" : ""}`;
+
   return (
-    <div className={selected && ["bookings", "calendar"].includes(activeView) ? "admin-layout drawer-open" : "admin-layout"}>
-      <aside className={sidebarOpen ? "sidebar open" : "sidebar"}>
-        <div className="admin-brand"><div><strong>SPA 49</strong><small>BRANCH OPERATIONS</small></div></div>
-        <div className="branch-chip"><span className="live-dot" />{text.branch}</div>
-        <nav aria-label="Main navigation">
+    <div className={layoutClassName}>
+      <button className={mobileSidebarOpen ? "sidebar-scrim is-visible" : "sidebar-scrim"} type="button" aria-label={locale === "th" ? "ปิดเมนู" : "Close navigation"} tabIndex={mobileSidebarOpen ? 0 : -1} onClick={() => closeMobileSidebar(true)} />
+      <aside id="admin-sidebar" className={mobileSidebarOpen ? "sidebar open" : "sidebar"} aria-label={locale === "th" ? "เมนูผู้ดูแล" : "Admin navigation"}>
+        <div className="admin-brand">
+          <div className="admin-brand-copy"><strong>SPA 49</strong><small>BRANCH OPERATIONS</small></div>
+          <span className="admin-brand-compact" aria-hidden="true">49</span>
+          <button className="sidebar-collapse-button" type="button" aria-label={locale === "th" ? sidebarCollapsed ? "ขยายเมนู" : "ย่อเมนู" : sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} aria-expanded={!sidebarCollapsed} aria-controls="admin-sidebar" title={locale === "th" ? sidebarCollapsed ? "ขยายเมนู" : "ย่อเมนู" : sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} onClick={toggleSidebarCollapsed}>
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+          </button>
+          <button ref={mobileSidebarCloseRef} className="sidebar-mobile-close" type="button" aria-label={locale === "th" ? "ปิดเมนู" : "Close navigation"} onClick={() => closeMobileSidebar(true)}>×</button>
+        </div>
+        <div className="branch-chip" title={text.branch}><span className="live-dot" />{text.branch}</div>
+        <nav aria-label={locale === "th" ? "เมนูหลัก" : "Main navigation"}>
           {navItems.filter(([id]) => id !== "dashboard" || adminRole === "ADMIN").map(([id, icon, th, en]) => {
             const label = locale === "th" ? th : en;
             const isNotifications = id === "notifications";
             const ariaLabel = isNotifications && notificationFailures > 0
               ? `${label}: ${notificationFailures} ${locale === "th" ? "รายการต้องตรวจสอบ" : "items require review"}`
               : label;
-            return <button className={activeView === id ? "nav-item active" : "nav-item"} aria-current={activeView === id ? "page" : undefined} aria-label={ariaLabel} title={ariaLabel} onClick={() => { setActiveView(id); if (isNotifications) setNotificationFilter("ALL"); setSelectedId(""); setQuery(""); setSidebarOpen(false); }} key={id}><span className="nav-icon" aria-hidden="true">{icon}</span>{label}{isNotifications && notificationFailures > 0 && <span className="nav-badge" aria-hidden="true">{notificationFailures > 99 ? "99+" : notificationFailures}</span>}</button>;
+            return <button className={activeView === id ? "nav-item active" : "nav-item"} aria-current={activeView === id ? "page" : undefined} aria-label={ariaLabel} title={ariaLabel} onClick={() => { setActiveView(id); if (isNotifications) setNotificationFilter("ALL"); setSelectedId(""); setQuery(""); closeMobileSidebar(); }} key={id}><span className="nav-icon" aria-hidden="true">{icon}</span><span className="nav-label">{label}</span>{isNotifications && notificationFailures > 0 && <span className="nav-badge" aria-hidden="true">{notificationFailures > 99 ? "99+" : notificationFailures}</span>}</button>;
           })}
         </nav>
         <div className="sidebar-footer">
-          <div className="avatar">พ</div><div><strong>คุณภา</strong><small>{adminRole ?? "—"}</small></div>
+          <div className="sidebar-account">
+            <div className="avatar" aria-hidden="true">{profilePhoto ? <Image src={profilePhoto} alt="" width={38} height={38} referrerPolicy="no-referrer" /> : <span>{accountInitials(accountName)}</span>}</div>
+            <div className="sidebar-account-copy"><strong title={accountName}>{accountName}</strong><small title={accountEmail}>{accountEmail}</small><span>{adminRole ?? "—"}</span></div>
+          </div>
+          <button className="sidebar-signout" type="button" disabled={signingOut} aria-label={locale === "th" ? "ออกจากระบบ" : "Sign out"} title={locale === "th" ? "ออกจากระบบ" : "Sign out"} onClick={() => { void handleSignOut(); }}>
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/></svg>
+            <span>{signingOut ? (locale === "th" ? "กำลังออก…" : "Signing out…") : (locale === "th" ? "ออกจากระบบ" : "Sign out")}</span>
+          </button>
         </div>
       </aside>
 
       <div className="admin-main">
         <header className="topbar">
-          <button className="menu-button" aria-label="Toggle navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen((value) => !value)}>☰</button>
+          <button ref={mobileMenuButtonRef} className="menu-button" type="button" aria-label={locale === "th" ? "เปิดเมนู" : "Open navigation"} aria-expanded={mobileSidebarOpen} aria-controls="admin-sidebar" onClick={openMobileSidebar}>☰</button>
           {activeView === "bookings" ? <label className="global-search"><span aria-hidden="true">⌕</span><input aria-label={text.search} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={text.search} /></label> : <div className="topbar-context"><span>{locale === "th" ? "พื้นที่ทำงาน" : "Workspace"}</span><strong>{locale === "th" ? navItems.find(([id]) => id === activeView)?.[2] : navItems.find(([id]) => id === activeView)?.[3]}</strong></div>}
           <div className="admin-language" role="group" aria-label="Language"><button aria-pressed={locale === "th"} onClick={() => setLocale("th")}>TH</button><button aria-pressed={locale === "en"} onClick={() => setLocale("en")}>EN</button></div>
           <button className="notification-button" aria-label={`${locale === "th" ? "การแจ้งเตือนที่ต้องตรวจสอบ" : "Notifications requiring review"}: ${notificationFailures}`} onClick={() => { setActiveView("notifications"); setNotificationFilter("ACTION_REQUIRED"); setSelectedId(""); setQuery(""); }}>

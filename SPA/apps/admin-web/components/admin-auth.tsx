@@ -13,7 +13,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { getFirebaseAuth } from "@/lib/firebase";
 
-type Props = { children: (user: User) => ReactNode };
+type Props = { children: (user: User, logout: () => Promise<void>) => ReactNode };
 
 function authErrorMessage(error: unknown): string {
   const code = (error as Partial<AuthError>)?.code;
@@ -75,7 +75,11 @@ export function AdminAuth({ children }: Props) {
     }
   }
 
+  async function logout() {
+    await signOut(getFirebaseAuth());
+  }
+
   if (loading) return <div className="auth-gate">Checking Firebase Authentication…</div>;
   if (!user) return <main className="auth-gate"><h1>SPA 49 Admin</h1><p>{error || "Sign in with an invited Google account to continue."}</p><button className="primary-button" onClick={login}>Sign in with Google</button></main>;
-  return <>{children(user)}<button className="auth-signout" onClick={() => signOut(getFirebaseAuth())}>Sign out</button></>;
+  return <>{children(user, logout)}</>;
 }
