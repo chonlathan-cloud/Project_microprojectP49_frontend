@@ -187,6 +187,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const mobileSidebarCloseRef = useRef<HTMLButtonElement>(null);
+  const mobileSidebarRef = useRef<HTMLElement>(null);
 
   function resetPagination() {
     setPageToken(null);
@@ -219,11 +220,9 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   }
 
   function toggleSidebarCollapsed() {
-    setSidebarCollapsed((current) => {
-      const next = !current;
-      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
-      return next;
-    });
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
   }
 
   function openMobileSidebar() {
@@ -255,14 +254,31 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   }, [locale]);
 
   useEffect(() => {
-    setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true");
+    const savedCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+    queueMicrotask(() => setSidebarCollapsed(savedCollapsed));
   }, []);
 
   useEffect(() => {
     if (!mobileSidebarOpen) return;
     const previousOverflow = document.body.style.overflow;
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeMobileSidebar(true);
+      if (event.key === "Escape") {
+        setMobileSidebarOpen(false);
+        window.requestAnimationFrame(() => mobileMenuButtonRef.current?.focus());
+      }
+      if (event.key === "Tab") {
+        const focusable = Array.from(mobileSidebarRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])") ?? []).filter((element) => element.offsetParent !== null);
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (!first || !last) return;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
     };
     document.body.style.overflow = "hidden";
     document.addEventListener("keydown", handleEscape);
@@ -643,7 +659,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   return (
     <div className={layoutClassName}>
       <button className={mobileSidebarOpen ? "sidebar-scrim is-visible" : "sidebar-scrim"} type="button" aria-label={locale === "th" ? "ปิดเมนู" : "Close navigation"} tabIndex={mobileSidebarOpen ? 0 : -1} onClick={() => closeMobileSidebar(true)} />
-      <aside id="admin-sidebar" className={mobileSidebarOpen ? "sidebar open" : "sidebar"} aria-label={locale === "th" ? "เมนูผู้ดูแล" : "Admin navigation"}>
+      <aside ref={mobileSidebarRef} id="admin-sidebar" className={mobileSidebarOpen ? "sidebar open" : "sidebar"} role={mobileSidebarOpen ? "dialog" : undefined} aria-modal={mobileSidebarOpen ? "true" : undefined} aria-label={locale === "th" ? "เมนูผู้ดูแล" : "Admin navigation"}>
         <div className="admin-brand">
           <div className="admin-brand-copy"><strong>SPA 49</strong><small>BRANCH OPERATIONS</small></div>
           <span className="admin-brand-compact" aria-hidden="true">49</span>
