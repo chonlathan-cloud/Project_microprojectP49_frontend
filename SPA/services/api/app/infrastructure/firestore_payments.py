@@ -11,6 +11,7 @@ from google.cloud.firestore_v1.async_transaction import async_transactional
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from app.application.payments import (
+    BookingDiscountResult,
     CustomerPaymentResult,
     PaymentOptions,
     PaymentReconciliationTarget,
@@ -35,6 +36,7 @@ from app.core.types import (
 )
 from app.domains.accounting.factory import build_accounting_export
 from app.domains.accounting.models import AccountingExport
+from app.domains.bookings.pricing import validate_fixed_discount
 from app.domains.identity.models import AdminPrincipal, LinePrincipal
 from app.domains.payments.eligibility import (
     PaymentEligibility,
@@ -282,6 +284,42 @@ def _with_tip(payment: Payment, tip_amount_satang: int) -> Payment:
         subtotal_amount_satang=payment.subtotal_amount_satang,
         discount_amount_satang=payment.discount_amount_satang,
         discount_reason=payment.discount_reason,
+        status=payment.status,
+        source=payment.source,
+        paid_at=payment.paid_at,
+        provider_resource_id=payment.provider_resource_id,
+        cash_received_by=payment.cash_received_by,
+        cash_settlement_status=payment.cash_settlement_status,
+        version=payment.version + 1,
+    )
+
+
+def _with_discount(
+    payment: Payment,
+    *,
+    discount_amount_satang: int,
+    reason: str,
+) -> Payment:
+    normalized_reason = validate_fixed_discount(
+        subtotal_amount_satang=int(payment.subtotal_amount_satang or 0),
+        discount_amount_satang=discount_amount_satang,
+        reason=reason,
+    )
+    service_amount_satang = int(payment.subtotal_amount_satang or 0) - discount_amount_satang
+    return Payment(
+        payment_id=payment.payment_id,
+        booking_doc_id=payment.booking_doc_id,
+        booking_public_id=payment.booking_public_id,
+        branch_id=payment.branch_id,
+        amounts=MoneyBreakdown(
+            service_amount_satang,
+            payment.amounts.tip_amount_satang,
+            service_amount_satang + payment.amounts.tip_amount_satang,
+        ),
+        service_lines=payment.service_lines,
+        subtotal_amount_satang=payment.subtotal_amount_satang,
+        discount_amount_satang=discount_amount_satang,
+        discount_reason=normalized_reason if discount_amount_satang else None,
         status=payment.status,
         source=payment.source,
         paid_at=payment.paid_at,
@@ -1366,6 +1404,180 @@ class FirestorePaymentRepository:
             )
         except GoogleAPICallError as error:
             raise PersistenceUnavailable("Payment result store is unavailable") from error
+
+    async def update_booking_discount(
+        self,
+        *,
+        booking_public_id: str,
+        principal: AdminPrincipal,
+        discount_amount_satang: int,
+        reason: str,
+        expected_booking_version: int,
+        now: datetime,
+    ) -> BookingDiscountResult:
+        @async_transactional
+        async def run(transaction: AsyncTransaction) -> BookingDiscountResult:
+            (
+                booking_snapshot,
+                booking,
+                lines,
+                payment_ref,
+                payment_snapshot,
+            ) = await self._booking_context(transaction, booking_public_id, None)
+            principal.require_branch(str(booking.get("branchId", "")))
+            try:
+                booking_status = BookingStatus(str(booking.get("status", "")))
+            except ValueError as error:
+                raise PersistenceUnavailable("Booking payment state is invalid") from error
+            if booking_status is not BookingStatus.COMPLETED:
+                raise PaymentNotEligible(
+                    "Booking discount may only be changed after service completion"
+                )
+            current_booking_version = int(booking.get("version", 1))
+            if current_booking_version != expected_booking_version:
+                raise FinancialConflict("Booking version changed; reload before trying again")
+            if booking.get("paymentCorrectionHold") is True:
+                raise FinancialConflict("Payment review must be resolved before changing discount")
+
+            payment = (
+                _payment_from_data(payment_ref.id, payment_snapshot.to_dict() or {})
+                if payment_snapshot.exists
+                else _new_payment(booking_snapshot.id, booking, lines)
+            )
+            if payment.status is not PaymentStatus.DUE:
+                if payment.status is PaymentStatus.PAID:
+                    raise FinancialConflict("Paid Bookings require a separate refund or correction")
+                raise FinancialConflict(
+                    "Payment must return to DUE before changing the Booking discount"
+                )
+
+            guard_ref = self._client.collection("payment_attempt_guards").document(
+                booking_snapshot.id
+            )
+            guard_snapshot = await _one(transaction, guard_ref)
+            guard = guard_snapshot.to_dict() or {}
+            guarded_attempt: dict[str, Any] = {}
+            if isinstance(guard.get("attemptId"), str):
+                guarded_attempt_snapshot = await _one(
+                    transaction,
+                    self._client.collection("payment_attempts").document(guard["attemptId"]),
+                )
+                if guarded_attempt_snapshot.exists:
+                    guarded_attempt = guarded_attempt_snapshot.to_dict() or {}
+            if (
+                guard.get("active") is True
+                and isinstance(guard.get("expiresAt"), datetime)
+                and guard["expiresAt"] > now
+            ):
+                raise FinancialConflict("An active Beam attempt exists")
+            if guarded_attempt.get("status") in {
+                PaymentAttemptStatus.CREATING,
+                PaymentAttemptStatus.CREATE_UNKNOWN,
+                PaymentAttemptStatus.ACTIVE,
+                PaymentAttemptStatus.PAYMENT_REVIEW,
+            }:
+                raise FinancialConflict("Beam attempt reconciliation is required")
+
+            normalized_reason = validate_fixed_discount(
+                subtotal_amount_satang=int(payment.subtotal_amount_satang or 0),
+                discount_amount_satang=discount_amount_satang,
+                reason=reason,
+            )
+            old_discount = int(booking.get("discountAmountSatang", 0))
+            old_reason = str(booking.get("discountReason") or "") or None
+            stored_reason = normalized_reason if discount_amount_satang else None
+            updated_payment = _with_discount(
+                payment,
+                discount_amount_satang=discount_amount_satang,
+                reason=normalized_reason,
+            )
+            next_booking_version = current_booking_version + 1
+            settlement_ref = self._client.collection("service_settlements").document(
+                booking_snapshot.id
+            )
+            settlement_snapshot = await _one(transaction, settlement_ref)
+            settlement_stale = settlement_snapshot.exists
+            booking_update: dict[str, Any] = {
+                "discountAmountSatang": discount_amount_satang,
+                "discountType": "ADMIN_FIXED" if discount_amount_satang else None,
+                "discountReason": stored_reason,
+                "discountAppliedBy": principal.uid if discount_amount_satang else None,
+                "discountAppliedAt": now if discount_amount_satang else None,
+                "estimatedAmountSatang": updated_payment.amounts.service_amount_satang,
+                "tipAmountSatang": updated_payment.amounts.tip_amount_satang,
+                "grossAmountSatang": updated_payment.amounts.gross_amount_satang,
+                "amountDueSatang": updated_payment.amounts.gross_amount_satang,
+                "paymentStatus": PaymentStatus.DUE,
+                "paidAmountSatang": 0,
+                "paymentUpdatedAt": now,
+                "version": next_booking_version,
+                "updatedAt": now,
+            }
+            if settlement_stale:
+                booking_update.update(
+                    {
+                        "financialSettlementStatus": "STALE",
+                        "financialSettlementUpdatedAt": now,
+                    }
+                )
+            transaction.update(booking_snapshot.reference, booking_update)
+            if payment_snapshot.exists:
+                transaction.update(payment_ref, _payment_data(updated_payment, now))
+            else:
+                transaction.create(
+                    payment_ref,
+                    {**_payment_data(updated_payment, now), "createdAt": now},
+                )
+
+            event_type = (
+                "BOOKING_DISCOUNT_APPLIED"
+                if old_discount == 0 and discount_amount_satang > 0
+                else "BOOKING_DISCOUNT_REMOVED"
+                if old_discount > 0 and discount_amount_satang == 0
+                else "BOOKING_DISCOUNT_UPDATED"
+            )
+            transaction.create(
+                self._client.collection("audit_events").document(uuid4().hex),
+                {
+                    "eventType": event_type,
+                    "actorType": "ADMIN_USER",
+                    "actorId": principal.uid,
+                    "branchId": updated_payment.branch_id,
+                    "bookingDocId": updated_payment.booking_doc_id,
+                    "publicBookingId": booking_public_id,
+                    "paymentId": updated_payment.payment_id,
+                    "subtotalAmountSatang": updated_payment.subtotal_amount_satang,
+                    "oldDiscountAmountSatang": old_discount,
+                    "newDiscountAmountSatang": discount_amount_satang,
+                    "oldDiscountReason": old_reason,
+                    "discountReason": normalized_reason,
+                    "oldServiceAmountSatang": payment.amounts.service_amount_satang,
+                    "newServiceAmountSatang": updated_payment.amounts.service_amount_satang,
+                    "bookingVersion": next_booking_version,
+                    "paymentVersion": updated_payment.version,
+                    "settlementMarkedStale": settlement_stale,
+                    "occurredAt": now,
+                    "createdAt": now,
+                },
+            )
+            return BookingDiscountResult(
+                booking_id=booking_public_id,
+                booking_version=next_booking_version,
+                subtotal_amount_satang=int(updated_payment.subtotal_amount_satang or 0),
+                discount_amount_satang=discount_amount_satang,
+                discount_reason=stored_reason,
+                service_amount_satang=updated_payment.amounts.service_amount_satang,
+                tip_amount_satang=updated_payment.amounts.tip_amount_satang,
+                gross_amount_satang=updated_payment.amounts.gross_amount_satang,
+                payment_status=updated_payment.status,
+                payment_version=updated_payment.version,
+                settlement_stale=settlement_stale,
+            )
+
+        try:
+            return await run(self._client.transaction())
+        except GoogleAPICallError as error:
+            raise PersistenceUnavailable("Booking discount store is unavailable") from error
 
     async def record_cash(
         self,

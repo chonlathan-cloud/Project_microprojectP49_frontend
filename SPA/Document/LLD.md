@@ -847,7 +847,22 @@ The corresponding `bookings/{bookingDocId}` stores only the derived list index:
 
 Firestore applies branch/date/status equality filters and the descending index before pagination. Because Firestore does not provide case-insensitive substring search, `search` scans that ordered query in 100-document cursor batches and matches Booking ID, customer name, masked phone, or normalized E.164 phone until one page plus a look-ahead row is found. The API returns `items`, `nextPageToken`, `hasMore`, `pageSize`, and branch-wide aggregate counts for `PENDING` and confirmed/unassigned work. The Admin Web must not calculate those operational counts from the current page.
 
-### 6.14.2 Service Settlement and Analytics contract
+### 6.14.2 Completed Booking discount contract
+
+`PUT /api/v1/admin/bookings/{bookingId}/discount` is an `ADMIN`-only financial command with body `discountAmountSatang`, `discountReason`, and Booking `expectedVersion`. The amount must be non-negative whole-THB satang, less than the immutable line-item subtotal, and every apply/update/remove command requires a non-empty audit reason. A zero amount removes the stored discount reason while retaining the submitted reason only in audit evidence.
+
+The command accepts only a `COMPLETED` Booking whose Payment is `DUE`, has no correction hold, and has no active or unresolved Beam attempt. It rejects `PAID`, `PAYMENT_PENDING`, review/refund states, and version conflicts. One Firestore transaction:
+
+1. re-reads the Booking, immutable line items, Payment, attempt guard/attempt, and Settlement;
+2. recalculates net service and gross while preserving the line subtotal and current tip;
+3. updates the Booking discount/net/gross/due projection and increments Booking version;
+4. creates or updates the unpaid Payment snapshot and increments Payment version;
+5. marks the Booking Settlement projection `STALE` when a Settlement document exists; and
+6. appends `BOOKING_DISCOUNT_APPLIED`, `BOOKING_DISCOUNT_UPDATED`, or `BOOKING_DISCOUNT_REMOVED` with old/new financial amounts and actor evidence.
+
+Settlement validity compares `sourceBookingVersion`, discount/net snapshots, and source tip. A stale Settlement is excluded from Dashboard and Insight allocated totals until Admin reviews and saves it again. Therapist pay is never reduced automatically.
+
+### 6.14.3 Service Settlement and Analytics contract
 
 `service_settlements/{bookingDocId}` is the ADMIN-owned financial allocation projection for one eligible `COMPLETED` or `RECORDED` Booking:
 

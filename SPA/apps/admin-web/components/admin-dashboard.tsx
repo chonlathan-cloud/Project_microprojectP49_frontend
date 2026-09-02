@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { AdminModulePage, type AdminView } from "@/components/admin-module-pages";
 import { useAdminFeedback } from "@/components/admin-feedback";
 import { BookingSettlementDialog } from "@/components/booking-settlement-dialog";
+import { BookingDiscountControl, type BookingDiscountUpdate } from "@/components/booking-discount-control";
 import { WalkInBookingDrawer } from "@/components/walk-in-booking-drawer";
 import { adminApi } from "@/lib/admin-api";
 import { countNotificationsRequiringAction } from "@/lib/notification-state";
@@ -186,6 +187,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   const [paymentOptions, setPaymentOptions] = useState<AdminPaymentOptions | null>(null);
   const [paymentLoadState, setPaymentLoadState] = useState<"idle" | "loading" | "ready" | "saving" | "error">("idle");
   const [cashTipSatang, setCashTipSatang] = useState(0);
+  const [discountEditing, setDiscountEditing] = useState(false);
   const [walkInOpen, setWalkInOpen] = useState(false);
   const [adminRole, setAdminRole] = useState<"ADMIN" | "STAFF" | null>(null);
   const [settlementBookingId, setSettlementBookingId] = useState("");
@@ -553,7 +555,6 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
         ? { ...item, status: payload.status as BookingStatus, version: payload.version ?? item.version + 1 }
         : item));
       setBookingRefresh((value) => value + 1);
-      if (action === "complete" && adminRole === "ADMIN") setSettlementBookingId(booking.bookingId);
       notify({
         tone: "success",
         title: action === "cancel" && booking.status === "RECORDED"
@@ -637,7 +638,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   }
 
   async function recordCashPayment() {
-    if (!selected || !paymentOptions?.eligible || paymentLoadState === "saving") return;
+    if (!selected || !paymentOptions?.eligible || paymentLoadState === "saving" || discountEditing) return;
     const grossAmount = paymentOptions.serviceAmountSatang + cashTipSatang;
     const confirmation = await requestConfirmation({
       title: locale === "th" ? "ยืนยันรับเงินสด?" : "Confirm cash receipt?",
@@ -680,6 +681,33 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
     }
   }
 
+  function applyDiscountUpdate(result: BookingDiscountUpdate) {
+    const update = (booking: PreviewBooking): PreviewBooking => ({
+      ...booking,
+      version: result.bookingVersion,
+      subtotalAmountSatang: result.subtotalAmountSatang,
+      discountAmountSatang: result.discountAmountSatang,
+      discountReason: result.discountReason ?? undefined,
+      estimatedAmountSatang: result.serviceAmountSatang,
+      tipAmountSatang: result.tipAmountSatang,
+      grossAmountSatang: result.grossAmountSatang,
+      paymentStatus: result.paymentStatus as PreviewBooking["paymentStatus"],
+      paidAmountSatang: 0,
+    });
+    setLiveBookings((items) => items.map((booking) => booking.bookingId === result.bookingId ? update(booking) : booking));
+    setBookingDetail((current) => current?.bookingId === result.bookingId ? update(current) : current);
+    setPaymentOptions((current) => current ? {
+      ...current,
+      status: result.paymentStatus,
+      source: null,
+      serviceAmountSatang: result.serviceAmountSatang,
+      eligible: true,
+      reason: null,
+      version: result.paymentVersion,
+    } : current);
+    setPaymentLoadState("ready");
+  }
+
   const bookings = liveBookings;
   const filtered = bookings;
   const selected = bookings.find((booking) => booking.bookingId === selectedId);
@@ -700,7 +728,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   const unassigned = bookingSummary.unassigned;
 
   useEffect(() => {
-    if (!selected || selected.status !== "COMPLETED") return;
+    if (!selected || selected.status !== "COMPLETED" || adminRole !== "ADMIN") return;
     let active = true;
     queueMicrotask(() => {
       if (!active) return;
@@ -728,7 +756,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
       });
     });
     return () => { active = false; };
-  }, [locale, notify, selected, user]);
+  }, [adminRole, locale, notify, selected, user]);
 
   const text = locale === "th" ? {
     title: "คิวการจอง",
@@ -889,10 +917,31 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
                 <button type="button" className="primary-compact-button assignment-save" disabled={!assignmentComplete || !assignmentChanged || assignmentState === "saving"} onClick={() => { void saveTherapistAssignment(); }}>{assignmentState === "saving" ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : assignmentChanged ? (locale === "th" ? "บันทึกการมอบหมาย" : "Save assignment") : (locale === "th" ? "มอบหมายแล้ว" : "Assigned")}</button>
               </section>}
               {selected.adminEntryMode === "HISTORICAL_RECORD" && <div className="historical-assignment-note"><strong>{locale === "th" ? "ผู้ให้บริการย้อนหลัง" : "Historical therapist"}</strong><p>{locale === "th" ? "ระบุหมอ ค่าหมอ และส่วนแบ่งทิปในสรุปรายได้ เพื่อให้ข้อมูลเข้า Insight อย่างถูกต้อง" : "Set therapist, pay, and tip share in settlement so Insight remains accurate."}</p></div>}
-              {selected.status === "COMPLETED" && <section className="admin-cash-panel" aria-label={locale === "th" ? "บันทึกรับเงินสด" : "Record cash payment"}>
-                <div><p className="eyebrow">PAYMENT</p><h3>{locale === "th" ? "รับเงินสด" : "Cash receipt"}</h3></div>
+              {adminRole === "ADMIN" && selected.status === "COMPLETED" && <section className="admin-cash-panel" aria-label={locale === "th" ? "ส่วนลดและการรับชำระเงิน" : "Discount and payment"}>
+                <div><p className="eyebrow">PAYMENT</p><h3>{locale === "th" ? "ส่วนลดและชำระเงิน" : "Discount & payment"}</h3></div>
                 {paymentLoadState === "loading" && <p role="status">{locale === "th" ? "กำลังโหลดข้อมูลชำระเงิน…" : "Loading payment details…"}</p>}
-                {paymentOptions && <><div className="admin-payment-amount"><span>{locale === "th" ? "ค่าบริการ รวม VAT" : "Service, VAT included"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang, locale)}</strong></div>{paymentOptions.status !== "PAID" && <fieldset disabled={!paymentOptions.eligible || paymentLoadState === "saving"}><legend>{locale === "th" ? "ทิปเพิ่มเติม" : "Add tip"}</legend><div className="admin-tip-options">{paymentOptions.tipPresetsSatang.map((tip) => <button type="button" key={tip} aria-pressed={cashTipSatang === tip} onClick={() => setCashTipSatang(tip)}>{tip === 0 ? (locale === "th" ? "ไม่มีทิป" : "No tip") : formatBaht(tip, locale)}</button>)}{paymentOptions.customTipMaxSatang !== null && <label><span>{locale === "th" ? "กรอกเอง" : "Custom"}</span><input type="number" min="0" max={paymentOptions.customTipMaxSatang / 100} step="1" inputMode="decimal" onChange={(event) => setCashTipSatang(Math.round(Math.max(0, Number(event.target.value)) * 100))} /></label>}</div></fieldset>}<div className="admin-payment-total"><span>{locale === "th" ? "ยอดรับเงินสด" : "Cash total"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang + cashTipSatang, locale)}</strong></div>{paymentOptions.status === "PAID" ? <p className="admin-payment-success">✓ {paymentOptions.source === "CASH" ? (locale === "th" ? "รับเงินสดแล้ว • รอนำเข้าบัญชี" : "Cash received • awaiting deposit") : (locale === "th" ? "ชำระผ่าน Beam แล้ว" : "Paid via Beam")}</p> : <button className="confirm-button admin-record-cash" disabled={!paymentOptions.eligible || paymentLoadState === "saving"} onClick={() => { void recordCashPayment(); }}>{paymentLoadState === "saving" ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "ยืนยันรับเงินสด" : "Record cash")}</button>}{!paymentOptions.eligible && paymentOptions.status !== "PAID" && <p className="api-gate">{paymentOptions.reason}</p>}</>}
+                {paymentOptions && <>
+                  <div className="admin-payment-amount"><span>{locale === "th" ? "ราคาปกติ รวม VAT" : "Regular price, VAT included"}</span><strong>{formatBaht(selected.subtotalAmountSatang ?? paymentOptions.serviceAmountSatang, locale)}</strong></div>
+                  <BookingDiscountControl
+                    key={`${selected.bookingId}-${selected.version}`}
+                    bookingId={selected.bookingId}
+                    bookingVersion={selected.version}
+                    subtotalAmountSatang={selected.subtotalAmountSatang ?? paymentOptions.serviceAmountSatang}
+                    discountAmountSatang={selected.discountAmountSatang ?? 0}
+                    discountReason={selected.discountReason}
+                    disabled={paymentOptions.status === "PAID" || !paymentOptions.eligible || paymentLoadState === "saving"}
+                    locale={locale}
+                    user={user}
+                    onEditingChange={setDiscountEditing}
+                    onSaved={applyDiscountUpdate}
+                  />
+                  <div className="admin-payment-net"><span>{locale === "th" ? "ค่าบริการสุทธิ" : "Net service"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang, locale)}</strong></div>
+                  {paymentOptions.status !== "PAID" && <fieldset disabled={!paymentOptions.eligible || paymentLoadState === "saving" || discountEditing}><legend>{locale === "th" ? "ทิปเพิ่มเติม" : "Add tip"}</legend><div className="admin-tip-options">{paymentOptions.tipPresetsSatang.map((tip) => <button type="button" key={tip} aria-pressed={cashTipSatang === tip} onClick={() => setCashTipSatang(tip)}>{tip === 0 ? (locale === "th" ? "ไม่มีทิป" : "No tip") : formatBaht(tip, locale)}</button>)}{paymentOptions.customTipMaxSatang !== null && <label><span>{locale === "th" ? "กรอกเอง" : "Custom"}</span><input type="number" min="0" max={paymentOptions.customTipMaxSatang / 100} step="1" inputMode="numeric" onChange={(event) => setCashTipSatang(Math.round(Math.max(0, Number(event.target.value)) * 100))} /></label>}</div></fieldset>}
+                  <div className="admin-payment-total"><span>{locale === "th" ? "ยอดรับเงินสด" : "Cash total"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang + cashTipSatang, locale)}</strong></div>
+                  {discountEditing && <p className="admin-payment-edit-note" role="status">{locale === "th" ? "บันทึกหรือยกเลิกการแก้ไขส่วนลดก่อนรับชำระเงิน" : "Save or cancel the discount edit before recording payment."}</p>}
+                  {paymentOptions.status === "PAID" ? <p className="admin-payment-success">✓ {paymentOptions.source === "CASH" ? (locale === "th" ? "รับเงินสดแล้ว • รอนำเข้าบัญชี" : "Cash received • awaiting deposit") : (locale === "th" ? "ชำระผ่าน Beam แล้ว" : "Paid via Beam")}</p> : <button className="confirm-button admin-record-cash" disabled={!paymentOptions.eligible || paymentLoadState === "saving" || discountEditing} onClick={() => { void recordCashPayment(); }}>{paymentLoadState === "saving" ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "ยืนยันรับเงินสด" : "Record cash")}</button>}
+                  {!paymentOptions.eligible && paymentOptions.status !== "PAID" && <p className="api-gate">{paymentOptions.reason}</p>}
+                </>}
               </section>}
               {adminRole === "ADMIN" && ["COMPLETED", "RECORDED"].includes(selected.status) && <section className="booking-settlement-entry" aria-label={locale === "th" ? "สรุปรายได้และค่าหมอ" : "Service settlement"}><div><p className="eyebrow">SERVICE SETTLEMENT</p><h3>{locale === "th" ? "ค่าหมอ ทิป และส่วนร้าน" : "Therapist pay, tips & shop share"}</h3><p>{locale === "th" ? "ส่วนลดไม่ลดค่าหมอ และแก้ไขได้โดยมี Audit Trail" : "Promotions do not reduce therapist pay; revisions remain audited."}</p></div><button type="button" className="primary-compact-button" onClick={() => setSettlementBookingId(selected.bookingId)}>{locale === "th" ? "เปิดสรุปรายได้" : "Open settlement"}</button></section>}
             </aside>

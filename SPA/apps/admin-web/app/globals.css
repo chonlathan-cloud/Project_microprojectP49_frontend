@@ -201,10 +201,33 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .admin-cash-panel { margin: 0 0 20px; padding: 18px 0; border-block: 1px solid var(--line); }
 .admin-cash-panel h3 { margin: 0; color: var(--forest-dark); font-size: 18px; }
 .admin-cash-panel > p { color: var(--muted); font-size: 12px; }
-.admin-payment-amount, .admin-payment-total { padding: 13px 0; display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
+.admin-payment-amount, .admin-payment-net, .admin-payment-total { padding: 13px 0; display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
 .admin-payment-amount { border-bottom: 1px solid var(--line); }
-.admin-payment-amount span, .admin-payment-total span { color: var(--muted); font-size: 11px; }
-.admin-payment-amount strong, .admin-payment-total strong { color: var(--forest-dark); font-size: 17px; }
+.admin-payment-net { border-top: 1px solid var(--line); }
+.admin-payment-amount span, .admin-payment-net span, .admin-payment-total span { color: var(--muted); font-size: 11px; }
+.admin-payment-amount strong, .admin-payment-net strong, .admin-payment-total strong { color: var(--forest-dark); font-size: 17px; }
+.admin-discount-summary { min-height: 58px; padding: 10px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.admin-discount-summary > div:first-child { min-width: 0; display: grid; gap: 2px; }
+.admin-discount-summary span { color: var(--muted); font-size: 11px; }
+.admin-discount-summary strong { color: #8a5800; font-size: 14px; }
+.admin-discount-summary small { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.admin-discount-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.admin-discount-actions button, .admin-discount-editor-actions button { min-height: 34px; padding: 0 10px; border: 1px solid #aeb6aa; border-radius: 7px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 10px; font-weight: 850; }
+.admin-discount-actions .discount-remove { border-color: #d9aaaa; color: #a31d1d; }
+.admin-discount-editor { margin: 10px 0; padding: 13px; display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; border-left: 4px solid var(--gold); background: #fffaf0; }
+.admin-discount-editor-heading, .admin-discount-preview, .admin-discount-validation, .admin-discount-editor-actions { grid-column: 1 / -1; }
+.admin-discount-editor-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.admin-discount-editor-heading strong { color: var(--forest-dark); font-size: 12px; }
+.admin-discount-editor-heading span { color: var(--muted); font-size: 9px; }
+.admin-discount-editor label { display: grid; align-content: start; gap: 5px; color: var(--muted); font-size: 9px; font-weight: 800; }
+.admin-discount-editor label:nth-of-type(2) { min-width: 0; }
+.admin-discount-editor input { width: 100%; min-width: 0; min-height: 38px; padding: 0 9px; border: 1px solid #aeb6aa; border-radius: 7px; background: white; color: var(--text); font: inherit; font-size: 11px; }
+.admin-discount-preview { padding-top: 9px; display: flex; justify-content: space-between; border-top: 1px solid #ead9b9; color: var(--muted); font-size: 10px; }
+.admin-discount-preview strong { color: var(--forest-dark); font-size: 14px; }
+.admin-discount-validation, .admin-payment-edit-note { margin: 0; color: #8a5800 !important; font-size: 10px !important; line-height: 1.45; }
+.admin-discount-editor-actions { display: flex; justify-content: flex-end; gap: 7px; }
+.admin-discount-editor-actions .confirm-button { border-color: var(--forest); background: var(--forest); color: white; }
+.admin-discount-actions button:disabled, .admin-discount-editor-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .admin-cash-panel fieldset { margin: 14px 0 8px; padding: 0; border: 0; }
 .admin-cash-panel legend { margin-bottom: 8px; color: var(--text); font-size: 11px; font-weight: 800; }
 .admin-tip-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
@@ -916,6 +939,10 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .booking-detail-footer { align-items: stretch; flex-direction: column; }
   .booking-detail-footer .drawer-actions { display: grid; grid-template-columns: 1fr; }
   .booking-detail-footer .drawer-actions button { width: 100%; }
+  .admin-discount-summary { align-items: stretch; flex-direction: column; }
+  .admin-discount-actions { justify-content: flex-start; }
+  .admin-discount-editor { grid-template-columns: 1fr; }
+  .admin-discount-editor > * { grid-column: 1; }
   .toast-region { width: calc(100vw - 24px); top: 12px; right: 12px; }
   .campaign-toolbar, .campaign-toolbar-actions { align-items: stretch; flex-direction: column; }
   .campaign-search, .campaign-editor-grid { grid-template-columns: 1fr; }

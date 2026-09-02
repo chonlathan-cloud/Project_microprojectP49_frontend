@@ -10,10 +10,18 @@ from app.core.errors import (
     PaymentDeviceUnsupported,
     PaymentMethodUnavailable,
     PaymentNotEligible,
+    PermissionDenied,
     PersistenceUnavailable,
+    ValidationDomainError,
 )
 from app.core.settings import Settings
-from app.core.types import BeamDeviceType, BeamPaymentMethod, PaymentSource, PaymentStatus
+from app.core.types import (
+    AppRole,
+    BeamDeviceType,
+    BeamPaymentMethod,
+    PaymentSource,
+    PaymentStatus,
+)
 from app.domains.identity.models import AdminPrincipal, LinePrincipal
 from app.domains.payments.policy import (
     TIP_PRESETS_SATANG,
@@ -98,6 +106,21 @@ class PaymentStatusResult:
 
 
 @dataclass(frozen=True, slots=True)
+class BookingDiscountResult:
+    booking_id: str
+    booking_version: int
+    subtotal_amount_satang: int
+    discount_amount_satang: int
+    discount_reason: str | None
+    service_amount_satang: int
+    tip_amount_satang: int
+    gross_amount_satang: int
+    payment_status: PaymentStatus
+    payment_version: int
+    settlement_stale: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CustomerPaymentResult(PaymentStatusResult):
     attempt_id: str
     payment_method: BeamPaymentMethod
@@ -172,6 +195,17 @@ class PaymentRepository(Protocol):
         idempotency_key: str,
         now: datetime,
     ) -> PaymentStatusResult: ...
+
+    async def update_booking_discount(
+        self,
+        *,
+        booking_public_id: str,
+        principal: AdminPrincipal,
+        discount_amount_satang: int,
+        reason: str,
+        expected_booking_version: int,
+        now: datetime,
+    ) -> BookingDiscountResult: ...
 
 
 class PaymentService:
@@ -287,6 +321,29 @@ class PaymentService:
             reload_options=lambda: self._repository.get_admin_options(
                 booking_public_id, principal, datetime.now(UTC)
             ),
+        )
+
+    async def update_booking_discount(
+        self,
+        *,
+        booking_public_id: str,
+        principal: AdminPrincipal,
+        discount_amount_satang: int,
+        reason: str | None,
+        expected_booking_version: int,
+    ) -> BookingDiscountResult:
+        if principal.role is not AppRole.ADMIN:
+            raise PermissionDenied("Only ADMIN may change a Booking discount")
+        normalized_reason = (reason or "").strip()
+        if not normalized_reason:
+            raise ValidationDomainError("A discount change reason is required")
+        return await self._repository.update_booking_discount(
+            booking_public_id=booking_public_id,
+            principal=principal,
+            discount_amount_satang=discount_amount_satang,
+            reason=normalized_reason,
+            expected_booking_version=expected_booking_version,
+            now=datetime.now(UTC),
         )
 
     async def create_attempt(

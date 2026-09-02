@@ -18,6 +18,7 @@ def test_insight_filters_and_summarizes_without_double_counting_package_revenue(
             "grossAmountSatang": 100_000,
             "paymentStatus": "PAID",
             "paidAmountSatang": 100_000,
+            "version": 5,
         },
         "booking-2": {
             "publicBookingId": "BK-002",
@@ -61,6 +62,7 @@ def test_insight_filters_and_summarizes_without_double_counting_package_revenue(
     ]
     settlements = {
         "booking-1": {
+            "sourceBookingVersion": 5,
             "sourceTipAmountSatang": 10_000,
             "therapistPaySatang": 60_000,
             "therapistTipSatang": 8_000,
@@ -149,3 +151,39 @@ def test_insight_excludes_stale_settlement_totals_and_supports_pagination() -> N
         "totalPages": 2,
     }
     assert len(result["items"]) == 1
+
+
+def test_insight_marks_settlement_stale_after_booking_discount_version_changes() -> None:
+    result = build_insight_payload(
+        bookings={
+            "booking-1": {
+                "publicBookingId": "BK-001",
+                "status": "COMPLETED",
+                "version": 6,
+                "localDate": "2026-09-02",
+                "localStartTime": "14:00",
+                "discountAmountSatang": 5_000,
+                "estimatedAmountSatang": 45_000,
+                "tipAmountSatang": 0,
+                "grossAmountSatang": 45_000,
+            }
+        },
+        lines=[],
+        settlements={
+            "booking-1": {
+                "sourceBookingVersion": 5,
+                "discountAmountSatang": 0,
+                "netServiceAmountSatang": 50_000,
+                "sourceTipAmountSatang": 0,
+                "therapistPaySatang": 30_000,
+                "shopTotalSatang": 20_000,
+            }
+        },
+        filters=InsightFilters(),
+        view="BOOKINGS",
+        page=1,
+        page_size=50,
+    )
+
+    assert result["items"][0]["settlementState"] == "STALE"
+    assert result["summary"]["therapistPaySatang"] == 0

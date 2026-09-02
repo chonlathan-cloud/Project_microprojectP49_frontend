@@ -592,6 +592,7 @@ For bank redirect and QR responses, return only the required action data, provid
 | Method | Path | Permission | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/api/v1/admin/bookings/{bookingId}/payment` | `payment.read` | Full operational payment view |
+| `PUT` | `/api/v1/admin/bookings/{bookingId}/discount` | `ADMIN` | Versioned discount apply/update/remove before payment; rejects active or unresolved attempts |
 | `POST` | `/api/v1/admin/bookings/{bookingId}/payments:record-cash` | `cash_payment.record` | Idempotently record customer cash and create an unsettled cash-payment ledger entry |
 | `POST` | `/api/v1/admin/payments/{paymentId}:reconcile` | `payment.reconcile` | Query provider and normalize latest state |
 | `POST` | `/api/v1/admin/payment-attempts/{attemptId}:disable` | `payment.manage` | Disable a still-active attempt with reason |

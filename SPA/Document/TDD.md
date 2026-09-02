@@ -271,6 +271,7 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | `GET` | `/api/v1/admin/bookings` | `booking.read` |
 | `POST` | `/api/v1/admin/availability/search` | `booking.create`; capacity slots for Admin-selected today/future date |
 | `POST` | `/api/v1/admin/bookings` | `booking.create`; create active Staff-assisted Booking as `CONFIRMED` or past record as `RECORDED`; non-zero discount requires `ADMIN` |
+| `PUT` | `/api/v1/admin/bookings/{bookingId}/discount` | `ADMIN`; versioned whole-THB discount change for unpaid `COMPLETED` Booking |
 | `GET` | `/api/v1/admin/bookings/{bookingId}` | `booking.read` |
 | `PATCH` | `/api/v1/admin/bookings/{bookingId}` | `booking.update` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:confirm` | `booking.confirm` |
@@ -470,6 +471,8 @@ The creation operation has a pre-transaction validation stage and one Firestore 
 - `STAFF_ASSISTED` accepts the current non-past bucket or a future date and performs operating-hours, closure, duplicate, and capacity validation
 - `HISTORICAL_RECORD` requires a past appointment time, commits `RECORDED`, preserves immutable subtotal/discount/net-service/tip/gross financial snapshots, and skips operating-hours/closure/capacity reservations, automatic payment/accounting creation, and notification outbox writes; non-historical creation rejects any positive tip
 - Normalize the optional Admin-entered phone only when provided; never synthesize a placeholder number
+
+For an existing customer Booking, `PUT /api/v1/admin/bookings/{bookingId}/discount` requires `ADMIN`, `expectedVersion`, a whole-THB amount below subtotal, and a non-empty audit reason. It accepts only `COMPLETED` plus Payment `DUE`, and rejects paid/review/correction-hold state or an active/unresolved Beam attempt. One Firestore transaction updates Booking net/gross/due/version, creates or replaces the unpaid Payment snapshot, appends `BOOKING_DISCOUNT_APPLIED|UPDATED|REMOVED`, and marks any existing Settlement `STALE` without changing therapist pay.
 
 ### 14.2 Transaction
 

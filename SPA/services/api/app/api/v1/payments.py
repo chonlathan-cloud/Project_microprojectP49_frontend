@@ -153,6 +153,26 @@ class RecordCashRequest(StrictModel):
     confirmed: bool
 
 
+class BookingDiscountRequest(StrictModel):
+    discount_amount_satang: int = Field(ge=0, multiple_of=100)
+    discount_reason: str = Field(min_length=1, max_length=200)
+    expected_version: int = Field(ge=1)
+
+
+class BookingDiscountResponse(StrictModel):
+    booking_id: str
+    booking_version: int
+    subtotal_amount_satang: int
+    discount_amount_satang: int
+    discount_reason: str | None
+    service_amount_satang: int
+    tip_amount_satang: int
+    gross_amount_satang: int
+    payment_status: PaymentStatus
+    payment_version: int
+    settlement_stale: bool
+
+
 def _payment_status(value: PaymentStatusResult) -> PaymentStatusResponse:
     return PaymentStatusResponse.model_validate(value, from_attributes=True)
 
@@ -294,6 +314,28 @@ async def record_cash_payment(
     )
     response.headers["Cache-Control"] = "no-store, private"
     return _payment_status(result)
+
+
+@admin_router.put(
+    "/bookings/{booking_id}/discount",
+    response_model=BookingDiscountResponse,
+)
+async def update_booking_discount(
+    booking_id: str,
+    request: BookingDiscountRequest,
+    response: Response,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    payments: Annotated[PaymentService, Depends(get_payment_service)],
+) -> BookingDiscountResponse:
+    result = await payments.update_booking_discount(
+        booking_public_id=booking_id,
+        principal=_admin_principal(actor),
+        discount_amount_satang=request.discount_amount_satang,
+        reason=request.discount_reason,
+        expected_booking_version=request.expected_version,
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return BookingDiscountResponse.model_validate(result, from_attributes=True)
 
 
 @webhook_router.post("/beam", status_code=status.HTTP_202_ACCEPTED)

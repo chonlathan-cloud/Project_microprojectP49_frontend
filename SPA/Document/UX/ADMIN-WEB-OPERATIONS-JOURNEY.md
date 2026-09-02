@@ -63,6 +63,7 @@ Booking Queue / Calendar
   → Review วัน เวลา Capacity/ผลของโหมด ราคาปกติ ส่วนลด ยอดสุทธิ และคำเตือนไม่มีช่องทางติดต่อ
   → วันนี้/อนาคตสร้างเป็น CONFIRMED; ย้อนหลังสร้างเป็น RECORDED
   → Active Booking เปิด Detail และมอบหมายหมอนวดก่อน Start; Historical record อยู่ใน History และยกเลิกพร้อมเหตุผลได้เมื่อบันทึกผิด
+  → เมื่อ Active Booking เป็น COMPLETED, `ADMIN` ตรวจราคาปกติ เพิ่ม/แก้/ยกเลิกส่วนลดพร้อมเหตุผล เห็นยอดสุทธิและทิป แล้วจึงยืนยันรับชำระ; หากมี Settlement เดิมต้องตรวจและบันทึกใหม่
 ```
 
 Centered modal ต้องมี `aria-modal`, focus trap, ปิดด้วย Escape, คืน focus ไปยังปุ่มเปิด, และรักษาข้อมูลที่กรอกเมื่อ API ตอบ validation/conflict. Header และ action footer ต้องคงมองเห็นได้เมื่อเนื้อหาภายใน scroll. เมื่อ Capacity เปลี่ยนระหว่างกรอก ให้คงข้อมูลลูกค้าไว้และบังคับเลือก Slot ใหม่.

@@ -45,11 +45,24 @@ def allocate_discount(
     return result
 
 
-def _settlement_state(
+def settlement_state(
     booking: dict[str, object], settlement: dict[str, object] | None
 ) -> SettlementState:
     if not settlement:
         return "PENDING"
+    source_booking_version = settlement.get("sourceBookingVersion")
+    if source_booking_version is not None and int(source_booking_version) != int(
+        booking.get("version", 1)
+    ):
+        return "STALE"
+    if "discountAmountSatang" in settlement and int(
+        settlement.get("discountAmountSatang", 0)
+    ) != int(booking.get("discountAmountSatang", 0)):
+        return "STALE"
+    if "netServiceAmountSatang" in settlement and int(
+        settlement.get("netServiceAmountSatang", 0)
+    ) != int(booking.get("estimatedAmountSatang", 0)):
+        return "STALE"
     if int(settlement.get("sourceTipAmountSatang", 0)) != int(
         booking.get("tipAmountSatang", 0)
     ):
@@ -134,7 +147,7 @@ def _matches_filters(
         group.get("variantId") == filters.variant_id for group in groups.values()
     ):
         return False
-    state = _settlement_state(booking, settlement)
+    state = settlement_state(booking, settlement)
     if filters.settlement_state and state != filters.settlement_state:
         return False
     if filters.therapist_id:
@@ -153,7 +166,7 @@ def _booking_row(
     groups: dict[tuple[str, str], dict[str, object]],
     settlement: dict[str, object] | None,
 ) -> dict[str, object]:
-    state = _settlement_state(booking, settlement)
+    state = settlement_state(booking, settlement)
     valid_settlement = settlement if state == "ALLOCATED" else {}
     allocations = valid_settlement.get("allocations") if valid_settlement else []
     therapist_names = sorted(
@@ -377,7 +390,7 @@ def build_insight_payload(
             booking_id: settlement
             for booking_id, settlement in settlements.items()
             if booking_id in matched_ids
-            and _settlement_state(bookings[booking_id], settlement) == "ALLOCATED"
+            and settlement_state(bookings[booking_id], settlement) == "ALLOCATED"
         }
         items = _therapist_rows(matched_ids, valid_settlements)
     else:

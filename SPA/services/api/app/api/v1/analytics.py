@@ -18,6 +18,7 @@ from app.domains.analytics.insight import (
     InsightFilters,
     InsightView,
     build_insight_payload,
+    settlement_state,
 )
 from app.domains.analytics.insight import (
     allocate_discount as _allocate_discount,
@@ -180,6 +181,7 @@ def _settlement_response(
     tip_amount = int(booking.get("tipAmountSatang", 0))
     settled = settlement_snapshot.exists
     source_tip = int(settlement.get("sourceTipAmountSatang", 0)) if settled else 0
+    financial_stale = settled and settlement_state(booking, settlement) == "STALE"
     return {
         "bookingId": booking.get("publicBookingId", booking_snapshot.id),
         "bookingStatus": booking.get("status"),
@@ -187,6 +189,7 @@ def _settlement_response(
         and not bool(booking.get("financiallyExcluded")),
         "settled": settled,
         "requiresTipReallocation": settled and source_tip != tip_amount,
+        "requiresFinancialReallocation": financial_stale,
         "version": int(settlement.get("version", 0)),
         "subtotalAmountSatang": int(booking.get("subtotalAmountSatang", 0)),
         "discountAmountSatang": int(booking.get("discountAmountSatang", 0)),
@@ -534,9 +537,7 @@ def analytics_overview(
     complete_settlements: dict[str, dict[str, object]] = {}
     for booking_id in eligible_ids:
         settlement = settlements.get(booking_id)
-        if settlement and int(settlement.get("sourceTipAmountSatang", 0)) == int(
-            bookings[booking_id].get("tipAmountSatang", 0)
-        ):
+        if settlement and settlement_state(bookings[booking_id], settlement) == "ALLOCATED":
             complete_settlements[booking_id] = settlement
     therapist_pay = sum(
         int(item.get("therapistPaySatang", 0)) for item in complete_settlements.values()

@@ -62,3 +62,38 @@ def price_booking(selections: list[VariantSelection]) -> tuple[list[PriceLineIte
 
     items.sort(key=lambda item: item.participant_indexes)
     return items, sum(item.line_total_satang for item in items)
+
+
+def validate_fixed_discount(
+    *,
+    subtotal_amount_satang: int,
+    discount_amount_satang: int,
+    reason: str | None,
+) -> str:
+    """Validate an ADMIN-entered whole-baht Booking discount.
+
+    The returned reason is normalized and is also used as the audit reason when a
+    discount is removed. Callers must store it on the Booking/Payment only while
+    the discount amount is positive.
+    """
+    if (
+        isinstance(subtotal_amount_satang, bool)
+        or not isinstance(subtotal_amount_satang, int)
+        or subtotal_amount_satang <= 0
+    ):
+        raise ValidationDomainError("Booking subtotal is invalid")
+    if (
+        isinstance(discount_amount_satang, bool)
+        or not isinstance(discount_amount_satang, int)
+        or discount_amount_satang < 0
+        or discount_amount_satang % 100 != 0
+    ):
+        raise ValidationDomainError("Discount must be a non-negative whole-THB amount")
+    if discount_amount_satang >= subtotal_amount_satang:
+        raise ValidationDomainError("Discount must be less than the service subtotal")
+    normalized_reason = (reason or "").strip()
+    if not normalized_reason:
+        raise ValidationDomainError("A discount change reason is required")
+    if len(normalized_reason) > 200:
+        raise ValidationDomainError("Discount reason must not exceed 200 characters")
+    return normalized_reason

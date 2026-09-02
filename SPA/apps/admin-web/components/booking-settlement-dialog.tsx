@@ -26,6 +26,7 @@ type Settlement = {
   eligible: boolean;
   settled: boolean;
   requiresTipReallocation: boolean;
+  requiresFinancialReallocation: boolean;
   version: number;
   subtotalAmountSatang: number;
   discountAmountSatang: number;
@@ -147,7 +148,7 @@ export function BookingSettlementDialog({ bookingId, locale, user, onClose, onSa
       {state === "loading" && <div className="module-state" role="status">{locale === "th" ? "กำลังโหลดข้อมูลบริการ…" : "Loading service details…"}</div>}
       {error && <div className="drawer-feedback error" role="alert">{error}</div>}
       {settlement && <>
-        {settlement.requiresTipReallocation && <div className="settlement-warning" role="alert">{locale === "th" ? "ยอดทิปเปลี่ยนหลังการสรุปครั้งก่อน กรุณาแบ่งทิปใหม่" : "The received tip changed after the last settlement. Reallocate the tip."}</div>}
+        {settlement.requiresFinancialReallocation && <div className="settlement-warning" role="alert">{settlement.requiresTipReallocation ? (locale === "th" ? "ยอดทิปเปลี่ยนหลังการสรุปครั้งก่อน กรุณาตรวจและแบ่งทิปใหม่" : "The received tip changed after the last settlement. Review and reallocate the tip.") : (locale === "th" ? "ส่วนลดหรือยอดค่าบริการเปลี่ยนหลังการสรุปครั้งก่อน กรุณาตรวจส่วนร้านและบันทึกใหม่" : "The discount or net service amount changed after the last settlement. Review the shop share and save again.")}</div>}
         <dl className="settlement-financial-strip"><div><dt>{locale === "th" ? "ราคาปกติ" : "Regular price"}</dt><dd>{baht(settlement.subtotalAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ส่วนลดร้าน" : "Shop promotion"}</dt><dd>−{baht(settlement.discountAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ค่าบริการสุทธิ" : "Net service"}</dt><dd>{baht(settlement.netServiceAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ทิปทั้งหมด" : "Total tip"}</dt><dd>{baht(settlement.tipAmountSatang, locale)}</dd></div></dl>
         <div className="settlement-allocation-list">{allocations.map((item) => <section key={item.participantId} className="settlement-allocation-row" aria-labelledby={`allocation-${item.participantId}`}>
           <div className="settlement-service"><strong id={`allocation-${item.participantId}`}>{item.participantName}</strong><span>{locale === "th" ? item.serviceNameTh : item.serviceNameEn} • {item.durationMinutes} {locale === "th" ? "นาที" : "min"}</span></div>

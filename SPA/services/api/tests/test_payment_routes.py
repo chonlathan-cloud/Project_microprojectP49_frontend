@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.api.v1 import payments as payment_routes
 from app.application.payments import (
+    BookingDiscountResult,
     CustomerPaymentResult,
     PaymentAttemptResult,
     PaymentOptions,
@@ -97,6 +98,25 @@ class Payments:
             tip_amount_satang=0,
             gross_amount_satang=35_000,
             paid_at=datetime(2026, 8, 31, 7, 50, tzinfo=UTC),
+        )
+
+    async def update_booking_discount(self, **kwargs):
+        assert kwargs["principal"].role == "ADMIN"
+        assert kwargs["discount_amount_satang"] == 5_000
+        assert kwargs["reason"] == "ลูกค้าประจำ"
+        assert kwargs["expected_booking_version"] == 4
+        return BookingDiscountResult(
+            booking_id="BK-001",
+            booking_version=5,
+            subtotal_amount_satang=35_000,
+            discount_amount_satang=5_000,
+            discount_reason="ลูกค้าประจำ",
+            service_amount_satang=30_000,
+            tip_amount_satang=0,
+            gross_amount_satang=30_000,
+            payment_status=PaymentStatus.DUE,
+            payment_version=2,
+            settlement_stale=True,
         )
 
 
@@ -198,6 +218,30 @@ def test_cash_receipt_requires_admin_confirmation() -> None:
         )
         assert recorded.status_code == 200
         assert recorded.json()["source"] == "CASH"
+
+        discounted = client.put(
+            "/api/v1/admin/bookings/BK-001/discount",
+            json={
+                "discountAmountSatang": 5_000,
+                "discountReason": "ลูกค้าประจำ",
+                "expectedVersion": 4,
+            },
+        )
+        assert discounted.status_code == 200
+        assert discounted.headers["cache-control"] == "no-store, private"
+        assert discounted.json() == {
+            "bookingId": "BK-001",
+            "bookingVersion": 5,
+            "subtotalAmountSatang": 35_000,
+            "discountAmountSatang": 5_000,
+            "discountReason": "ลูกค้าประจำ",
+            "serviceAmountSatang": 30_000,
+            "tipAmountSatang": 0,
+            "grossAmountSatang": 30_000,
+            "paymentStatus": "DUE",
+            "paymentVersion": 2,
+            "settlementStale": True,
+        }
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous_overrides)

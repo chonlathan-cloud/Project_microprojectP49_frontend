@@ -7,7 +7,13 @@ from app.application.financial_ledger import (
     AuthoritativePaymentCommand,
     InMemoryFinancialLedger,
 )
-from app.core.errors import FinancialConflict, FinancialInvariantError
+from app.application.payments import PaymentService
+from app.core.errors import (
+    FinancialConflict,
+    FinancialInvariantError,
+    PermissionDenied,
+    ValidationDomainError,
+)
 from app.core.types import (
     AppRole,
     BookingStatus,
@@ -16,6 +22,8 @@ from app.core.types import (
     PaymentStatus,
 )
 from app.domains.accounting.factory import build_accounting_export
+from app.domains.bookings.pricing import validate_fixed_discount
+from app.domains.identity.models import AdminPrincipal
 from app.domains.payments.eligibility import (
     attempt_expires_at,
     evaluate_payment_eligibility,
@@ -26,7 +34,7 @@ from app.domains.payments.policy import (
     require_admin_financial_action,
     validate_tip_amount,
 )
-from app.infrastructure.firestore_payments import _export_data, _new_payment
+from app.infrastructure.firestore_payments import _export_data, _new_payment, _with_discount
 
 
 def payment() -> Payment:
@@ -109,6 +117,72 @@ def test_discounted_booking_rejects_tampered_net_amount() -> None:
                 "estimatedAmountSatang": 49_000,
             },
             lines,
+        )
+
+
+def test_completed_booking_discount_preserves_lines_and_tip() -> None:
+    current = payment()
+    discounted = _with_discount(
+        current,
+        discount_amount_satang=5_000,
+        reason="  ลูกค้าประจำ  ",
+    )
+
+    assert discounted.subtotal_amount_satang == 35_000
+    assert discounted.discount_amount_satang == 5_000
+    assert discounted.discount_reason == "ลูกค้าประจำ"
+    assert discounted.amounts.service_amount_satang == 30_000
+    assert discounted.amounts.tip_amount_satang == 5_000
+    assert discounted.amounts.gross_amount_satang == 35_000
+    assert discounted.service_lines == current.service_lines
+    assert discounted.version == current.version + 1
+
+
+def test_booking_discount_requires_whole_baht_and_a_reason() -> None:
+    with pytest.raises(ValidationDomainError):
+        _with_discount(payment(), discount_amount_satang=5_050, reason="ทดสอบ")
+    with pytest.raises(ValidationDomainError):
+        _with_discount(payment(), discount_amount_satang=35_000, reason="ทดสอบ")
+    with pytest.raises(ValidationDomainError):
+        _with_discount(payment(), discount_amount_satang=5_000, reason=" ")
+
+
+def test_removing_discount_requires_audit_reason_but_stores_no_discount_reason() -> None:
+    discounted = _with_discount(
+        payment(),
+        discount_amount_satang=5_000,
+        reason="ลูกค้าประจำ",
+    )
+    restored = _with_discount(
+        discounted,
+        discount_amount_satang=0,
+        reason="Admin บันทึกผิด",
+    )
+
+    assert restored.discount_amount_satang == 0
+    assert restored.discount_reason is None
+    assert validate_fixed_discount(
+        subtotal_amount_satang=35_000,
+        discount_amount_satang=0,
+        reason="Admin บันทึกผิด",
+    ) == "Admin บันทึกผิด"
+
+
+@pytest.mark.asyncio
+async def test_post_service_discount_is_admin_only() -> None:
+    service = PaymentService(object(), object())  # type: ignore[arg-type]
+    with pytest.raises(PermissionDenied, match="ADMIN"):
+        await service.update_booking_discount(
+            booking_public_id="BK-001",
+            principal=AdminPrincipal(
+                uid="staff-001",
+                email="staff@example.com",
+                role=AppRole.STAFF,
+                branch_ids=("branch_001",),
+            ),
+            discount_amount_satang=5_000,
+            reason="ลูกค้าประจำ",
+            expected_booking_version=4,
         )
 
 

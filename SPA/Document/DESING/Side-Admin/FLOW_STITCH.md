@@ -25,6 +25,7 @@
   - Columns: Booking Time, Customer Name & Phone, Service Course, Duration, Pax, Health Warning Tag, Assigned Therapist, Status Badge, Quick Actions.
   - **Quick Action Column:** One-click status dropdown (`Confirmed` -> `In-Service` -> `Completed`), plus `Call Customer` button.
   - **Booking Detail:** Row action opens a centered modal. A `CONFIRMED` Booking exposes one therapist selector per participant and saves assignment in place. Two-person Bookings require different active therapists. The Start action becomes available only after the assignment response succeeds. Historical records route therapist/pay/tip attribution through Settlement rather than operational assignment.
+  - **Payment and Discount:** For an unpaid `COMPLETED` Booking, the centered modal shows regular price, ADMIN-only whole-THB shop discount with required reason, net service, optional tip, and cash total in that order. Saving a discount is confirmed and audited before payment actions are enabled. Paid Bookings and active/unresolved Beam attempts are read-only; a changed discount makes any earlier Settlement stale for review.
 
 ---
 
