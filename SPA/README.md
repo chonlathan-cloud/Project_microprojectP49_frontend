@@ -149,6 +149,30 @@ These indexes support time-aware list classification. Existing indexes that also
 `customerListBucket` can remain; the current API no longer depends on that materialized status-only
 bucket when deciding whether an appointment belongs in Upcoming or History.
 
+### Enable anonymized historical fixtures in the Test Dashboard
+
+The Production-to-Test copy intentionally creates anonymized fixtures as `RECORDED` with
+`financiallyExcluded=true`. To include only those fixtures in Test analytics, review the dry-run
+and then apply its exact plan digest:
+
+```bash
+cd SPA/services/api
+uv run python scripts/enable_test_historical_analytics.py \
+  --from-date 2026-08-02 \
+  --to-date 2026-09-01
+
+uv run python scripts/enable_test_historical_analytics.py \
+  --from-date 2026-08-02 \
+  --to-date 2026-09-01 \
+  --apply \
+  --confirm-database spa-test-db \
+  --confirm-plan PLAN_DIGEST_FROM_DRY_RUN
+```
+
+The script rejects every database except `spa-test-db`, updates only fixtures tagged
+`ANONYMIZED_PRODUCTION_BOOKING`, writes one migration manifest, and never prints or changes
+customer identity or health data.
+
 Backfill existing verified Booking-to-LINE links after reviewing the dry-run. The script does not
 print or copy raw LINE user IDs:
 

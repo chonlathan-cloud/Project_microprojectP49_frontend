@@ -665,12 +665,42 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .analytics-metric.danger strong { color: #991b1b; }
 .analytics-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(480px, .95fr); gap: 16px; }
 .analytics-grid .module-panel { min-width: 0; margin: 0; }
-.analytics-bars { min-height: 270px; padding: 20px 16px 12px; display: flex; align-items: end; gap: 7px; overflow-x: auto; }
-.analytics-bar-column { min-width: 36px; height: 230px; display: grid; grid-template-rows: 24px 1fr 32px; align-items: end; flex: 1 0 36px; text-align: center; }
-.analytics-bar-value { overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.analytics-bar-track { width: 18px; height: 166px; margin: 0 auto; display: flex; align-items: end; border-radius: 3px 3px 0 0; background: #edf0eb; }
-.analytics-bar-track span { width: 100%; display: block; border-radius: 3px 3px 0 0; background: var(--forest); }
-.analytics-bar-column > small { height: 30px; margin-top: 5px; color: var(--muted); font-size: 8px; writing-mode: vertical-rl; }
+.analytics-trend { grid-column: 1 / -1; align-self: start; }
+.analytics-trend-header { min-height: 86px; padding: 15px 18px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--line); }
+.analytics-trend-header h2 { margin: 0; color: var(--text); font-size: 15px; }
+.analytics-trend-header > div > small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+.analytics-trend-summary { margin: 0; display: flex; align-items: stretch; }
+.analytics-trend-summary > div { min-width: 145px; padding: 2px 16px; border-left: 1px solid var(--line); }
+.analytics-trend-summary dt { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
+.analytics-trend-summary dd { margin: 5px 0 0; color: var(--forest-dark); font-size: 14px; font-weight: 900; white-space: nowrap; }
+.analytics-revenue-chart { min-width: 0; padding: 14px 18px 0; display: grid; grid-template-columns: 62px minmax(0, 1fr); }
+.analytics-y-axis { height: 284px; padding: 33px 9px 47px 0; display: flex; flex-direction: column; justify-content: space-between; color: var(--muted); font-size: 8px; font-weight: 750; text-align: right; }
+.analytics-plot { min-width: 0; height: 284px; position: relative; overflow-x: auto; overflow-y: hidden; }
+.analytics-plot::before { content: ""; position: absolute; inset: 36px 0 48px; background: repeating-linear-gradient(to bottom, var(--line) 0, var(--line) 1px, transparent 1px, transparent 25%); pointer-events: none; }
+.analytics-average-line { height: 0; position: absolute; z-index: 2; right: 0; left: 0; border-top: 1px dashed #747d70; pointer-events: none; }
+.analytics-average-line span { padding: 1px 4px; position: absolute; top: -17px; right: 4px; background: rgba(255, 255, 255, .92); color: #5f685b; font-size: 8px; font-weight: 800; }
+.analytics-bars { width: 100%; height: 284px; padding: 14px 12px 10px; display: grid; align-items: end; gap: 6px; }
+.analytics-bar-column { min-width: 26px; height: 256px; display: grid; grid-template-rows: 22px 200px 34px; align-items: end; position: relative; text-align: center; }
+.analytics-bar-value { overflow: visible; visibility: hidden; color: var(--muted); font-size: 8px; font-weight: 800; white-space: nowrap; }
+.analytics-bar-value.is-visible, .analytics-bar-column:hover .analytics-bar-value, .analytics-bar-column:focus-visible .analytics-bar-value { visibility: visible; }
+.analytics-revenue-stack { width: clamp(12px, 52%, 22px); height: 200px; margin: 0 auto; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-radius: 3px 3px 0 0; }
+.analytics-revenue-stack > span { width: 100%; min-height: 0; display: block; }
+.analytics-revenue-stack > span.has-value { min-height: 2px; }
+.analytics-service-segment { background: var(--forest); }
+.analytics-tip-segment { background: #b38a4a; }
+.analytics-bar-column.is-zero .analytics-revenue-stack { border-bottom: 2px solid #cfd4cc; border-radius: 0; }
+.analytics-bar-column > small { height: 28px; margin-top: 6px; overflow: visible; visibility: hidden; color: var(--muted); font-size: 8px; line-height: 1.2; white-space: nowrap; }
+.analytics-bar-column > small.is-visible { visibility: visible; }
+.analytics-bar-column:focus-visible { outline: none; }
+.analytics-bar-column:focus-visible .analytics-revenue-stack { outline: 2px solid #1f5eae; outline-offset: 3px; }
+.analytics-chart-tooltip { min-width: 160px; padding: 9px 10px; display: none; position: absolute; z-index: 5; bottom: 172px; left: 50%; transform: translateX(-50%); border: 1px solid #d7dbd4; border-radius: 7px; background: #fff; box-shadow: 0 8px 24px rgba(31, 41, 55, .14); color: var(--muted); font-size: 9px; line-height: 1.45; text-align: left; white-space: nowrap; }
+.analytics-chart-tooltip strong, .analytics-chart-tooltip span { display: block; }
+.analytics-chart-tooltip strong { margin-bottom: 3px; color: var(--text); font-size: 10px; }
+.analytics-bar-column:hover .analytics-chart-tooltip, .analytics-bar-column:focus-visible .analytics-chart-tooltip { display: block; }
+.analytics-bar-column:first-child .analytics-chart-tooltip, .analytics-bar-column:nth-child(2) .analytics-chart-tooltip { left: 0; transform: none; }
+.analytics-bar-column:nth-last-child(-n+2) .analytics-chart-tooltip { right: 0; left: auto; transform: none; }
+.analytics-chart-footer { min-height: 42px; padding: 0 18px 12px 80px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.analytics-chart-footer > small { color: var(--muted); font-size: 9px; white-space: nowrap; }
 .analytics-services table, .analytics-therapists table { min-width: 620px; }
 .analytics-services td, .analytics-therapists td { padding-block: 11px; }
 .peak-hour-list { padding: 16px 18px; display: grid; gap: 9px; }
@@ -687,6 +717,10 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .analytics-legend i { width: 18px; height: 5px; border-radius: 2px; }
 .analytics-legend i.scheduled { background: var(--forest); }
 .analytics-legend i.actual { background: #3b6ea8; }
+.analytics-chart-footer .analytics-legend { padding: 0; flex-wrap: wrap; }
+.analytics-legend i.service { height: 8px; background: var(--forest); }
+.analytics-legend i.tip { height: 8px; background: #b38a4a; }
+.analytics-legend i.average { height: 0; border-top: 1px dashed #747d70; border-radius: 0; }
 
 @media (max-width: 1279px) {
   .admin-layout { grid-template-columns: 76px minmax(0, 1fr); }
@@ -748,6 +782,10 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .cash-deposit-drawer { width: min(680px, 100vw); }
   .analytics-heading { align-items: stretch; flex-direction: column; }
   .analytics-date-filter { grid-template-columns: 1fr 1fr; }
+  .analytics-trend-header { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .analytics-trend-summary { width: 100%; }
+  .analytics-trend-summary > div { min-width: 0; flex: 1; }
+  .analytics-trend-summary > div:first-child { padding-left: 0; border-left: 0; }
   .settlement-allocation-row { grid-template-columns: 1fr 1fr; }
   .settlement-service { grid-column: 1 / -1; }
   .settlement-financial-strip, .settlement-result { grid-template-columns: 1fr 1fr; }
@@ -807,6 +845,11 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .analytics-metric:last-child { border-bottom: 0; }
   .analytics-attention { align-items: flex-start; flex-direction: column; gap: 5px; }
   .analytics-attention .danger { margin-left: 0; }
+  .analytics-trend-summary { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .analytics-trend-summary > div { padding: 0; border-left: 0; }
+  .analytics-revenue-chart { padding-inline: 10px; grid-template-columns: 52px minmax(0, 1fr); }
+  .analytics-chart-footer { padding-inline: 62px 10px; align-items: flex-start; flex-direction: column; gap: 8px; }
+  .analytics-chart-footer > small { white-space: normal; }
   .booking-settlement-entry { grid-template-columns: 1fr; }
   .booking-settlement-entry button { width: 100%; }
   .settlement-dialog { max-height: calc(100dvh - 24px); }

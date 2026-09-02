@@ -59,6 +59,17 @@ type AnalyticsResponse = {
   peakHours: Array<{ hour: string; scheduledCount: number; actualCount: number }>;
 };
 
+type DailyRevenue = AnalyticsResponse["daily"][number];
+
+type RevenueChartPoint = {
+  key: string;
+  dateFrom: string;
+  dateTo: string;
+  serviceRevenueSatang: number;
+  tipSatang: number;
+  bookingCount: number;
+};
+
 function bangkokDate(offsetDays = 0): string {
   const value = new Date(Date.now() + offsetDays * 86_400_000);
   return new Intl.DateTimeFormat("en-CA", {
@@ -83,6 +94,68 @@ function shortDate(value: string, locale: Locale): string {
     month: "short",
     timeZone: "Asia/Bangkok",
   }).format(new Date(`${value}T12:00:00+07:00`));
+}
+
+function eachDate(dateFrom: string, dateTo: string): string[] {
+  const dates: string[] = [];
+  const current = new Date(`${dateFrom}T00:00:00Z`);
+  const end = new Date(`${dateTo}T00:00:00Z`);
+
+  while (current <= end) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+
+  return dates;
+}
+
+function fillDailyRevenue(daily: DailyRevenue[], dateFrom: string, dateTo: string): DailyRevenue[] {
+  const byDate = new Map(daily.map((item) => [item.localDate, item]));
+  return eachDate(dateFrom, dateTo).map((localDate) => byDate.get(localDate) ?? {
+    localDate,
+    serviceRevenueSatang: 0,
+    tipSatang: 0,
+    bookingCount: 0,
+  });
+}
+
+function buildRevenueChartPoints(daily: DailyRevenue[]): RevenueChartPoint[] {
+  if (daily.length <= 31) {
+    return daily.map((item) => ({
+      key: item.localDate,
+      dateFrom: item.localDate,
+      dateTo: item.localDate,
+      serviceRevenueSatang: item.serviceRevenueSatang,
+      tipSatang: item.tipSatang,
+      bookingCount: item.bookingCount,
+    }));
+  }
+
+  const weekly: RevenueChartPoint[] = [];
+  for (let index = 0; index < daily.length; index += 7) {
+    const items = daily.slice(index, index + 7);
+    weekly.push({
+      key: `${items[0].localDate}:${items.at(-1)?.localDate ?? items[0].localDate}`,
+      dateFrom: items[0].localDate,
+      dateTo: items.at(-1)?.localDate ?? items[0].localDate,
+      serviceRevenueSatang: items.reduce((total, item) => total + item.serviceRevenueSatang, 0),
+      tipSatang: items.reduce((total, item) => total + item.tipSatang, 0),
+      bookingCount: items.reduce((total, item) => total + item.bookingCount, 0),
+    });
+  }
+  return weekly;
+}
+
+function niceMaximum(value: number): number {
+  if (value <= 0) return 100;
+  const roughStep = value / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  return Math.ceil(roughStep / magnitude) * magnitude * 4;
+}
+
+function chartDateLabel(point: RevenueChartPoint, locale: Locale): string {
+  if (point.dateFrom === point.dateTo) return shortDate(point.dateFrom, locale);
+  return `${shortDate(point.dateFrom, locale)}–${shortDate(point.dateTo, locale)}`;
 }
 
 function SummaryMetric({ label, value, note, tone }: { label: string; value: string; note: string; tone?: "warning" | "danger" | "positive" }) {
@@ -111,7 +184,28 @@ export function AnalyticsDashboard({ locale, user }: { locale: Locale; user: Use
 
   useEffect(() => { queueMicrotask(() => { void load(); }); }, [load]);
 
-  const maxDaily = useMemo(() => Math.max(1, ...(data?.daily.map((item) => item.serviceRevenueSatang + item.tipSatang) ?? [1])), [data]);
+  const completeDaily = useMemo(
+    () => data ? fillDailyRevenue(data.daily, data.dateFrom, data.dateTo) : [],
+    [data],
+  );
+  const revenueChart = useMemo(() => buildRevenueChartPoints(completeDaily), [completeDaily]);
+  const chartTotals = useMemo(
+    () => revenueChart.map((item) => item.serviceRevenueSatang + item.tipSatang),
+    [revenueChart],
+  );
+  const chartTotal = useMemo(() => chartTotals.reduce((total, item) => total + item, 0), [chartTotals]);
+  const chartAverage = revenueChart.length ? chartTotal / revenueChart.length : 0;
+  const chartMaximum = useMemo(() => niceMaximum(Math.max(0, ...chartTotals)), [chartTotals]);
+  const peakChartIndex = chartTotals.length ? chartTotals.indexOf(Math.max(...chartTotals)) : -1;
+  const peakDay = useMemo(
+    () => data?.daily.length ? completeDaily.reduce<DailyRevenue | null>((peak, item) => {
+      const itemTotal = item.serviceRevenueSatang + item.tipSatang;
+      const peakTotal = peak ? peak.serviceRevenueSatang + peak.tipSatang : -1;
+      return itemTotal > peakTotal ? item : peak;
+    }, null) : null,
+    [completeDaily, data],
+  );
+  const dateLabelStep = Math.max(1, Math.ceil(revenueChart.length / 10));
   const maxHour = useMemo(() => Math.max(1, ...(data?.peakHours.map((item) => Math.max(item.scheduledCount, item.actualCount)) ?? [1])), [data]);
   const summary = data?.summary;
 
@@ -145,11 +239,56 @@ export function AnalyticsDashboard({ locale, user }: { locale: Locale; user: Use
 
       <div className="analytics-grid">
         <section className="module-panel analytics-trend" aria-labelledby="revenue-trend-title">
-          <div className="panel-title"><div><h2 id="revenue-trend-title">{locale === "th" ? "รายได้ตามวันที่ให้บริการ" : "Revenue by service date"}</h2><small>{locale === "th" ? "ค่าบริการสุทธิ + ทิป" : "Net service revenue + tips"}</small></div></div>
-          {data.daily.length ? <div className="analytics-bars" role="img" aria-label={locale === "th" ? "กราฟรายได้รายวัน" : "Daily revenue chart"}>{data.daily.slice(-31).map((item) => {
-            const total = item.serviceRevenueSatang + item.tipSatang;
-            return <div className="analytics-bar-column" key={item.localDate} title={`${shortDate(item.localDate, locale)} • ${baht(total, locale)}`}><span className="analytics-bar-value">{baht(total, locale)}</span><div className="analytics-bar-track"><span style={{ height: `${Math.max(3, (total / maxDaily) * 100)}%` }} /></div><small>{shortDate(item.localDate, locale)}</small></div>;
-          })}</div> : <div className="module-state">{locale === "th" ? "ยังไม่มีบริการในช่วงนี้" : "No serviced bookings in this range"}</div>}
+          <div className="analytics-trend-header">
+            <div>
+              <h2 id="revenue-trend-title">{locale === "th" ? "รายได้ตามวันที่ให้บริการ" : "Revenue by service date"}</h2>
+              <small>{locale === "th"
+                ? revenueChart.length === completeDaily.length ? "แสดงรายวันตามวันที่ให้บริการ" : "รวมข้อมูลเป็นช่วงละ 7 วัน"
+                : revenueChart.length === completeDaily.length ? "Daily totals by service date" : "Grouped into 7-day periods"}</small>
+            </div>
+            <dl className="analytics-trend-summary">
+              <div><dt>{locale === "th" ? "รายได้รวม" : "Total revenue"}</dt><dd>{baht(chartTotal, locale)}</dd></div>
+              <div><dt>{locale === "th" ? "เฉลี่ยต่อวัน" : "Daily average"}</dt><dd>{baht(completeDaily.length ? chartTotal / completeDaily.length : 0, locale)}</dd></div>
+              <div><dt>{locale === "th" ? "วันที่สูงสุด" : "Peak day"}</dt><dd>{peakDay ? `${shortDate(peakDay.localDate, locale)} · ${baht(peakDay.serviceRevenueSatang + peakDay.tipSatang, locale)}` : "—"}</dd></div>
+            </dl>
+          </div>
+          {data.daily.length ? <>
+            <div className="analytics-revenue-chart">
+              <div className="analytics-y-axis" aria-hidden="true">{[4, 3, 2, 1, 0].map((part) => <span key={part}>{baht((chartMaximum * part) / 4, locale)}</span>)}</div>
+              <div className="analytics-plot">
+                <div className="analytics-average-line" style={{ bottom: `${48 + (chartAverage / chartMaximum) * 200}px` }} aria-hidden="true"><span>{locale === "th" ? "เฉลี่ย" : "Average"}</span></div>
+                <div
+                  className="analytics-bars"
+                  role="list"
+                  aria-label={locale === "th" ? "กราฟรายได้ แยกค่าบริการสุทธิและทิป" : "Revenue chart split by net service revenue and tips"}
+                  style={{ gridTemplateColumns: `repeat(${revenueChart.length}, minmax(26px, 1fr))`, minWidth: `${revenueChart.length * 32}px` }}
+                >
+                  {revenueChart.map((item, index) => {
+                    const total = item.serviceRevenueSatang + item.tipSatang;
+                    const dateText = chartDateLabel(item, locale);
+                    const showDate = index === 0 || index === revenueChart.length - 1 || index % dateLabelStep === 0;
+                    const showValue = index === peakChartIndex || index === revenueChart.length - 1;
+                    const accessibleLabel = locale === "th"
+                      ? `${dateText}: ค่าบริการสุทธิ ${baht(item.serviceRevenueSatang, locale)}, ทิป ${baht(item.tipSatang, locale)}, รวม ${baht(total, locale)}, ${item.bookingCount} รายการ`
+                      : `${dateText}: net service ${baht(item.serviceRevenueSatang, locale)}, tips ${baht(item.tipSatang, locale)}, total ${baht(total, locale)}, ${item.bookingCount} bookings`;
+                    return <div className={`analytics-bar-column${total === 0 ? " is-zero" : ""}`} key={item.key} role="listitem" tabIndex={0} aria-label={accessibleLabel}>
+                      <span className={`analytics-bar-value${showValue ? " is-visible" : ""}`}>{baht(total, locale)}</span>
+                      <div className="analytics-revenue-stack" aria-hidden="true">
+                        <span className={`analytics-tip-segment${item.tipSatang > 0 ? " has-value" : ""}`} style={{ height: `${(item.tipSatang / chartMaximum) * 100}%` }} />
+                        <span className={`analytics-service-segment${item.serviceRevenueSatang > 0 ? " has-value" : ""}`} style={{ height: `${(item.serviceRevenueSatang / chartMaximum) * 100}%` }} />
+                      </div>
+                      <small className={showDate ? "is-visible" : ""}>{dateText}</small>
+                      <span className="analytics-chart-tooltip" aria-hidden="true"><strong>{dateText}</strong><span>{locale === "th" ? "ค่าบริการสุทธิ" : "Net service"} {baht(item.serviceRevenueSatang, locale)}</span><span>{locale === "th" ? "ทิป" : "Tips"} {baht(item.tipSatang, locale)}</span><span>{locale === "th" ? "รวม" : "Total"} {baht(total, locale)}</span></span>
+                    </div>;
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="analytics-chart-footer">
+              <div className="analytics-legend"><span><i className="service" />{locale === "th" ? "ค่าบริการสุทธิ" : "Net service revenue"}</span><span><i className="tip" />{locale === "th" ? "ทิป" : "Tips"}</span><span><i className="average" />{locale === "th" ? revenueChart.length === completeDaily.length ? "เฉลี่ยต่อวัน" : "เฉลี่ยต่อช่วง 7 วัน" : revenueChart.length === completeDaily.length ? "Daily average" : "7-day period average"}</span></div>
+              <small>{locale === "th" ? "วางเมาส์หรือใช้ Tab เพื่อดูรายละเอียด" : "Hover or use Tab for exact values"}</small>
+            </div>
+          </> : <div className="module-state">{locale === "th" ? "ยังไม่มีบริการในช่วงนี้" : "No serviced bookings in this range"}</div>}
         </section>
 
         <section className="module-panel analytics-services" aria-labelledby="top-services-title">
