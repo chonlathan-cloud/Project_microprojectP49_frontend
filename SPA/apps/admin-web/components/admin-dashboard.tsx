@@ -9,6 +9,7 @@ import { AdminModulePage, type AdminView } from "@/components/admin-module-pages
 import { useAdminFeedback } from "@/components/admin-feedback";
 import { BookingSettlementDialog } from "@/components/booking-settlement-dialog";
 import { BookingDiscountControl, type BookingDiscountUpdate } from "@/components/booking-discount-control";
+import { StartServiceDialog } from "@/components/start-service-dialog";
 import { WalkInBookingDrawer } from "@/components/walk-in-booking-drawer";
 import { adminApi } from "@/lib/admin-api";
 import { countNotificationsRequiringAction } from "@/lib/notification-state";
@@ -191,6 +192,8 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   const [walkInOpen, setWalkInOpen] = useState(false);
   const [adminRole, setAdminRole] = useState<"ADMIN" | "STAFF" | null>(null);
   const [settlementBookingId, setSettlementBookingId] = useState("");
+  const [startServiceBookingId, setStartServiceBookingId] = useState("");
+  const [startServiceError, setStartServiceError] = useState("");
   const [bookingDetail, setBookingDetail] = useState<PreviewBooking | null>(null);
   const [detailLoadState, setDetailLoadState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [therapists, setTherapists] = useState<TherapistOption[]>([]);
@@ -479,6 +482,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
     document.body.style.overflow = "hidden";
     window.requestAnimationFrame(() => closeDetailButtonRef.current?.focus());
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (startServiceBookingId === selectedId) return;
       if (event.key === "Escape" && assignmentState !== "saving") {
         setSelectedId("");
         setHealthDetails(null);
@@ -505,9 +509,9 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
       document.body.style.overflow = previousOverflow;
       previousFocusRef.current?.focus();
     };
-  }, [selectedId, activeView, assignmentState, settlementBookingId]);
+  }, [selectedId, activeView, assignmentState, settlementBookingId, startServiceBookingId]);
 
-  async function transitionBooking(action: "confirm" | "cancel" | "start" | "no_show" | "complete") {
+  async function transitionBooking(action: "confirm" | "cancel" | "no_show" | "complete") {
     const booking = liveBookings.find((item) => item.bookingId === selectedId);
     if (!booking || actionState === "submitting") return;
 
@@ -568,6 +572,65 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
         title: locale === "th" ? "อัปเดตสถานะไม่สำเร็จ" : "Status update failed",
         message: caught instanceof Error ? caught.message : "Booking transition failed"
       });
+    } finally {
+      setActionState("idle");
+    }
+  }
+
+  async function startService(
+    discountAmountSatang?: number,
+    discountReason?: string,
+  ) {
+    const booking = liveBookings.find((item) => item.bookingId === startServiceBookingId);
+    if (!booking || booking.status !== "CONFIRMED" || actionState === "submitting") return;
+    setActionState("submitting");
+    setStartServiceError("");
+    try {
+      const payload = await adminApi<{
+        status?: BookingStatus;
+        version?: number;
+        subtotalAmountSatang?: number;
+        discountAmountSatang?: number;
+        discountReason?: string | null;
+        estimatedAmountSatang?: number;
+        tipAmountSatang?: number;
+        grossAmountSatang?: number;
+        detail?: string;
+      }>(user, `/bookings/${encodeURIComponent(booking.bookingId)}:start`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: null,
+          expectedVersion: booking.version,
+          commandId: crypto.randomUUID(),
+          ...(discountAmountSatang === undefined ? {} : {
+            discountAmountSatang,
+            discountReason: discountReason ?? "",
+          }),
+        }),
+      });
+      if (!payload.status) throw new Error(payload.detail ?? "Booking transition failed");
+      const update = (item: PreviewBooking): PreviewBooking => ({
+        ...item,
+        status: payload.status as BookingStatus,
+        version: payload.version ?? item.version + 1,
+        subtotalAmountSatang: payload.subtotalAmountSatang ?? item.subtotalAmountSatang,
+        discountAmountSatang: payload.discountAmountSatang ?? item.discountAmountSatang,
+        discountReason: payload.discountReason ?? undefined,
+        estimatedAmountSatang: payload.estimatedAmountSatang ?? item.estimatedAmountSatang,
+        tipAmountSatang: payload.tipAmountSatang ?? item.tipAmountSatang,
+        grossAmountSatang: payload.grossAmountSatang ?? item.grossAmountSatang,
+      });
+      setLiveBookings((items) => items.map((item) => item.bookingId === booking.bookingId ? update(item) : item));
+      setBookingDetail((current) => current?.bookingId === booking.bookingId ? update(current) : current);
+      setStartServiceBookingId("");
+      setBookingRefresh((value) => value + 1);
+      notify({
+        tone: "success",
+        title: locale === "th" ? "เริ่มให้บริการแล้ว" : "Service started",
+        message: `${booking.bookingId} • ${formatBaht(payload.estimatedAmountSatang ?? booking.estimatedAmountSatang ?? 0, locale)}`,
+      });
+    } catch (caught) {
+      setStartServiceError(caught instanceof Error ? caught.message : "Booking transition failed");
     } finally {
       setActionState("idle");
     }
@@ -950,13 +1013,27 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
             <p>{selected.status === "CONFIRMED" && !selected.therapistName ? (locale === "th" ? "มอบหมายหมอให้ครบก่อนเริ่มบริการ" : "Assign every guest before starting service") : ""}</p>
             <div className="drawer-actions">
               {selected.status === "PENDING" && <><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button></>}
-              {selected.status === "CONFIRMED" && <><button className="cancel-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="cancel-button" disabled={actionState === "submitting" || currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button><button className="confirm-button" disabled={!selected.therapistName || actionState === "submitting"} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button></>}
+              {selected.status === "CONFIRMED" && <><button className="cancel-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="cancel-button" disabled={actionState === "submitting" || currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button><button className="confirm-button" disabled={!selected.therapistName || !adminRole || actionState === "submitting"} onClick={() => { setStartServiceError(""); setStartServiceBookingId(selected.bookingId); }}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button></>}
               {selected.status === "IN_SERVICE" && <button className="confirm-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button>}
               {selected.status === "RECORDED" && <button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{locale === "th" ? "ยกเลิกรายการย้อนหลัง" : "Cancel historical record"}</button>}
             </div>
           </div>
         </div>
       </div>}
+      {selected && startServiceBookingId === selected.bookingId && adminRole && <StartServiceDialog
+        bookingId={selected.bookingId}
+        serviceName={formatServiceName(selected, locale)}
+        therapistName={selected.therapistName ?? "—"}
+        subtotalAmountSatang={selected.subtotalAmountSatang ?? ((selected.estimatedAmountSatang ?? 0) + (selected.discountAmountSatang ?? 0))}
+        discountAmountSatang={selected.discountAmountSatang ?? 0}
+        discountReason={selected.discountReason}
+        role={adminRole}
+        locale={locale}
+        submitting={actionState === "submitting"}
+        error={startServiceError}
+        onClose={() => { if (actionState !== "submitting") { setStartServiceBookingId(""); setStartServiceError(""); } }}
+        onConfirm={startService}
+      />}
       {walkInOpen && <WalkInBookingDrawer user={user} locale={locale} onClose={() => setWalkInOpen(false)} onCreated={(bookingId, status) => { setWalkInOpen(false); setBookingRefresh((value) => value + 1); setSelectedId(bookingId); if (status === "RECORDED" && adminRole === "ADMIN") setSettlementBookingId(bookingId); notify({ tone: "success", title: status === "RECORDED" ? (locale === "th" ? "บันทึกรายการย้อนหลังแล้ว" : "Historical record saved") : (locale === "th" ? "สร้างและยืนยัน Booking แล้ว" : "Booking created and confirmed"), message: bookingId }); }} />}
       {settlementBookingId && <BookingSettlementDialog bookingId={settlementBookingId} locale={locale} user={user} onClose={() => setSettlementBookingId("")} onSaved={() => setBookingRefresh((value) => value + 1)} />}
     </div>

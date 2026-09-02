@@ -332,6 +332,44 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .assignment-controls > button { min-height: 40px; padding: 0 12px; border: 1px solid var(--forest); border-radius: 8px; background: var(--forest); color: white; cursor: pointer; font-size: 12px; font-weight: 800; white-space: nowrap; }
 .assignment-warning { margin: 0 14px 14px; padding: 10px 12px; border: 1px solid #e7b958; border-radius: 8px; background: #fff7dc; color: #754500; font-size: 12px; font-weight: 700; }
 .modal-backdrop { padding: 20px; display: grid; place-items: center; position: fixed; z-index: 70; inset: 0; background: rgb(20 28 19 / 48%); }
+.start-service-backdrop { z-index: 85; background: rgb(20 28 19 / 62%); }
+.start-service-dialog { width: min(620px, 100%); max-height: calc(100dvh - 40px); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 28px 90px rgb(20 28 19 / 38%); }
+.start-service-header { padding: 18px 20px; align-items: center; }
+.start-service-header h2 { margin: 0; color: var(--text); font-size: 20px; }
+.start-service-header p:last-child { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.start-service-body { min-height: 0; padding: 18px 20px; overflow-y: auto; }
+.start-service-context { margin: 0 0 18px; display: grid; grid-template-columns: 1fr 1fr; border-block: 1px solid var(--line); }
+.start-service-context > div { min-width: 0; padding: 11px 12px; }
+.start-service-context > div + div { border-left: 1px solid var(--line); }
+.start-service-context dt { color: var(--muted); font-size: 10px; font-weight: 750; }
+.start-service-context dd { margin: 4px 0 0; overflow-wrap: anywhere; color: var(--text); font-size: 12px; font-weight: 800; }
+.start-service-financial { padding: 15px; border-left: 4px solid var(--gold); background: #fffaf0; }
+.start-service-section-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.start-service-section-heading h3 { margin: 0; color: var(--forest-dark); font-size: 16px; }
+.start-service-section-heading > span { padding: 4px 7px; border-radius: 999px; background: #e7ede3; color: var(--forest-dark); font-size: 9px; font-weight: 850; white-space: nowrap; }
+.start-service-price, .start-service-net { padding: 12px 0; display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.start-service-price { margin-top: 8px; border-bottom: 1px solid #ead9b9; }
+.start-service-net { margin-top: 13px; border-top: 1px solid #ead9b9; }
+.start-service-price span, .start-service-net span, .start-service-readonly-discount span { color: var(--muted); font-size: 11px; }
+.start-service-price strong, .start-service-net strong { color: var(--forest-dark); font-size: 18px; }
+.start-service-field { margin-top: 12px; display: grid; gap: 6px; color: var(--text); font-size: 11px; font-weight: 800; }
+.start-service-field > input, .start-service-money-input { width: 100%; min-height: 42px; border: 1px solid #aeb6aa; border-radius: 8px; background: white; }
+.start-service-field > input { padding: 0 11px; color: var(--text); font: inherit; }
+.start-service-field input[aria-invalid="true"], .start-service-money-input:has(input[aria-invalid="true"]) { border-color: #b42318; }
+.start-service-field small { color: var(--muted); font-size: 9px; font-weight: 600; line-height: 1.4; }
+.start-service-money-input { padding: 0 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.start-service-money-input input { width: 100%; min-width: 0; min-height: 40px; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; }
+.start-service-money-input span { color: var(--muted); font-size: 10px; }
+.start-service-readonly-discount { padding: 12px 0; display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; border-bottom: 1px solid #ead9b9; }
+.start-service-readonly-discount strong { color: #8a5800; font-size: 14px; }
+.start-service-readonly-discount small { grid-column: 1 / -1; color: var(--muted); font-size: 9px; }
+.start-service-policy, .start-service-validation { margin: 0; font-size: 10px; line-height: 1.5; }
+.start-service-policy { color: var(--muted); }
+.start-service-validation { margin-top: 8px; color: #9f1717; font-weight: 750; }
+.start-service-actions { padding: 14px 20px; display: flex; justify-content: flex-end; gap: 9px; border-top: 1px solid var(--line); background: white; }
+.start-service-actions button { min-height: 44px; padding: 0 16px; border: 1px solid #cfd4cc; border-radius: 8px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 12px; font-weight: 850; }
+.start-service-actions .confirm-button { min-width: 190px; border-color: var(--forest); background: var(--forest); color: white; }
+.start-service-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .registration-dialog { width: min(460px, 100%); overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: white; box-shadow: 0 24px 70px rgb(20 28 19 / 28%); }
 .registration-dialog .drawer-header { padding: 18px 20px; }
 .registration-dialog form { padding: 18px 20px 20px; }
@@ -931,6 +969,12 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .assignment-controls { grid-template-columns: 1fr; }
   .assignment-controls > button { width: 100%; }
   .modal-backdrop { padding: 12px; }
+  .start-service-dialog { max-height: calc(100dvh - 24px); }
+  .start-service-header, .start-service-body, .start-service-actions { padding-inline: 15px; }
+  .start-service-context { grid-template-columns: 1fr; }
+  .start-service-context > div + div { border-top: 1px solid var(--line); border-left: 0; }
+  .start-service-actions { display: grid; grid-template-columns: 1fr; }
+  .start-service-actions button { width: 100%; }
   .booking-detail-dialog { max-height: calc(100dvh - 24px); }
   .booking-detail-header, .booking-detail-primary, .booking-detail-operations, .booking-detail-footer { padding-inline: 15px; }
   .booking-detail-header { align-items: flex-start; }

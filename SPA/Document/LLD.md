@@ -847,7 +847,19 @@ The corresponding `bookings/{bookingDocId}` stores only the derived list index:
 
 Firestore applies branch/date/status equality filters and the descending index before pagination. Because Firestore does not provide case-insensitive substring search, `search` scans that ordered query in 100-document cursor batches and matches Booking ID, customer name, masked phone, or normalized E.164 phone until one page plus a look-ahead row is found. The API returns `items`, `nextPageToken`, `hasMore`, `pageSize`, and branch-wide aggregate counts for `PENDING` and confirmed/unassigned work. The Admin Web must not calculate those operational counts from the current page.
 
-### 6.14.2 Completed Booking discount contract
+### 6.14.2 Booking discount command contracts
+
+`POST /api/v1/admin/bookings/{bookingId}:start` is the primary discount decision point for an active Booking. Its existing `expectedVersion` and `commandId` fields are joined by optional `discountAmountSatang` and `discountReason`. Only `ADMIN` may supply those fields; `STAFF` starts service without them and preserves any existing discount as read-only data. A changed discount must be non-negative whole THB, below the immutable subtotal, and carry a non-empty audit reason. The command requires `CONFIRMED` plus complete distinct therapist assignment and atomically:
+
+1. validates the transition, role, Booking version, subtotal, amount, and reason;
+2. recalculates Booking net service and gross while preserving line-item snapshots and tip;
+3. appends `BOOKING_DISCOUNT_APPLIED`, `BOOKING_DISCOUNT_UPDATED`, or `BOOKING_DISCOUNT_REMOVED` only when financial fields changed;
+4. writes `status=IN_SERVICE`, `serviceStartedAt`, financial projections, and one incremented Booking version; and
+5. stores an idempotent command response plus the ordinary status audit/outbox event.
+
+Any failure commits neither the financial change nor the status transition.
+
+The following command remains a post-service correction path:
 
 `PUT /api/v1/admin/bookings/{bookingId}/discount` is an `ADMIN`-only financial command with body `discountAmountSatang`, `discountReason`, and Booking `expectedVersion`. The amount must be non-negative whole-THB satang, less than the immutable line-item subtotal, and every apply/update/remove command requires a non-empty audit reason. A zero amount removes the stored discount reason while retaining the submitted reason only in audit evidence.
 
@@ -1253,7 +1265,7 @@ transaction:
 
 ### 12.3 Start
 
-Require `CONFIRMED` and one active therapist assignment per participant. Transition to `IN_SERVICE`; reservations remain active.
+Require `CONFIRMED` and one active therapist assignment per participant. The Admin Web opens a focused review dialog containing therapist, immutable subtotal, optional ADMIN discount/reason, and net service. If the discount changes, validate and audit it in the same transaction that transitions to `IN_SERVICE`; reservations remain active. STAFF omits discount mutation fields and sees the amount read-only.
 
 ### 12.4 Complete or No-show
 

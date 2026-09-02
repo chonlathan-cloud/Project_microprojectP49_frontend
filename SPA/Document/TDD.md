@@ -276,7 +276,7 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | `PATCH` | `/api/v1/admin/bookings/{bookingId}` | `booking.update` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:confirm` | `booking.confirm` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:cancel` | `booking.cancel` |
-| `POST` | `/api/v1/admin/bookings/{bookingId}:start` | `booking.transition` |
+| `POST` | `/api/v1/admin/bookings/{bookingId}:start` | `booking.transition`; optional discount mutation requires `ADMIN` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:complete` | `booking.transition` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:no-show` | `booking.transition` |
 | `PUT` | `/api/v1/admin/bookings/{bookingId}/assignments` | `booking.update` |
@@ -474,6 +474,8 @@ The creation operation has a pre-transaction validation stage and one Firestore 
 
 For an existing customer Booking, `PUT /api/v1/admin/bookings/{bookingId}/discount` requires `ADMIN`, `expectedVersion`, a whole-THB amount below subtotal, and a non-empty audit reason. It accepts only `COMPLETED` plus Payment `DUE`, and rejects paid/review/correction-hold state or an active/unresolved Beam attempt. One Firestore transaction updates Booking net/gross/due/version, creates or replaces the unpaid Payment snapshot, appends `BOOKING_DISCOUNT_APPLIED|UPDATED|REMOVED`, and marks any existing Settlement `STALE` without changing therapist pay.
 
+The primary active-Booking discount command is `POST /api/v1/admin/bookings/{bookingId}:start`. The centered confirmation sends optional `discountAmountSatang` and `discountReason` only for an authenticated `ADMIN`; `STAFF` omits both fields and receives a read-only total. When the amount or reason changes, the same Firestore transaction validates the immutable subtotal, appends `BOOKING_DISCOUNT_APPLIED|UPDATED|REMOVED`, recalculates net/gross, and transitions `CONFIRMED → IN_SERVICE`. A failed validation, permission check, assignment gate, or version check commits neither change.
+
 ### 14.2 Transaction
 
 The transaction:
@@ -532,7 +534,7 @@ Reducing resource capacity or adding a block never auto-cancels an existing Book
 | --- | --- | --- | --- |
 | `PENDING` | Confirm | `CONFIRMED` | Admin Web permission or valid registered group approver |
 | `PENDING` | Cancel | `CANCELLED` | Reason required |
-| `CONFIRMED` | Start | `IN_SERVICE` | Every participant has a different active therapist assignment |
+| `CONFIRMED` | Start | `IN_SERVICE` | Every participant has a different active therapist assignment; optional discount mutation is `ADMIN`-only and atomic with Start |
 | `CONFIRMED` | Cancel | `CANCELLED` | Reason required |
 | `CONFIRMED` | No-show | `NO_SHOW` | Appointment has reached the operational no-show window |
 | `IN_SERVICE` | Complete | `COMPLETED` | Authorized Admin Web user |

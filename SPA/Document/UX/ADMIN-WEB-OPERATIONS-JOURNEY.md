@@ -40,7 +40,8 @@ Sign in
   → โทรหาลูกค้าหากต้องตรวจสอบเพิ่ม
   → Confirm หรือ Cancel พร้อมเหตุผล
   → มอบหมายหมอนวดก่อนเวลาให้บริการ
-  → Start service
+  → กด Start service และตรวจหมอนวด/ราคาปกติ/ส่วนลด/ยอดสุทธิใน Popup
+  → `ADMIN` บันทึกส่วนลดพร้อมเริ่มบริการ หรือ `STAFF` ยืนยันยอดแบบอ่านอย่างเดียว
   → Complete / No-show
 
 Notification delivery ทำงานขนาน:
@@ -62,8 +63,9 @@ Booking Queue / Calendar
   → `ADMIN`/`STAFF` ระบุทิปเงินบาทแบบไม่บังคับได้เฉพาะย้อนหลัง และเห็นยอดรับรวมก่อนบันทึก
   → Review วัน เวลา Capacity/ผลของโหมด ราคาปกติ ส่วนลด ยอดสุทธิ และคำเตือนไม่มีช่องทางติดต่อ
   → วันนี้/อนาคตสร้างเป็น CONFIRMED; ย้อนหลังสร้างเป็น RECORDED
-  → Active Booking เปิด Detail และมอบหมายหมอนวดก่อน Start; Historical record อยู่ใน History และยกเลิกพร้อมเหตุผลได้เมื่อบันทึกผิด
-  → เมื่อ Active Booking เป็น COMPLETED, `ADMIN` ตรวจราคาปกติ เพิ่ม/แก้/ยกเลิกส่วนลดพร้อมเหตุผล เห็นยอดสุทธิและทิป แล้วจึงยืนยันรับชำระ; หากมี Settlement เดิมต้องตรวจและบันทึกใหม่
+  → Active Booking เปิด Detail และมอบหมายหมอนวดก่อน Start; เมื่อกด Start ให้ Popup ตรวจหมอ ราคาปกติ ส่วนลด และยอดสุทธิ โดย `ADMIN` เปลี่ยนส่วนลดได้และระบบบันทึกพร้อม `IN_SERVICE` แบบ Atomic
+  → Historical record อยู่ใน History และยกเลิกพร้อมเหตุผลได้เมื่อบันทึกผิด
+  → เมื่อ Active Booking เป็น COMPLETED, `ADMIN` ยังแก้ส่วนลดที่ลืมหรือบันทึกผิดได้ก่อนยืนยันรับชำระเป็น Recovery path; หากมี Settlement เดิมต้องตรวจและบันทึกใหม่
 ```
 
 Centered modal ต้องมี `aria-modal`, focus trap, ปิดด้วย Escape, คืน focus ไปยังปุ่มเปิด, และรักษาข้อมูลที่กรอกเมื่อ API ตอบ validation/conflict. Header และ action footer ต้องคงมองเห็นได้เมื่อเนื้อหาภายใน scroll. เมื่อ Capacity เปลี่ยนระหว่างกรอก ให้คงข้อมูลลูกค้าไว้และบังคับเลือก Slot ใหม่.

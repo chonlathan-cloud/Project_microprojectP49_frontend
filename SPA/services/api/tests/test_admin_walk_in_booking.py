@@ -756,6 +756,152 @@ def test_historical_record_can_be_cancelled_without_capacity_or_notification(
     assert status_audit["reason"] == "บันทึกผิดรายการ"
 
 
+def test_admin_start_service_applies_discount_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    database.documents[("bookings", "booking-active-001")] = {
+        "publicBookingId": "BK-20260902-001",
+        "branchId": "branch_001",
+        "status": "CONFIRMED",
+        "version": 3,
+        "assignmentState": "ASSIGNED",
+        "customerListBucket": "UPCOMING",
+        "subtotalAmountSatang": 60_000,
+        "discountAmountSatang": 0,
+        "estimatedAmountSatang": 60_000,
+        "tipAmountSatang": 0,
+        "grossAmountSatang": 60_000,
+        "capacityReleased": False,
+    }
+    monkeypatch.setattr(booking_routes.firestore, "transactional", lambda function: function)
+    previous_auth, previous_firestore = _override_dependencies(database, role="ADMIN")
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260902-001:start",
+            json={
+                "expectedVersion": 3,
+                "commandId": "start-with-discount-001",
+                "discountAmountSatang": 5_000,
+                "discountReason": "คูปองสมัครครั้งแรก",
+            },
+        )
+        replay = client.post(
+            "/api/v1/admin/bookings/BK-20260902-001:start",
+            json={
+                "expectedVersion": 3,
+                "commandId": "start-with-discount-001",
+                "discountAmountSatang": 5_000,
+                "discountReason": "คูปองสมัครครั้งแรก",
+            },
+        )
+        conflicting_reuse = client.post(
+            "/api/v1/admin/bookings/BK-20260902-001:start",
+            json={
+                "expectedVersion": 3,
+                "commandId": "start-with-discount-001",
+                "discountAmountSatang": 4_000,
+                "discountReason": "โปรโมชั่นหน้าร้าน",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 200, response.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == response.json()
+    assert conflicting_reuse.status_code == 409
+    assert response.json() == {
+        "bookingId": "BK-20260902-001",
+        "status": "IN_SERVICE",
+        "version": 4,
+        "subtotalAmountSatang": 60_000,
+        "discountAmountSatang": 5_000,
+        "discountReason": "คูปองสมัครครั้งแรก",
+        "estimatedAmountSatang": 55_000,
+        "tipAmountSatang": 0,
+        "grossAmountSatang": 55_000,
+    }
+    booking = database.documents[("bookings", "booking-active-001")]
+    assert booking["status"] == "IN_SERVICE"
+    assert booking["serviceStartedAt"] is not None
+    assert booking["discountAmountSatang"] == 5_000
+    assert booking["estimatedAmountSatang"] == 55_000
+    assert booking["discountAppliedBy"] == "staff-001"
+    audits = [
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "audit_events"
+    ]
+    assert {item["eventType"] for item in audits} == {
+        "BOOKING_STATUS_CHANGED",
+        "BOOKING_DISCOUNT_APPLIED",
+    }
+
+
+def test_staff_start_service_preserves_existing_discount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    database.documents[("bookings", "booking-active-001")] = {
+        "publicBookingId": "BK-20260902-001",
+        "branchId": "branch_001",
+        "status": "CONFIRMED",
+        "version": 3,
+        "assignmentState": "ASSIGNED",
+        "customerListBucket": "UPCOMING",
+        "subtotalAmountSatang": 60_000,
+        "discountAmountSatang": 5_000,
+        "discountReason": "โปรโมชั่นหน้าร้าน",
+        "estimatedAmountSatang": 55_000,
+        "tipAmountSatang": 0,
+        "grossAmountSatang": 55_000,
+        "capacityReleased": False,
+    }
+    monkeypatch.setattr(booking_routes.firestore, "transactional", lambda function: function)
+    previous_auth, previous_firestore = _override_dependencies(database, role="STAFF")
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260902-001:start",
+            json={
+                "expectedVersion": 3,
+                "commandId": "staff-start-service-001",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["discountAmountSatang"] == 5_000
+    assert response.json()["estimatedAmountSatang"] == 55_000
+    discount_audits = [
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "audit_events"
+        and str(value.get("eventType", "")).startswith("BOOKING_DISCOUNT")
+    ]
+    assert discount_audits == []
+
+
+def test_staff_cannot_change_discount_when_starting_service() -> None:
+    previous_auth, previous_firestore = _override_dependencies(object(), role="STAFF")
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260902-001:start",
+            json={
+                "expectedVersion": 3,
+                "commandId": "staff-start-discount-001",
+                "discountAmountSatang": 5_000,
+                "discountReason": "โปรโมชั่นหน้าร้าน",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "PERMISSION_DENIED"
+
+
 def test_admin_historical_endpoint_maps_to_recorded_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

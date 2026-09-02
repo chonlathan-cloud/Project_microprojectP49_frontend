@@ -21,6 +21,7 @@ from app.core.errors import (
 )
 from app.core.settings import get_settings
 from app.core.types import BookingStatus
+from app.domains.bookings.pricing import validate_fixed_discount
 from app.domains.bookings.service import (
     _variant,
     create_booking,
@@ -96,6 +97,8 @@ class TransitionRequest(ApiModel):
     reason: str | None = Field(default=None, max_length=500)
     expected_version: int = Field(ge=1)
     command_id: str = Field(min_length=8, max_length=128)
+    discount_amount_satang: int | None = Field(default=None, ge=0)
+    discount_reason: str | None = Field(default=None, max_length=200)
 
 
 class StatusResolveRequest(ApiModel):
@@ -772,6 +775,32 @@ async def transition_admin_booking(
     actor: Annotated[dict[str, object], Depends(require_admin_user)],
     client: Annotated[firestore.Client, Depends(get_firestore_client)],
 ) -> dict[str, object]:
+    normalized_action = action.upper()
+    discount_fields_supplied = (
+        request.discount_amount_satang is not None or request.discount_reason is not None
+    )
+    if discount_fields_supplied and normalized_action != "START":
+        raise ValidationDomainError("Discount may only be supplied when service starts")
+    if (
+        normalized_action == "START"
+        and request.discount_amount_satang is None
+        and request.discount_reason is not None
+    ):
+        raise ValidationDomainError("Discount amount is required with a discount reason")
+    if request.discount_amount_satang is not None and actor.get("role") != "ADMIN":
+        raise PermissionDenied("Only ADMIN may change a booking discount")
+    command_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "bookingId": booking_id,
+                "action": normalized_action,
+                "request": request.model_dump(mode="json"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
     matches = list(
         client.collection("bookings").where("publicBookingId", "==", booking_id).limit(1).stream()
     )
@@ -789,9 +818,52 @@ async def transition_admin_booking(
         )
         command_snapshot = command_ref.get(transaction=tx)
         if command_snapshot.exists:
-            return str((command_snapshot.to_dict() or {}).get("status", data.get("status"))), int(
-                data.get("version", 1)
-            )
+            command = command_snapshot.to_dict() or {}
+            if (
+                command.get("bookingDocId") != booking_ref.id
+                or command.get("action") != normalized_action
+                or command.get("requestDigest") != command_digest
+            ):
+                raise ConflictDomainError(
+                    "Command ID was already used with different booking data"
+                )
+            return {
+                "status": str(command.get("status", data.get("status"))),
+                "version": int(command.get("version", data.get("version", 1))),
+                "subtotalAmountSatang": int(
+                    command.get(
+                        "subtotalAmountSatang",
+                        data.get(
+                            "subtotalAmountSatang",
+                            int(data.get("estimatedAmountSatang", 0))
+                            + int(data.get("discountAmountSatang", 0)),
+                        ),
+                    )
+                ),
+                "discountAmountSatang": int(
+                    command.get(
+                        "discountAmountSatang", data.get("discountAmountSatang", 0)
+                    )
+                ),
+                "discountReason": command.get(
+                    "discountReason", data.get("discountReason")
+                ),
+                "estimatedAmountSatang": int(
+                    command.get(
+                        "estimatedAmountSatang", data.get("estimatedAmountSatang", 0)
+                    )
+                ),
+                "tipAmountSatang": int(
+                    command.get("tipAmountSatang", data.get("tipAmountSatang", 0))
+                ),
+                "grossAmountSatang": int(
+                    command.get(
+                        "grossAmountSatang",
+                        int(data.get("estimatedAmountSatang", 0))
+                        + int(data.get("tipAmountSatang", 0)),
+                    )
+                ),
+            }
         if int(data.get("version", 1)) != request.expected_version:
             raise ConflictDomainError("Booking changed; reload before trying again")
         current = BookingStatus(str(data.get("status", "")))
@@ -802,11 +874,50 @@ async def transition_admin_booking(
         )
         target = BookingStateMachine.transition(
             current,
-            action,
+            normalized_action,
             cancellation_reason=request.reason,
             all_therapists_assigned=data.get("assignmentState") == "ASSIGNED",
             no_show_window_reached=no_show_reached,
         )
+        subtotal_amount_satang = int(
+            data.get(
+                "subtotalAmountSatang",
+                int(data.get("estimatedAmountSatang", 0))
+                + int(data.get("discountAmountSatang", 0)),
+            )
+        )
+        old_discount_amount_satang = int(data.get("discountAmountSatang", 0))
+        old_discount_reason = str(data.get("discountReason") or "") or None
+        discount_amount_satang = old_discount_amount_satang
+        discount_reason = old_discount_reason
+        discount_audit_reason: str | None = None
+        discount_changed = False
+        if target is BookingStatus.IN_SERVICE and request.discount_amount_satang is not None:
+            requested_reason = (request.discount_reason or "").strip()
+            discount_amount_satang = request.discount_amount_satang
+            reason_changed = bool(
+                discount_amount_satang > 0
+                and request.discount_reason is not None
+                and requested_reason != (old_discount_reason or "")
+            )
+            discount_changed = (
+                discount_amount_satang != old_discount_amount_satang or reason_changed
+            )
+            if discount_changed:
+                discount_audit_reason = validate_fixed_discount(
+                    subtotal_amount_satang=subtotal_amount_satang,
+                    discount_amount_satang=discount_amount_satang,
+                    reason=request.discount_reason,
+                )
+                discount_reason = (
+                    discount_audit_reason if discount_amount_satang > 0 else None
+                )
+            elif discount_amount_satang == 0 and requested_reason:
+                raise ValidationDomainError("Discount reason requires a discount amount")
+
+        estimated_amount_satang = subtotal_amount_satang - discount_amount_satang
+        tip_amount_satang = int(data.get("tipAmountSatang", 0))
+        gross_amount_satang = estimated_amount_satang + tip_amount_satang
         next_version = int(data.get("version", 1)) + 1
         update: dict[str, object] = {
             "status": target.value,
@@ -816,6 +927,23 @@ async def transition_admin_booking(
         }
         if target is BookingStatus.IN_SERVICE:
             update["serviceStartedAt"] = now
+            if discount_changed:
+                update.update(
+                    {
+                        "subtotalAmountSatang": subtotal_amount_satang,
+                        "discountAmountSatang": discount_amount_satang,
+                        "discountType": (
+                            "ADMIN_FIXED" if discount_amount_satang > 0 else None
+                        ),
+                        "discountReason": discount_reason,
+                        "discountAppliedBy": (
+                            actor["uid"] if discount_amount_satang > 0 else None
+                        ),
+                        "discountAppliedAt": now if discount_amount_satang > 0 else None,
+                        "estimatedAmountSatang": estimated_amount_satang,
+                        "grossAmountSatang": gross_amount_satang,
+                    }
+                )
         if target is BookingStatus.COMPLETED:
             update["serviceCompletedAt"] = now
         if target is BookingStatus.CANCELLED:
@@ -866,6 +994,42 @@ async def transition_admin_booking(
                 "createdAt": now,
             },
         )
+        if discount_changed:
+            discount_event_type = (
+                "BOOKING_DISCOUNT_APPLIED"
+                if old_discount_amount_satang == 0 and discount_amount_satang > 0
+                else "BOOKING_DISCOUNT_REMOVED"
+                if old_discount_amount_satang > 0 and discount_amount_satang == 0
+                else "BOOKING_DISCOUNT_UPDATED"
+            )
+            tx.set(
+                client.collection("audit_events").document(),
+                {
+                    "eventType": discount_event_type,
+                    "actorType": "ADMIN_USER",
+                    "actorId": actor["uid"],
+                    "actorRole": actor.get("role"),
+                    "branchId": data.get("branchId"),
+                    "bookingDocId": booking_ref.id,
+                    "publicBookingId": booking_id,
+                    "subtotalAmountSatang": subtotal_amount_satang,
+                    "oldDiscountAmountSatang": old_discount_amount_satang,
+                    "newDiscountAmountSatang": discount_amount_satang,
+                    "oldDiscountReason": old_discount_reason,
+                    "discountReason": discount_audit_reason,
+                    "oldServiceAmountSatang": int(
+                        data.get(
+                            "estimatedAmountSatang",
+                            subtotal_amount_satang - old_discount_amount_satang,
+                        )
+                    ),
+                    "newServiceAmountSatang": estimated_amount_satang,
+                    "bookingVersion": next_version,
+                    "commandId": request.command_id,
+                    "occurredAt": now,
+                    "createdAt": now,
+                },
+            )
         if current is not BookingStatus.RECORDED:
             event_ref = client.collection("notification_outbox").document()
             tx.set(
@@ -881,10 +1045,26 @@ async def transition_admin_booking(
                     "updatedAt": now,
                 },
             )
+        response = {
+            "status": target.value,
+            "version": next_version,
+            "subtotalAmountSatang": subtotal_amount_satang,
+            "discountAmountSatang": discount_amount_satang,
+            "discountReason": discount_reason,
+            "estimatedAmountSatang": estimated_amount_satang,
+            "tipAmountSatang": tip_amount_satang,
+            "grossAmountSatang": gross_amount_satang,
+        }
         tx.set(
-            command_ref, {"bookingDocId": booking_ref.id, "status": target.value, "createdAt": now}
+            command_ref,
+            {
+                "bookingDocId": booking_ref.id,
+                "action": normalized_action,
+                "requestDigest": command_digest,
+                **response,
+                "createdAt": now,
+            },
         )
-        return target.value, next_version
+        return response
 
-    new_status, version = write(transaction)
-    return {"bookingId": booking_id, "status": new_status, "version": version}
+    return {"bookingId": booking_id, **write(transaction)}
