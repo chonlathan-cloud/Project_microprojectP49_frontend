@@ -653,6 +653,66 @@ async def search_admin_booking_availability(
     )
 
 
+@router.get("/api/v1/admin/bookings/{booking_id}")
+async def get_admin_booking_detail(
+    booking_id: str,
+    _: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> dict[str, object]:
+    matches = list(
+        client.collection("bookings").where("publicBookingId", "==", booking_id).limit(1).stream()
+    )
+    if not matches:
+        raise NotFoundDomainError("Booking not found")
+    booking_snapshot = matches[0]
+    booking_data = booking_snapshot.to_dict() or {}
+    participant_snapshots = list(
+        client.collection("booking_participants")
+        .where("bookingDocId", "==", booking_snapshot.id)
+        .stream()
+    )
+    participant_snapshots.sort(key=lambda item: int((item.to_dict() or {}).get("sequence", 0)))
+    line_snapshots = list(
+        client.collection("booking_line_items")
+        .where("bookingDocId", "==", booking_snapshot.id)
+        .stream()
+    )
+    service_by_participant: dict[str, dict[str, object]] = {}
+    for line_snapshot in line_snapshots:
+        line = line_snapshot.to_dict() or {}
+        service = line.get("serviceSnapshot")
+        if not isinstance(service, dict):
+            continue
+        for participant_id in line.get("participantIds") or []:
+            service_by_participant[str(participant_id)] = service
+    assigned_ids = [str(item) for item in booking_data.get("therapistIds") or []]
+    participants = []
+    for index, participant_snapshot in enumerate(participant_snapshots):
+        participant = participant_snapshot.to_dict() or {}
+        assignment = participant.get("assignment")
+        assignment_data = assignment if isinstance(assignment, dict) else {}
+        therapist_id = assignment_data.get("therapistId")
+        if not therapist_id and index < len(assigned_ids):
+            therapist_id = assigned_ids[index]
+        service = service_by_participant.get(participant_snapshot.id, {})
+        participants.append(
+            {
+                "participantId": participant_snapshot.id,
+                "sequence": int(participant.get("sequence", index + 1)),
+                "nickname": participant.get("nickname") or f"Guest {index + 1}",
+                "serviceNameTh": service.get("nameTh")
+                or booking_data.get("serviceNameTh")
+                or booking_data.get("serviceName"),
+                "serviceNameEn": service.get("nameEn")
+                or booking_data.get("serviceNameEn")
+                or booking_data.get("serviceName"),
+                "durationMinutes": int(service.get("durationMinutes", 0)),
+                "therapistId": str(therapist_id) if therapist_id else None,
+            }
+        )
+    return {**serialize_booking(booking_snapshot), "participants": participants}
+
+
 @router.get("/api/v1/admin/bookings/{booking_id}/health")
 async def get_admin_booking_health(
     booking_id: str,

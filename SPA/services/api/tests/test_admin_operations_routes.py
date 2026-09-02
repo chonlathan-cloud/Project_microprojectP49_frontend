@@ -490,3 +490,28 @@ def test_staff_assignment_updates_booking_projection() -> None:
     assert database.booking["therapistName"] == "คุณนิด, คุณอ้อย"
     assert database.booking["version"] == 5
     assert database.audits[-1]["eventType"] == "THERAPISTS_ASSIGNED"
+
+
+def test_assignment_rejects_same_therapist_for_two_participants() -> None:
+    database = AssignmentFirestore()
+    previous_auth = app.dependency_overrides.get(require_admin_user)
+    previous_firestore = app.dependency_overrides.get(get_firestore_client)
+    app.dependency_overrides[require_admin_user] = lambda: {
+        "uid": "staff-001",
+        "role": "STAFF",
+    }
+    app.dependency_overrides[get_firestore_client] = lambda: database
+    try:
+        response = client.put(
+            "/api/v1/admin/bookings/BK-001/assignments",
+            json={
+                "therapistIds": ["therapist_1", "therapist_1"],
+                "expectedVersion": 4,
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 422
+    assert "different therapist" in response.json()["detail"]
+    assert database.booking["version"] == 4

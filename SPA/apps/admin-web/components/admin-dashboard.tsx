@@ -46,6 +46,7 @@ function accountInitials(displayName: string): string {
 const navItems = [
   ["bookings", "▦", "รายการจอง", "Bookings"],
   ["dashboard", "▥", "Dashboard", "Dashboard"],
+  ["insight", "◩", "Insight", "Insight"],
   ["calendar", "◫", "ปฏิทิน", "Calendar"],
   ["capacity", "⌁", "สล็อตและความจุ", "Capacity"],
   ["services", "◇", "บริการและราคา", "Services"],
@@ -100,6 +101,12 @@ type AdminPaymentOptions = {
   tipPresetsSatang: number[];
   customTipMaxSatang: number | null;
   version: number;
+};
+
+type TherapistOption = {
+  therapistId: string;
+  displayName: string;
+  active: boolean;
 };
 
 type AdminBookingListResponse = {
@@ -182,8 +189,14 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   const [walkInOpen, setWalkInOpen] = useState(false);
   const [adminRole, setAdminRole] = useState<"ADMIN" | "STAFF" | null>(null);
   const [settlementBookingId, setSettlementBookingId] = useState("");
-  const detailDrawerRef = useRef<HTMLElement>(null);
-  const closeDrawerButtonRef = useRef<HTMLButtonElement>(null);
+  const [bookingDetail, setBookingDetail] = useState<PreviewBooking | null>(null);
+  const [detailLoadState, setDetailLoadState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [therapists, setTherapists] = useState<TherapistOption[]>([]);
+  const [assignmentDraft, setAssignmentDraft] = useState<string[]>([]);
+  const [assignmentState, setAssignmentState] = useState<"idle" | "saving" | "error">("idle");
+  const [assignmentError, setAssignmentError] = useState("");
+  const detailDialogRef = useRef<HTMLDivElement>(null);
+  const closeDetailButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const mobileMenuButtonRef = useRef<HTMLButtonElement>(null);
   const mobileSidebarCloseRef = useRef<HTMLButtonElement>(null);
@@ -418,17 +431,59 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   }, [user, bookingRefresh]);
 
   useEffect(() => {
+    if (!selectedId || !["bookings", "calendar"].includes(activeView)) {
+      queueMicrotask(() => {
+        setBookingDetail(null);
+        setDetailLoadState("idle");
+        setAssignmentDraft([]);
+        setAssignmentError("");
+      });
+      return;
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setDetailLoadState("loading");
+      setAssignmentState("idle");
+      setAssignmentError("");
+    });
+    Promise.all([
+      adminApi<PreviewBooking>(user, `/bookings/${encodeURIComponent(selectedId)}`),
+      adminApi<{ items: TherapistOption[] }>(user, "/therapists"),
+    ]).then(([detail, roster]) => {
+      if (!active) return;
+      setBookingDetail(detail);
+      setTherapists(roster.items.filter((item) => item.active));
+      const participantAssignments = (detail.participants ?? []).map((item) => item.therapistId ?? "");
+      setAssignmentDraft(
+        participantAssignments.length === detail.pax
+          ? participantAssignments
+          : Array.from({ length: detail.pax }, (_, index) => detail.therapistIds?.[index] ?? ""),
+      );
+      setDetailLoadState("ready");
+    }).catch((caught) => {
+      if (!active) return;
+      setDetailLoadState("error");
+      setAssignmentError(caught instanceof Error ? caught.message : "Booking detail unavailable");
+    });
+    return () => { active = false; };
+  }, [activeView, bookingRefresh, selectedId, user]);
+
+  useEffect(() => {
     if (!selectedId || !["bookings", "calendar"].includes(activeView)) return;
+    if (settlementBookingId) return;
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    closeDrawerButtonRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.requestAnimationFrame(() => closeDetailButtonRef.current?.focus());
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && assignmentState !== "saving") {
         setSelectedId("");
         setHealthDetails(null);
         return;
       }
-      if (event.key !== "Tab" || !detailDrawerRef.current) return;
-      const focusable = Array.from(detailDrawerRef.current.querySelectorAll<HTMLElement>(
+      if (event.key !== "Tab" || !detailDialogRef.current) return;
+      const focusable = Array.from(detailDialogRef.current.querySelectorAll<HTMLElement>(
         'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]'
       ));
       if (!focusable.length) return;
@@ -445,9 +500,10 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
       previousFocusRef.current?.focus();
     };
-  }, [selectedId, activeView]);
+  }, [selectedId, activeView, assignmentState, settlementBookingId]);
 
   async function transitionBooking(action: "confirm" | "cancel" | "start" | "no_show" | "complete") {
     const booking = liveBookings.find((item) => item.bookingId === selectedId);
@@ -516,6 +572,57 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
     }
   }
 
+  async function saveTherapistAssignment() {
+    if (!selected || assignmentState === "saving") return;
+    const complete = assignmentDraft.length === selected.pax && assignmentDraft.every(Boolean);
+    const unique = new Set(assignmentDraft).size === assignmentDraft.length;
+    if (!complete || !unique) return;
+    setAssignmentState("saving");
+    setAssignmentError("");
+    try {
+      const payload = await adminApi<{
+        therapistIds: string[];
+        therapistName: string;
+        version: number;
+      }>(user, `/bookings/${encodeURIComponent(selected.bookingId)}/assignments`, {
+        method: "PUT",
+        body: JSON.stringify({
+          therapistIds: assignmentDraft,
+          expectedVersion: selected.version,
+        }),
+      });
+      setLiveBookings((items) => items.map((item) => item.bookingId === selected.bookingId
+        ? {
+            ...item,
+            therapistIds: payload.therapistIds,
+            therapistName: payload.therapistName,
+            version: payload.version,
+          }
+        : item));
+      setBookingDetail((current) => current?.bookingId === selected.bookingId
+        ? {
+            ...current,
+            therapistIds: payload.therapistIds,
+            therapistName: payload.therapistName,
+            version: payload.version,
+            participants: current.participants?.map((participant, index) => ({
+              ...participant,
+              therapistId: payload.therapistIds[index],
+            })),
+          }
+        : current);
+      setAssignmentState("idle");
+      notify({
+        tone: "success",
+        title: locale === "th" ? "บันทึกการมอบหมายหมอแล้ว" : "Therapists assigned",
+        message: `${selected.bookingId} • ${payload.therapistName}`,
+      });
+    } catch (caught) {
+      setAssignmentState("error");
+      setAssignmentError(caught instanceof Error ? caught.message : "Therapist assignment failed");
+    }
+  }
+
   async function revealHealthDetails() {
     if (!selected || !selected.healthAlert) return;
     try {
@@ -576,6 +683,19 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   const bookings = liveBookings;
   const filtered = bookings;
   const selected = bookings.find((booking) => booking.bookingId === selectedId);
+  const detailParticipants = bookingDetail?.bookingId === selectedId
+    ? bookingDetail.participants ?? []
+    : [];
+  const assignmentComplete = Boolean(
+    selected
+    && assignmentDraft.length === selected.pax
+    && assignmentDraft.every(Boolean)
+    && new Set(assignmentDraft).size === assignmentDraft.length
+  );
+  const savedAssignments = detailParticipants.map((item) => item.therapistId ?? "");
+  const assignmentChanged = assignmentDraft.some(
+    (therapistId, index) => therapistId !== (savedAssignments[index] ?? ""),
+  );
   const pending = bookingSummary.pending;
   const unassigned = bookingSummary.unassigned;
 
@@ -653,8 +773,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
   const accountName = user.displayName?.trim() || user.email?.split("@")[0] || (locale === "th" ? "ผู้ดูแลระบบ" : "Administrator");
   const accountEmail = user.email ?? (locale === "th" ? "บัญชี Google" : "Google account");
   const profilePhoto = googleProfilePhoto(user.photoURL);
-  const detailDrawerOpen = Boolean(selected && ["bookings", "calendar"].includes(activeView));
-  const layoutClassName = `admin-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}${detailDrawerOpen ? " drawer-open" : ""}`;
+  const layoutClassName = `admin-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}`;
 
   return (
     <div className={layoutClassName}>
@@ -670,7 +789,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
         </div>
         <div className="branch-chip" title={text.branch}><span className="live-dot" />{text.branch}</div>
         <nav aria-label={locale === "th" ? "เมนูหลัก" : "Main navigation"}>
-          {navItems.filter(([id]) => id !== "dashboard" || adminRole === "ADMIN").map(([id, icon, th, en]) => {
+          {navItems.filter(([id]) => !["dashboard", "insight"].includes(id) || adminRole === "ADMIN").map(([id, icon, th, en]) => {
             const label = locale === "th" ? th : en;
             const isNotifications = id === "notifications";
             const ariaLabel = isNotifications && notificationFailures > 0
@@ -740,43 +859,55 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
         </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} notificationFilter={notificationFilter} onNotificationFilterChange={setNotificationFilter} onNotificationCountChange={setNotificationFailures} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} onSelectBooking={(bookingId) => { setSelectedId(bookingId); setHealthDetails(null); }} onOpenWalkIn={() => { setSelectedId(""); setWalkInOpen(true); }} />}
       </div>
 
-      {selected && <aside ref={detailDrawerRef} className="detail-drawer" role="dialog" aria-modal="true" aria-labelledby="detail-title">
-        <div className="drawer-header"><div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2></div><button ref={closeDrawerButtonRef} aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div>
-        <div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked || (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</p>{selected.source === "ADMIN_WEB" && <span className="walk-in-source">{adminEntryLabel(selected, locale)}</span>}</div></div>
-        {selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดจะแสดงเฉพาะผู้ดูแลที่มีสิทธิ์" : "Details are restricted to authorized operators"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}
-        <dl>
-          <div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div>
-          <div><dt>{text.service}</dt><dd>{formatServiceName(selected, locale)}</dd></div>
-          {selected.adminEntryMode === "HISTORICAL_RECORD" ? <><div><dt>{locale === "th" ? "ราคาปกติ" : "Regular price"}</dt><dd>{formatBaht(selected.subtotalAmountSatang ?? 0, locale)}</dd></div>{!!selected.discountAmountSatang && <div><dt>{locale === "th" ? "ส่วนลด" : "Discount"}</dt><dd>−{formatBaht(selected.discountAmountSatang, locale)}<small>{selected.discountReason}</small></dd></div>}<div><dt>{locale === "th" ? "ค่าบริการสุทธิ" : "Net service amount"}</dt><dd>{formatBaht(selected.estimatedAmountSatang ?? 0, locale)}</dd></div><div><dt>{locale === "th" ? "ทิป" : "Tip"}</dt><dd>{formatBaht(selected.tipAmountSatang ?? 0, locale)}</dd></div><div><dt>{locale === "th" ? "ยอดรับรวม" : "Gross recorded total"}</dt><dd><strong>{formatBaht(selected.grossAmountSatang ?? ((selected.estimatedAmountSatang ?? 0) + (selected.tipAmountSatang ?? 0)), locale)}</strong></dd></div></> : !!selected.discountAmountSatang && <><div><dt>{locale === "th" ? "ราคาปกติ" : "Regular price"}</dt><dd>{formatBaht(selected.subtotalAmountSatang ?? 0, locale)}</dd></div><div><dt>{locale === "th" ? "ส่วนลด" : "Discount"}</dt><dd>−{formatBaht(selected.discountAmountSatang, locale)}<small>{selected.discountReason}</small></dd></div><div><dt>{locale === "th" ? "ยอดสุทธิ" : "Net total"}</dt><dd>{formatBaht(selected.estimatedAmountSatang ?? 0, locale)}</dd></div></>}
-          <div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div>
-          <div><dt>{text.therapist}</dt><dd>{selected.adminEntryMode === "HISTORICAL_RECORD" ? <span className="not-applicable">{locale === "th" ? "ไม่เกี่ยวข้อง" : "Not applicable"}</span> : selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div>
-          <div><dt>{text.status}</dt><dd><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span></dd></div>
-          {selected.status === "COMPLETED" && <div><dt>{locale === "th" ? "การชำระเงิน" : "Payment"}</dt><dd>{paymentOptions?.status === "PAID" ? (locale === "th" ? "ชำระแล้ว" : "Paid") : (locale === "th" ? "รอชำระ" : "Payment due")}</dd></div>}
-        </dl>
-        {selected.status === "COMPLETED" && <section className="admin-cash-panel" aria-label={locale === "th" ? "บันทึกรับเงินสด" : "Record cash payment"}>
-          <div><p className="eyebrow">PAYMENT</p><h3>{locale === "th" ? "รับเงินสด" : "Cash receipt"}</h3></div>
-          {paymentLoadState === "loading" && <p role="status">{locale === "th" ? "กำลังโหลดข้อมูลชำระเงิน…" : "Loading payment details…"}</p>}
-          {paymentOptions && <>
-            <div className="admin-payment-amount"><span>{locale === "th" ? "ค่าบริการ รวม VAT" : "Service, VAT included"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang, locale)}</strong></div>
-            {paymentOptions.status !== "PAID" && <fieldset disabled={!paymentOptions.eligible || paymentLoadState === "saving"}>
-              <legend>{locale === "th" ? "ทิปเพิ่มเติม" : "Add tip"}</legend>
-              <div className="admin-tip-options">
-                {paymentOptions.tipPresetsSatang.map((tip) => <button type="button" key={tip} aria-pressed={cashTipSatang === tip} onClick={() => setCashTipSatang(tip)}>{tip === 0 ? (locale === "th" ? "ไม่มีทิป" : "No tip") : formatBaht(tip, locale)}</button>)}
-                {paymentOptions.customTipMaxSatang !== null && <label><span>{locale === "th" ? "กรอกเอง" : "Custom"}</span><input type="number" min="0" max={paymentOptions.customTipMaxSatang / 100} step="1" inputMode="decimal" onChange={(event) => setCashTipSatang(Math.round(Math.max(0, Number(event.target.value)) * 100))} /></label>}
-              </div>
-            </fieldset>}
-            <div className="admin-payment-total"><span>{locale === "th" ? "ยอดรับเงินสด" : "Cash total"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang + cashTipSatang, locale)}</strong></div>
-            {paymentOptions.status === "PAID" ? <p className="admin-payment-success">✓ {paymentOptions.source === "CASH" ? (locale === "th" ? "รับเงินสดแล้ว • รอนำเข้าบัญชี" : "Cash received • awaiting deposit") : (locale === "th" ? "ชำระผ่าน Beam แล้ว" : "Paid via Beam")}</p> : <button className="confirm-button admin-record-cash" disabled={!paymentOptions.eligible || paymentLoadState === "saving"} onClick={() => { void recordCashPayment(); }}>{paymentLoadState === "saving" ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "ยืนยันรับเงินสด" : "Record cash")}</button>}
-            {!paymentOptions.eligible && paymentOptions.status !== "PAID" && <p className="api-gate">{paymentOptions.reason}</p>}
-          </>}
-        </section>}
-        {adminRole === "ADMIN" && ["COMPLETED", "RECORDED"].includes(selected.status) && <section className="booking-settlement-entry" aria-label={locale === "th" ? "สรุปรายได้และค่าหมอ" : "Service settlement"}><div><p className="eyebrow">SERVICE SETTLEMENT</p><h3>{locale === "th" ? "ค่าหมอ ทิป และส่วนร้าน" : "Therapist pay, tips & shop share"}</h3><p>{locale === "th" ? "ส่วนลดไม่ลดค่าหมอ และแก้ไขได้โดยมี Audit Trail" : "Promotions do not reduce therapist pay; revisions remain audited."}</p></div><button type="button" className="primary-compact-button" onClick={() => setSettlementBookingId(selected.bookingId)}>{locale === "th" ? "เปิดสรุปรายได้" : "Open settlement"}</button></section>}
-        {selected.status === "PENDING" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button></div>}
-        {selected.status === "CONFIRMED" && <div className="drawer-actions"><button className="confirm-button" disabled={!selected.therapistName || actionState === "submitting"} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button><button className="cancel-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="cancel-button" disabled={actionState === "submitting" || currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button></div>}
-        {selected.status === "IN_SERVICE" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button></div>}
-        {selected.status === "RECORDED" && <div className="drawer-actions"><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{locale === "th" ? "ยกเลิกรายการย้อนหลัง" : "Cancel historical record"}</button></div>}
-        {selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}
-      </aside>}
+      {selected && !settlementBookingId && <div className="modal-backdrop booking-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && assignmentState !== "saving") { setSelectedId(""); setHealthDetails(null); } }}>
+        <div ref={detailDialogRef} className="booking-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="detail-title" aria-describedby="detail-description">
+          <div className="drawer-header booking-detail-header">
+            <div><p className="eyebrow">{selected.bookingId}</p><h2 id="detail-title">{text.detail}</h2><p id="detail-description">{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</p></div>
+            <div className="booking-detail-header-actions"><span className={`status status-${selected.status.toLowerCase()}`}>{statusLabel[selected.status][locale]}</span><button ref={closeDetailButtonRef} type="button" disabled={assignmentState === "saving"} aria-label={locale === "th" ? "ปิดรายละเอียด" : "Close detail"} onClick={() => { setSelectedId(""); setHealthDetails(null); }}>×</button></div>
+          </div>
+          <div className="booking-detail-content">
+            <section className="booking-detail-primary" aria-label={locale === "th" ? "ข้อมูลการจอง" : "Booking information"}>
+              <div className="drawer-customer"><div className="customer-avatar">{selected.customerName.slice(-1)}</div><div><strong>{selected.customerName}</strong><p>{selected.customerPhoneMasked || (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</p>{selected.source === "ADMIN_WEB" && <span className="walk-in-source">{adminEntryLabel(selected, locale)}</span>}</div></div>
+              {selected.healthAlert && <div className="drawer-health" role="alert">⚠ {text.health}<small>{locale === "th" ? "รายละเอียดจะแสดงเฉพาะผู้ดูแลที่มีสิทธิ์" : "Details are restricted to authorized operators"}</small><button type="button" onClick={revealHealthDetails}>{locale === "th" ? "เปิดดูข้อมูลสุขภาพ" : "Reveal health information"}</button>{healthDetails?.map((item, index) => <p key={index}><strong>{item.nickname}</strong>: {item.details}</p>)}</div>}
+              <dl className="booking-detail-summary">
+                <div><dt>{text.time}</dt><dd>{formatDate(selected.startLocal, locale)} • {formatTime(selected.startLocal)}</dd></div>
+                <div><dt>{text.service}</dt><dd>{formatServiceName(selected, locale)}</dd></div>
+                {selected.adminEntryMode === "HISTORICAL_RECORD" ? <><div><dt>{locale === "th" ? "ราคาปกติ" : "Regular price"}</dt><dd>{formatBaht(selected.subtotalAmountSatang ?? 0, locale)}</dd></div>{!!selected.discountAmountSatang && <div><dt>{locale === "th" ? "ส่วนลด" : "Discount"}</dt><dd>−{formatBaht(selected.discountAmountSatang, locale)}<small>{selected.discountReason}</small></dd></div>}<div><dt>{locale === "th" ? "ค่าบริการสุทธิ" : "Net service amount"}</dt><dd>{formatBaht(selected.estimatedAmountSatang ?? 0, locale)}</dd></div><div><dt>{locale === "th" ? "ทิป" : "Tip"}</dt><dd>{formatBaht(selected.tipAmountSatang ?? 0, locale)}</dd></div><div><dt>{locale === "th" ? "ยอดรับรวม" : "Gross recorded total"}</dt><dd><strong>{formatBaht(selected.grossAmountSatang ?? ((selected.estimatedAmountSatang ?? 0) + (selected.tipAmountSatang ?? 0)), locale)}</strong></dd></div></> : !!selected.discountAmountSatang && <><div><dt>{locale === "th" ? "ราคาปกติ" : "Regular price"}</dt><dd>{formatBaht(selected.subtotalAmountSatang ?? 0, locale)}</dd></div><div><dt>{locale === "th" ? "ส่วนลด" : "Discount"}</dt><dd>−{formatBaht(selected.discountAmountSatang, locale)}<small>{selected.discountReason}</small></dd></div><div><dt>{locale === "th" ? "ยอดสุทธิ" : "Net total"}</dt><dd>{formatBaht(selected.estimatedAmountSatang ?? 0, locale)}</dd></div></>}
+                <div><dt>{text.pax}</dt><dd>{selected.pax}</dd></div>
+                <div><dt>{text.therapist}</dt><dd>{selected.adminEntryMode === "HISTORICAL_RECORD" ? <span className="not-applicable">{locale === "th" ? "ระบุในสรุปรายได้" : "Set in settlement"}</span> : selected.therapistName ?? <span className="unassigned">{locale === "th" ? "ยังไม่มอบหมาย" : "Unassigned"}</span>}</dd></div>
+                {selected.status === "COMPLETED" && <div><dt>{locale === "th" ? "การชำระเงิน" : "Payment"}</dt><dd>{paymentOptions?.status === "PAID" ? (locale === "th" ? "ชำระแล้ว" : "Paid") : (locale === "th" ? "รอชำระ" : "Payment due")}</dd></div>}
+              </dl>
+            </section>
+            <aside className="booking-detail-operations" aria-label={locale === "th" ? "การดำเนินการ" : "Booking actions"}>
+              {detailLoadState === "loading" && <div className="module-state" role="status">{locale === "th" ? "กำลังโหลดข้อมูลผู้รับบริการ…" : "Loading guest details…"}</div>}
+              {detailLoadState === "error" && <div className="drawer-feedback error" role="alert">{assignmentError}</div>}
+              {selected.status === "CONFIRMED" && <section className="booking-assignment" aria-labelledby="booking-assignment-title">
+                <div className="booking-operation-heading"><div><p className="eyebrow">THERAPIST ASSIGNMENT</p><h3 id="booking-assignment-title">{locale === "th" ? "มอบหมายหมอ" : "Assign therapists"}</h3></div><span>{selected.pax} {locale === "th" ? "ผู้รับบริการ" : "guests"}</span></div>
+                <div className="booking-assignment-list">{detailParticipants.map((participant, index) => <label key={participant.participantId}><span><strong>{participant.nickname}</strong><small>{locale === "th" ? participant.serviceNameTh : participant.serviceNameEn}{participant.durationMinutes ? ` • ${participant.durationMinutes} ${locale === "th" ? "นาที" : "min"}` : ""}</small></span><select value={assignmentDraft[index] ?? ""} disabled={assignmentState === "saving"} onChange={(event) => setAssignmentDraft((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}><option value="">— {locale === "th" ? "เลือกหมอ" : "Select therapist"} —</option>{therapists.map((therapist) => <option value={therapist.therapistId} disabled={assignmentDraft.some((value, itemIndex) => itemIndex !== index && value === therapist.therapistId)} key={therapist.therapistId}>{therapist.displayName}</option>)}</select></label>)}</div>
+                {!therapists.length && detailLoadState === "ready" && <p className="assignment-inline-warning" role="alert">{locale === "th" ? "ยังไม่มีหมอที่เปิดใช้งาน กรุณาเพิ่มในหน้าหมอนวด" : "No active therapists. Add one from the Therapists page."}</p>}
+                {assignmentError && detailLoadState !== "error" && <p className="assignment-inline-warning" role="alert">{assignmentError}</p>}
+                <button type="button" className="primary-compact-button assignment-save" disabled={!assignmentComplete || !assignmentChanged || assignmentState === "saving"} onClick={() => { void saveTherapistAssignment(); }}>{assignmentState === "saving" ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : assignmentChanged ? (locale === "th" ? "บันทึกการมอบหมาย" : "Save assignment") : (locale === "th" ? "มอบหมายแล้ว" : "Assigned")}</button>
+              </section>}
+              {selected.adminEntryMode === "HISTORICAL_RECORD" && <div className="historical-assignment-note"><strong>{locale === "th" ? "ผู้ให้บริการย้อนหลัง" : "Historical therapist"}</strong><p>{locale === "th" ? "ระบุหมอ ค่าหมอ และส่วนแบ่งทิปในสรุปรายได้ เพื่อให้ข้อมูลเข้า Insight อย่างถูกต้อง" : "Set therapist, pay, and tip share in settlement so Insight remains accurate."}</p></div>}
+              {selected.status === "COMPLETED" && <section className="admin-cash-panel" aria-label={locale === "th" ? "บันทึกรับเงินสด" : "Record cash payment"}>
+                <div><p className="eyebrow">PAYMENT</p><h3>{locale === "th" ? "รับเงินสด" : "Cash receipt"}</h3></div>
+                {paymentLoadState === "loading" && <p role="status">{locale === "th" ? "กำลังโหลดข้อมูลชำระเงิน…" : "Loading payment details…"}</p>}
+                {paymentOptions && <><div className="admin-payment-amount"><span>{locale === "th" ? "ค่าบริการ รวม VAT" : "Service, VAT included"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang, locale)}</strong></div>{paymentOptions.status !== "PAID" && <fieldset disabled={!paymentOptions.eligible || paymentLoadState === "saving"}><legend>{locale === "th" ? "ทิปเพิ่มเติม" : "Add tip"}</legend><div className="admin-tip-options">{paymentOptions.tipPresetsSatang.map((tip) => <button type="button" key={tip} aria-pressed={cashTipSatang === tip} onClick={() => setCashTipSatang(tip)}>{tip === 0 ? (locale === "th" ? "ไม่มีทิป" : "No tip") : formatBaht(tip, locale)}</button>)}{paymentOptions.customTipMaxSatang !== null && <label><span>{locale === "th" ? "กรอกเอง" : "Custom"}</span><input type="number" min="0" max={paymentOptions.customTipMaxSatang / 100} step="1" inputMode="decimal" onChange={(event) => setCashTipSatang(Math.round(Math.max(0, Number(event.target.value)) * 100))} /></label>}</div></fieldset>}<div className="admin-payment-total"><span>{locale === "th" ? "ยอดรับเงินสด" : "Cash total"}</span><strong>{formatBaht(paymentOptions.serviceAmountSatang + cashTipSatang, locale)}</strong></div>{paymentOptions.status === "PAID" ? <p className="admin-payment-success">✓ {paymentOptions.source === "CASH" ? (locale === "th" ? "รับเงินสดแล้ว • รอนำเข้าบัญชี" : "Cash received • awaiting deposit") : (locale === "th" ? "ชำระผ่าน Beam แล้ว" : "Paid via Beam")}</p> : <button className="confirm-button admin-record-cash" disabled={!paymentOptions.eligible || paymentLoadState === "saving"} onClick={() => { void recordCashPayment(); }}>{paymentLoadState === "saving" ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "ยืนยันรับเงินสด" : "Record cash")}</button>}{!paymentOptions.eligible && paymentOptions.status !== "PAID" && <p className="api-gate">{paymentOptions.reason}</p>}</>}
+              </section>}
+              {adminRole === "ADMIN" && ["COMPLETED", "RECORDED"].includes(selected.status) && <section className="booking-settlement-entry" aria-label={locale === "th" ? "สรุปรายได้และค่าหมอ" : "Service settlement"}><div><p className="eyebrow">SERVICE SETTLEMENT</p><h3>{locale === "th" ? "ค่าหมอ ทิป และส่วนร้าน" : "Therapist pay, tips & shop share"}</h3><p>{locale === "th" ? "ส่วนลดไม่ลดค่าหมอ และแก้ไขได้โดยมี Audit Trail" : "Promotions do not reduce therapist pay; revisions remain audited."}</p></div><button type="button" className="primary-compact-button" onClick={() => setSettlementBookingId(selected.bookingId)}>{locale === "th" ? "เปิดสรุปรายได้" : "Open settlement"}</button></section>}
+            </aside>
+          </div>
+          <div className="booking-detail-footer">
+            <p>{selected.status === "CONFIRMED" && !selected.therapistName ? (locale === "th" ? "มอบหมายหมอให้ครบก่อนเริ่มบริการ" : "Assign every guest before starting service") : ""}</p>
+            <div className="drawer-actions">
+              {selected.status === "PENDING" && <><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button></>}
+              {selected.status === "CONFIRMED" && <><button className="cancel-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="cancel-button" disabled={actionState === "submitting" || currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button><button className="confirm-button" disabled={!selected.therapistName || actionState === "submitting"} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button></>}
+              {selected.status === "IN_SERVICE" && <button className="confirm-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button>}
+              {selected.status === "RECORDED" && <button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{locale === "th" ? "ยกเลิกรายการย้อนหลัง" : "Cancel historical record"}</button>}
+            </div>
+          </div>
+        </div>
+      </div>}
       {walkInOpen && <WalkInBookingDrawer user={user} locale={locale} onClose={() => setWalkInOpen(false)} onCreated={(bookingId, status) => { setWalkInOpen(false); setBookingRefresh((value) => value + 1); setSelectedId(bookingId); if (status === "RECORDED" && adminRole === "ADMIN") setSettlementBookingId(bookingId); notify({ tone: "success", title: status === "RECORDED" ? (locale === "th" ? "บันทึกรายการย้อนหลังแล้ว" : "Historical record saved") : (locale === "th" ? "สร้างและยืนยัน Booking แล้ว" : "Booking created and confirmed"), message: bookingId }); }} />}
       {settlementBookingId && <BookingSettlementDialog bookingId={settlementBookingId} locale={locale} user={user} onClose={() => setSettlementBookingId("")} onSaved={() => setBookingRefresh((value) => value + 1)} />}
     </div>

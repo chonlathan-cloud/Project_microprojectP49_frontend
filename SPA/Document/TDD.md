@@ -303,6 +303,8 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | `POST` | `/api/v1/admin/coupons/{couponId}:void` | `ADMIN`; reason and Firestore transaction |
 | `GET/PUT` | `/api/v1/admin/bookings/{bookingId}/settlement` | `ADMIN`; read/versioned replace of therapist and shop allocation |
 | `GET` | `/api/v1/admin/analytics/overview` | `ADMIN`; date-range operational and financial summary |
+| `GET` | `/api/v1/admin/analytics/insight` | `ADMIN`; filtered and paginated Revenue/Service/Therapist/Booking detail |
+| `POST` | `/api/v1/admin/analytics/insight:export` | `ADMIN`; audited UTF-8 CSV for the selected Insight view and filters |
 
 Exact request and response bodies are defined in the LLD and OpenAPI contract.
 
@@ -527,7 +529,7 @@ Reducing resource capacity or adding a block never auto-cancels an existing Book
 | --- | --- | --- | --- |
 | `PENDING` | Confirm | `CONFIRMED` | Admin Web permission or valid registered group approver |
 | `PENDING` | Cancel | `CANCELLED` | Reason required |
-| `CONFIRMED` | Start | `IN_SERVICE` | Every participant has an active therapist assignment |
+| `CONFIRMED` | Start | `IN_SERVICE` | Every participant has a different active therapist assignment |
 | `CONFIRMED` | Cancel | `CANCELLED` | Reason required |
 | `CONFIRMED` | No-show | `NO_SHOW` | Appointment has reached the operational no-show window |
 | `IN_SERVICE` | Complete | `COMPLETED` | Authorized Admin Web user |

@@ -17,8 +17,10 @@ from app.core.errors import ConflictDomainError, NotFoundDomainError, Validation
 from app.domains.analytics.insight import (
     InsightFilters,
     InsightView,
-    allocate_discount as _allocate_discount,
     build_insight_payload,
+)
+from app.domains.analytics.insight import (
+    allocate_discount as _allocate_discount,
 )
 from app.domains.settlements.service import (
     SettlementAllocation,

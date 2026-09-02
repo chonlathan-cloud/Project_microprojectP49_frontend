@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from math import ceil
 from typing import Literal
 
-
 InsightView = Literal["BOOKINGS", "REVENUE", "SERVICES", "THERAPISTS"]
 SettlementState = Literal["ALLOCATED", "PENDING", "STALE"]
 
@@ -103,14 +102,21 @@ def _matches_filters(
         return False
     if filters.booking_status and booking.get("status") != filters.booking_status:
         return False
-    if filters.payment_status and booking.get("paymentStatus", "UNAVAILABLE") != filters.payment_status:
+    if (
+        filters.payment_status
+        and booking.get("paymentStatus", "UNAVAILABLE") != filters.payment_status
+    ):
         return False
-    if filters.has_discount is not None:
-        if (int(booking.get("discountAmountSatang", 0)) > 0) != filters.has_discount:
-            return False
-    if filters.has_tip is not None:
-        if (int(booking.get("tipAmountSatang", 0)) > 0) != filters.has_tip:
-            return False
+    if (
+        filters.has_discount is not None
+        and (int(booking.get("discountAmountSatang", 0)) > 0) != filters.has_discount
+    ):
+        return False
+    if (
+        filters.has_tip is not None
+        and (int(booking.get("tipAmountSatang", 0)) > 0) != filters.has_tip
+    ):
+        return False
     local_time = str(booking.get("localStartTime", ""))
     try:
         hour = int(local_time[:2])
@@ -352,11 +358,15 @@ def build_insight_payload(
         "tipAmountSatang": sum(int(item["tipAmountSatang"]) for item in booking_rows),
         "grossAmountSatang": sum(int(item["grossAmountSatang"]) for item in booking_rows),
         "paidAmountSatang": sum(int(item["paidAmountSatang"]) for item in booking_rows),
-        "outstandingAmountSatang": sum(int(item["outstandingAmountSatang"]) for item in booking_rows),
+        "outstandingAmountSatang": sum(
+            int(item["outstandingAmountSatang"]) for item in booking_rows
+        ),
         "therapistPaySatang": sum(int(item["therapistPaySatang"]) for item in booking_rows),
         "therapistTipSatang": sum(int(item["therapistTipSatang"]) for item in booking_rows),
         "shopTotalSatang": sum(int(item["shopTotalSatang"]) for item in booking_rows),
-        "settlementPendingCount": sum(item["settlementState"] != "ALLOCATED" for item in booking_rows),
+        "settlementPendingCount": sum(
+            item["settlementState"] != "ALLOCATED" for item in booking_rows
+        ),
     }
     if view == "REVENUE":
         items = _revenue_rows(booking_rows)

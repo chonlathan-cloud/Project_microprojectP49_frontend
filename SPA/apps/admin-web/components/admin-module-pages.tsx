@@ -8,11 +8,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAdminFeedback } from "@/components/admin-feedback";
 import { AccountingOperations } from "@/components/accounting-operations";
 import { AnalyticsDashboard } from "@/components/analytics-dashboard";
+import { InsightWorkspace } from "@/components/insight-workspace";
 import { CampaignOperations } from "@/components/campaign-operations";
 import { adminApi } from "@/lib/admin-api";
 import { countNotificationsRequiringAction, isNotificationState, notificationRequiresAction, type NotificationState } from "@/lib/notification-state";
 
-export type AdminView = "dashboard" | "calendar" | "capacity" | "services" | "therapists" | "accounting" | "notifications" | "campaign-operations";
+export type AdminView = "dashboard" | "insight" | "calendar" | "capacity" | "services" | "therapists" | "accounting" | "notifications" | "campaign-operations";
 
 type Resource = { resourceId: string; name: string; active: boolean; version: number };
 type Closure = { closureId: string; localDate: string; reason: string };
@@ -51,6 +52,7 @@ export function AdminModulePage({ view, locale, user, bookings, notificationFilt
   onOpenWalkIn?: () => void;
 }) {
   if (view === "dashboard") return <AnalyticsDashboard locale={locale} user={user} />;
+  if (view === "insight") return <InsightWorkspace locale={locale} user={user} />;
   if (view === "calendar") return <CalendarPage locale={locale} bookings={bookings} onSelectBooking={onSelectBooking} onOpenWalkIn={onOpenWalkIn} />;
   if (view === "capacity") return <CapacityPage locale={locale} user={user} />;
   if (view === "services") return <ServicesPage locale={locale} user={user} />;

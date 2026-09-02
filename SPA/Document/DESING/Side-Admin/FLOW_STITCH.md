@@ -24,6 +24,7 @@
   - Signed cursor pagination provides Previous/Next controls and stores query, status, page size, page number, and cursor in URL/history.
   - Columns: Booking Time, Customer Name & Phone, Service Course, Duration, Pax, Health Warning Tag, Assigned Therapist, Status Badge, Quick Actions.
   - **Quick Action Column:** One-click status dropdown (`Confirmed` -> `In-Service` -> `Completed`), plus `Call Customer` button.
+  - **Booking Detail:** Row action opens a centered modal. A `CONFIRMED` Booking exposes one therapist selector per participant and saves assignment in place. Two-person Bookings require different active therapists. The Start action becomes available only after the assignment response succeeds. Historical records route therapist/pay/tip attribution through Settlement rather than operational assignment.
 
 ---
 
@@ -86,6 +87,14 @@
 - **Top Services Table:** Ranked by participant count, sessions, duration variant, gross price, allocated discount, and net service revenue.
 - **Peak Hours:** Separate scheduled-start and actual-service-start bars. Historical rows without an actual start timestamp are omitted from the actual series rather than inferred.
 - **Therapist Performance Table:** Sessions, service minutes, fixed Admin-entered therapist pay, and therapist tip share. It is an operational allocation report, not an automated payroll engine.
+
+## 7.1 Detailed Insight Workspace
+
+- **Access:** `ADMIN` only in both navigation and API authorization.
+- **Purpose:** Keep Dashboard concise while allowing detailed analysis of revenue, service variants, therapists, and serviced Bookings.
+- **Filters:** Local service-date range, Booking channel/admin entry mode, service and duration variant, therapist, Booking/Payment/Settlement status, discount/tip presence, and scheduled hour.
+- **Views:** Revenue by date, Services, Therapists, and serviced Booking rows. Every view uses server-side filtering and pagination.
+- **CSV Export:** Export the active view with the applied filters. Revenue/Booking values are not repeated across participant-level therapist rows. Export excludes health details and full contact information, uses UTF-8 CSV for Thai text, and appends an audit event.
 
 ## 8. Completed/Historical Booking Financial Allocation
 

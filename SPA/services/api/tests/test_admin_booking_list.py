@@ -104,6 +104,98 @@ class Database:
         return Query(self.snapshots)
 
 
+class DetailQuery:
+    def __init__(
+        self,
+        snapshots: list[Snapshot],
+        filters: list[tuple[str, object]] | None = None,
+        limit_value: int | None = None,
+    ) -> None:
+        self.snapshots = snapshots
+        self.filters = filters or []
+        self.limit_value = limit_value
+
+    def where(self, field: str, operator: str, value: object) -> DetailQuery:
+        assert operator == "=="
+        return DetailQuery(self.snapshots, [*self.filters, (field, value)], self.limit_value)
+
+    def limit(self, value: int) -> DetailQuery:
+        return DetailQuery(self.snapshots, list(self.filters), value)
+
+    def stream(self):
+        matches = [
+            snapshot
+            for snapshot in self.snapshots
+            if all(snapshot.to_dict().get(field) == value for field, value in self.filters)
+        ]
+        return iter(matches[: self.limit_value] if self.limit_value else matches)
+
+
+class DetailDatabase:
+    def __init__(self) -> None:
+        start_at = datetime(2026, 9, 2, 3, tzinfo=UTC)
+        self.collections = {
+            "bookings": [
+                Snapshot(
+                    "booking-doc-1",
+                    {
+                        "publicBookingId": "BK-DETAIL",
+                        "branchId": "branch_001",
+                        "status": "CONFIRMED",
+                        "startAt": start_at,
+                        "endAt": start_at.replace(hour=4),
+                        "customerName": "Customer",
+                        "contact": {
+                            "phoneMasked": "081 *** 5678",
+                            "phoneE164": "+66812345678",
+                        },
+                        "serviceName": "Thai Massage",
+                        "pax": 2,
+                        "therapistIds": ["therapist-1", "therapist-2"],
+                        "version": 3,
+                    },
+                )
+            ],
+            "booking_participants": [
+                Snapshot(
+                    "participant-2",
+                    {
+                        "bookingDocId": "booking-doc-1",
+                        "sequence": 2,
+                        "nickname": "Guest two",
+                        "healthProfileId": "private-health-2",
+                    },
+                ),
+                Snapshot(
+                    "participant-1",
+                    {
+                        "bookingDocId": "booking-doc-1",
+                        "sequence": 1,
+                        "nickname": "Guest one",
+                        "healthProfileId": "private-health-1",
+                    },
+                ),
+            ],
+            "booking_line_items": [
+                Snapshot(
+                    "line-1",
+                    {
+                        "bookingDocId": "booking-doc-1",
+                        "participantIds": ["participant-1", "participant-2"],
+                        "serviceSnapshot": {
+                            "nameTh": "นวดแผนไทย",
+                            "nameEn": "Thai massage",
+                            "durationMinutes": 60,
+                        },
+                    },
+                )
+            ],
+        }
+
+    def collection(self, name: str) -> DetailQuery:
+        return DetailQuery(self.collections[name])
+
+
 def settings():
     return type(
         "Settings",
@@ -141,7 +233,7 @@ def booking(
     )
 
 
-def get(path: str, database: Database, monkeypatch) -> TestClient:
+def get(path: str, database: object, monkeypatch) -> TestClient:
     app.dependency_overrides[require_admin_user] = lambda: {
         "uid": "admin-001",
         "role": "ADMIN",
@@ -235,3 +327,26 @@ def test_admin_booking_filter_search_and_cursor_scope(monkeypatch) -> None:
         assert mismatched.json()["detail"] == "Invalid Admin booking page token"
     finally:
         clear_overrides()
+
+
+def test_admin_booking_detail_maps_participants_without_health_or_full_phone(monkeypatch) -> None:
+    database = DetailDatabase()
+    client = get("/api/v1/admin/bookings/BK-DETAIL", database, monkeypatch)
+    try:
+        response = client.get("/api/v1/admin/bookings/BK-DETAIL")
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["customerPhoneMasked"] == "081 *** 5678"
+    assert "contact" not in payload
+    assert [item["nickname"] for item in payload["participants"]] == [
+        "Guest one",
+        "Guest two",
+    ]
+    assert [item["therapistId"] for item in payload["participants"]] == [
+        "therapist-1",
+        "therapist-2",
+    ]
+    assert all("healthProfileId" not in item for item in payload["participants"])

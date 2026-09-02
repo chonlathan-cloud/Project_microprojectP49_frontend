@@ -185,13 +185,15 @@ Responsibilities:
 - Display health details only to authorized `ADMIN` or `STAFF` users
 - Restrict user, role, and security configuration screens to `ADMIN`
 - Display notification failures, audit context, and integration health
-- Show the ADMIN-only financial Dashboard and allow fixed per-participant therapist pay/tip allocation for completed and historical records
+- Show the ADMIN-only financial Dashboard, filtered Insight workspace with audited per-view CSV export, and fixed per-participant therapist pay/tip allocation for completed and historical records
 
 The Admin Web may hide actions by role for usability, but the SPA API remains the authoritative authorization layer.
 
 An Admin-entered discount is a Booking-level financial adjustment. Coupon search/redeem remains a separate transactional domain; a discount reason may reference a coupon campaign but cannot mutate coupon lifecycle state by itself. Payment and accounting projections consume the immutable net total while preserving the original service-line subtotal and discount evidence.
 
 Therapist compensation is a separate, versioned settlement projection keyed by Booking. The Admin-entered amount is not derived from the discounted customer total: discounts remain the shop's promotion. Tip shares may be distributed across the selected therapists and the remainder belongs to the shop. A negative shop service share is allowed only as an explicit, audited Admin decision and is highlighted as an exception. Missing settlement never blocks service completion; it becomes an operational follow-up on the Dashboard.
+
+Operational therapist assignment is completed from the centered Booking Detail modal or the dispatch board. A two-participant Booking requires two different active therapists before service can start. Detailed Insight filters and CSV export are evaluated by the SPA API; the Admin Web never derives authoritative financial totals or exports health/contact detail from browser state.
 
 ### 7.3 SPA API
 

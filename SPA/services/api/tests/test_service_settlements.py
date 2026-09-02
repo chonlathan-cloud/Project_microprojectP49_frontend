@@ -96,9 +96,19 @@ def test_staff_cannot_read_financial_settlement_or_analytics() -> None:
             "/api/v1/admin/analytics/overview",
             params={"dateFrom": "2026-09-01", "dateTo": "2026-09-02"},
         )
+        insight = client.get(
+            "/api/v1/admin/analytics/insight",
+            params={"dateFrom": "2026-09-01", "dateTo": "2026-09-02"},
+        )
+        insight_export = client.post(
+            "/api/v1/admin/analytics/insight:export",
+            json={"dateFrom": "2026-09-01", "dateTo": "2026-09-02"},
+        )
     finally:
         app.dependency_overrides.clear()
         app.dependency_overrides.update(previous)
 
     assert settlement.status_code == 403
     assert analytics.status_code == 403
+    assert insight.status_code == 403
+    assert insight_export.status_code == 403

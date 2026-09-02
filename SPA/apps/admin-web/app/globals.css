@@ -157,6 +157,42 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .detail-drawer dl > div { padding: 13px 0; display: grid; grid-template-columns: 100px 1fr; gap: 16px; border-bottom: 1px solid #edf0eb; }
 .detail-drawer dt { color: var(--muted); font-size: 12px; }
 .detail-drawer dd { margin: 0; font-size: 13px; font-weight: 700; }
+.booking-detail-backdrop { z-index: 65; }
+.booking-detail-dialog { width: min(1080px, 100%); max-height: calc(100dvh - 40px); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 24px 80px rgb(20 28 19 / 34%); }
+.booking-detail-header { padding: 18px 22px; align-items: center; }
+.booking-detail-header h2 { font-size: 22px; }
+.booking-detail-header p:last-child { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+.booking-detail-header-actions { display: flex; align-items: center; gap: 12px; }
+.booking-detail-content { min-height: 0; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(390px, .95fr); overflow-y: auto; }
+.booking-detail-primary, .booking-detail-operations { min-width: 0; padding: 20px 22px; }
+.booking-detail-operations { border-left: 1px solid var(--line); background: #fafbf9; }
+.booking-detail-summary { margin: 18px 0 0; }
+.booking-detail-summary > div { padding: 11px 0; display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 18px; border-bottom: 1px solid #edf0eb; }
+.booking-detail-summary dt { color: var(--muted); font-size: 11px; }
+.booking-detail-summary dd { margin: 0; font-size: 12px; font-weight: 750; }
+.booking-detail-summary dd small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
+.booking-operation-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.booking-operation-heading h3 { margin: 0; color: var(--forest-dark); font-size: 17px; }
+.booking-operation-heading > span { padding: 4px 7px; border-radius: 999px; background: #e7ede3; color: var(--forest-dark); font-size: 9px; font-weight: 800; white-space: nowrap; }
+.booking-assignment { padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.booking-assignment-list { margin-top: 14px; display: grid; gap: 9px; }
+.booking-assignment-list label { padding: 10px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, .85fr); align-items: center; gap: 12px; border: 1px solid #d7dcd4; border-radius: 8px; background: white; }
+.booking-assignment-list label > span, .booking-assignment-list strong, .booking-assignment-list small { min-width: 0; display: block; }
+.booking-assignment-list strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.booking-assignment-list small { margin-top: 3px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.booking-assignment-list select { width: 100%; min-height: 38px; padding: 0 30px 0 9px; border: 1px solid #b9c1b5; border-radius: 7px; background: white; color: var(--text); font: inherit; font-size: 11px; }
+.assignment-save { width: 100%; margin-top: 10px; }
+.assignment-save:disabled { cursor: not-allowed; opacity: .5; }
+.assignment-inline-warning { margin: 9px 0 0; padding: 8px 10px; border-left: 3px solid #b36b00; background: #fff5da; color: #754500; font-size: 10px; line-height: 1.45; }
+.historical-assignment-note { margin-bottom: 16px; padding: 12px 14px; border-left: 4px solid var(--gold); background: #fff9ed; color: #6f5224; }
+.historical-assignment-note strong { font-size: 12px; }
+.historical-assignment-note p { margin: 4px 0 0; font-size: 10px; line-height: 1.5; }
+.booking-detail-operations .admin-cash-panel { padding-top: 0; }
+.booking-detail-operations .booking-settlement-entry { margin-bottom: 0; }
+.booking-detail-footer { min-height: 70px; padding: 12px 22px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-top: 1px solid var(--line); background: white; }
+.booking-detail-footer > p { margin: 0; color: #8a5800; font-size: 10px; font-weight: 750; }
+.booking-detail-footer .drawer-actions { display: flex; justify-content: flex-end; gap: 9px; }
+.booking-detail-footer .drawer-actions button { min-width: 128px; padding-inline: 16px; }
 .drawer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .drawer-actions button { min-height: 44px; border-radius: 8px; font-weight: 800; }
 .confirm-button { border: 0; background: var(--forest); color: white; }
@@ -739,6 +775,44 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .analytics-legend i.service { height: 8px; background: var(--forest); }
 .analytics-legend i.tip { height: 8px; background: #b38a4a; }
 .analytics-legend i.average { height: 0; border-top: 1px dashed #747d70; border-radius: 0; }
+.insight-workspace { max-width: 1840px; }
+.insight-heading { align-items: center; }
+.insight-export { min-width: 180px; }
+.insight-filter-bar { margin: 20px 0 16px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: white; }
+.insight-filter-primary, .insight-filter-secondary { padding: 14px; display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 10px; }
+.insight-filter-primary label, .insight-filter-secondary label { min-width: 0; display: grid; gap: 5px; color: var(--muted); font-size: 9px; font-weight: 850; letter-spacing: .03em; text-transform: uppercase; }
+.insight-filter-primary input, .insight-filter-primary select, .insight-filter-secondary input, .insight-filter-secondary select { width: 100%; min-width: 0; min-height: 40px; padding: 0 9px; border: 1px solid #bfc6bb; border-radius: 7px; background: white; color: var(--text); font: inherit; font-size: 11px; text-transform: none; }
+.insight-more-filters { border-top: 1px solid var(--line); }
+.insight-more-filters summary { width: max-content; margin: 0 14px; padding: 11px 0; color: var(--forest-dark); cursor: pointer; font-size: 10px; font-weight: 850; }
+.insight-more-filters[open] summary { padding-bottom: 0; }
+.insight-filter-secondary { grid-template-columns: repeat(7, minmax(110px, 1fr)); padding-top: 10px; }
+.insight-filter-actions { min-height: 58px; padding: 9px 14px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); background: #fafbf9; }
+.insight-filter-actions button { min-width: 112px; min-height: 38px; padding: 0 12px; border: 1px solid #bfc6bb; border-radius: 7px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 11px; font-weight: 800; }
+.insight-filter-actions .confirm-button { border-color: var(--forest); background: var(--forest); color: white; }
+.insight-summary { margin-bottom: 16px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: white; }
+.insight-summary > div { min-width: 0; padding: 13px 15px; border-right: 1px solid var(--line); }
+.insight-summary > div:last-child { border-right: 0; }
+.insight-summary span, .insight-summary strong { display: block; }
+.insight-summary span { overflow: hidden; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .03em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.insight-summary strong { margin-top: 5px; overflow: hidden; color: var(--forest-dark); font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.insight-summary .warning { box-shadow: inset 0 3px #b36b00; }
+.insight-summary .warning strong { color: #8a5800; }
+.insight-results { margin: 0; overflow: hidden; }
+.insight-tabs { min-height: 58px; padding: 9px 14px; display: flex; align-items: center; gap: 5px; border-bottom: 1px solid var(--line); background: #fafbf9; }
+.insight-tabs button { min-height: 38px; padding: 0 14px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 800; }
+.insight-tabs button[aria-selected="true"] { border-color: #9daa97; background: white; color: var(--forest-dark); box-shadow: 0 1px 2px rgb(31 41 55 / 8%); }
+.insight-table { min-width: 1040px; }
+.insight-table td { padding-block: 12px; }
+.insight-table td small { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insight-state { width: max-content; padding: 4px 7px; display: inline-flex; border-radius: 999px; font-size: 9px; font-weight: 850; }
+.insight-state.state-allocated { background: #e3f5e8; color: #166534; }
+.insight-state.state-pending { background: #fff3cc; color: #754500; }
+.insight-state.state-stale { background: #feeaea; color: #9f1717; }
+.insight-pagination { min-height: 60px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid var(--line); background: #fafbf9; }
+.insight-pagination > span { color: var(--muted); font-size: 10px; font-weight: 750; }
+.insight-pagination > div { display: flex; gap: 7px; }
+.insight-pagination button { min-height: 36px; padding: 0 11px; border: 1px solid #c7cdc3; border-radius: 7px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 10px; font-weight: 800; }
+.insight-pagination button:disabled { cursor: not-allowed; opacity: .45; }
 
 @media (max-width: 1279px) {
   .detail-drawer { width: 350px; }
@@ -750,6 +824,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .analytics-metric:nth-child(3) { border-right: 0; }
   .analytics-metric:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
   .analytics-grid { grid-template-columns: 1fr; }
+  .insight-filter-primary { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
+  .insight-filter-secondary { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
   .settlement-allocation-row { grid-template-columns: minmax(190px, 1fr) minmax(160px, 1fr) 130px 145px; }
 }
 
@@ -779,6 +855,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .filter-pills button { flex: 0 0 auto; }
   .detail-drawer { width: min(370px, 100vw); }
   .drawer-open .admin-main { margin-right: 0; }
+  .booking-detail-content { grid-template-columns: 1fr; }
+  .booking-detail-operations { border-top: 1px solid var(--line); border-left: 0; }
   .service-list-toolbar { align-items: stretch; flex-direction: column; }
   .service-toolbar-actions { align-items: stretch; }
   .service-toolbar-actions .service-search { flex: 1; }
@@ -797,6 +875,12 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .accounting-search { grid-column: 1 / -1; }
   .cash-deposit-drawer { width: min(680px, 100vw); }
   .analytics-heading { align-items: stretch; flex-direction: column; }
+  .insight-heading { align-items: stretch; flex-direction: column; }
+  .insight-export { align-self: flex-start; }
+  .insight-filter-primary, .insight-filter-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .insight-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .insight-summary > div:nth-child(3) { border-right: 0; }
+  .insight-summary > div:nth-child(-n+3) { border-bottom: 1px solid var(--line); }
   .analytics-date-filter { grid-template-columns: 1fr 1fr; }
   .analytics-trend-header { align-items: flex-start; flex-direction: column; gap: 12px; }
   .analytics-trend-summary { width: 100%; }
@@ -824,6 +908,14 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .assignment-controls { grid-template-columns: 1fr; }
   .assignment-controls > button { width: 100%; }
   .modal-backdrop { padding: 12px; }
+  .booking-detail-dialog { max-height: calc(100dvh - 24px); }
+  .booking-detail-header, .booking-detail-primary, .booking-detail-operations, .booking-detail-footer { padding-inline: 15px; }
+  .booking-detail-header { align-items: flex-start; }
+  .booking-detail-header-actions { align-items: flex-end; flex-direction: column-reverse; }
+  .booking-detail-summary > div, .booking-assignment-list label { grid-template-columns: 1fr; gap: 5px; }
+  .booking-detail-footer { align-items: stretch; flex-direction: column; }
+  .booking-detail-footer .drawer-actions { display: grid; grid-template-columns: 1fr; }
+  .booking-detail-footer .drawer-actions button { width: 100%; }
   .toast-region { width: calc(100vw - 24px); top: 12px; right: 12px; }
   .campaign-toolbar, .campaign-toolbar-actions { align-items: stretch; flex-direction: column; }
   .campaign-search, .campaign-editor-grid { grid-template-columns: 1fr; }
@@ -857,6 +949,14 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .accounting-heading-actions { width: 100%; display: grid; }
   .cash-qr img { width: min(230px, 100%); height: auto; justify-self: center; }
   .analytics-summary, .analytics-date-filter, .settlement-allocation-row, .settlement-financial-strip, .settlement-result { grid-template-columns: 1fr; }
+  .insight-filter-primary, .insight-filter-secondary, .insight-summary { grid-template-columns: 1fr; }
+  .insight-summary > div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .insight-summary > div:last-child { border-bottom: 0; }
+  .insight-export { width: 100%; }
+  .insight-filter-actions, .insight-pagination { align-items: stretch; flex-direction: column; }
+  .insight-filter-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .insight-tabs { overflow-x: auto; }
+  .insight-tabs button { flex: 0 0 auto; }
   .analytics-metric { border-right: 0; border-bottom: 1px solid var(--line); }
   .analytics-metric:last-child { border-bottom: 0; }
   .analytics-attention { align-items: flex-start; flex-direction: column; gap: 5px; }

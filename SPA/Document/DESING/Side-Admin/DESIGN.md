@@ -35,5 +35,6 @@ Maintains Spa 49 brand identity optimized for desktop operational dashboards:
   4. `Service & Menu`
   5. `Therapist Roster`
   6. `Analytics Dashboard`
-- **Slide-Over Detail Panel (Right Drawer):** `380px` width slide-over panel for displaying detailed customer history or booking information without leaving the main grid.
+- **Centered Booking Detail Modal:** `960px`–`1080px` focused modal for Booking information, per-participant therapist assignment, payment, status actions, and ADMIN settlement handoff without leaving the queue.
+- **Slide-Over Detail Panel (Right Drawer):** `380px` width slide-over remains appropriate for customer history and lightweight secondary records.
 - **Data Table:** Sticky header row, zebra striping on hover, inline quick-action buttons (`Change Status`, `Call`), and health alert tags.

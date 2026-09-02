@@ -894,6 +894,8 @@ When a successful Payment changes `tipAmountSatang`, the Payment transaction als
 
 `GET /api/v1/admin/analytics/overview?dateFrom=YYYY-MM-DD&dateTo=YYYY-MM-DD&branchId=...` accepts at most 366 inclusive local dates. It includes non-cancelled `COMPLETED` and `RECORDED` records, reads immutable Booking line snapshots for service rankings, uses verified `PAID` projection for collected cash, and uses valid Settlement snapshots for therapist/shop totals. `serviceStartedAt` is set on transition to `IN_SERVICE` and `serviceCompletedAt` on transition to `COMPLETED`; old records without those timestamps remain absent from actual-hour analytics.
 
+`GET /api/v1/admin/analytics/insight` uses the same eligible Booking and Settlement rules and adds server-side filters, page/page-size pagination, and distinct `BOOKINGS`, `REVENUE`, `SERVICES`, and `THERAPISTS` row grains. Booking/service revenue is never duplicated into participant-level therapist rows. `POST /api/v1/admin/analytics/insight:export` applies the identical filter builder, returns at most 5,000 UTF-8 CSV rows with a BOM for Thai spreadsheet compatibility, excludes health/contact detail, and appends `ANALYTICS_CSV_EXPORTED` audit evidence containing actor, branch, view, date range, filters, and record count.
+
 ### 6.15 Guard and Idempotency Documents
 
 `phone_booking_guards/{branchId_phoneKey}`:
