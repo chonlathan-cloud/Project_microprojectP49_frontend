@@ -33,6 +33,10 @@ class AccountingExport:
     discount_reason: str | None
     external_reference: str
     external_document_id: str
+    provider: str
+    document_intent: str
+    flow_account_contact_strategy: str
+    vat_policy_version: str
     status: AccountingExportStatus = AccountingExportStatus.READY
     source_snapshot_version: int = 1
     attempt_count: int = 0

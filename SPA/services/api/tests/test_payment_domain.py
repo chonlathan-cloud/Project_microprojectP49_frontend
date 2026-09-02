@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -25,7 +26,7 @@ from app.domains.payments.policy import (
     require_admin_financial_action,
     validate_tip_amount,
 )
-from app.infrastructure.firestore_payments import _new_payment
+from app.infrastructure.firestore_payments import _export_data, _new_payment
 
 
 def payment() -> Payment:
@@ -214,6 +215,70 @@ def test_beam_success_atomically_creates_one_deterministic_export() -> None:
     assert replay.replayed
     assert replay.accounting_export == first.accounting_export
     assert len(ledger.exports()) == 1
+
+
+def test_same_day_payments_create_distinct_exports_instead_of_daily_aggregation() -> None:
+    ledger = InMemoryFinancialLedger()
+    first_payment = payment()
+    second_payment = replace(
+        payment(),
+        payment_id="pay_002",
+        booking_doc_id="booking-doc-002",
+        booking_public_id="BK-20260831-002",
+    )
+    ledger.add_payment(first_payment)
+    ledger.add_payment(second_payment)
+    paid_at = datetime(2026, 8, 31, 14, 10, tzinfo=UTC)
+
+    first = ledger.commit_authoritative_payment(
+        AuthoritativePaymentCommand(
+            payment_id="pay_001",
+            expected_version=1,
+            source=PaymentSource.BEAM,
+            paid_at=paid_at,
+            provider_resource_id="beam_charge_001",
+        )
+    )
+    second = ledger.commit_authoritative_payment(
+        AuthoritativePaymentCommand(
+            payment_id="pay_002",
+            expected_version=1,
+            source=PaymentSource.BEAM,
+            paid_at=paid_at,
+            provider_resource_id="beam_charge_002",
+        )
+    )
+
+    assert (
+        first.accounting_export.accounting_date
+        == second.accounting_export.accounting_date
+    )
+    assert first.accounting_export.export_key != second.accounting_export.export_key
+    assert first.accounting_export.export_id != second.accounting_export.export_id
+    assert (
+        first.accounting_export.external_document_id
+        != second.accounting_export.external_document_id
+    )
+    assert len(ledger.exports()) == 2
+
+
+def test_export_snapshot_persists_versioned_flowaccount_contract_metadata() -> None:
+    paid = payment().mark_paid(
+        source=PaymentSource.CASH,
+        paid_at=datetime(2026, 8, 31, 14, 10, tzinfo=UTC),
+        cash_received_by="admin_001",
+    )
+    snapshot = _export_data(
+        build_accounting_export(paid),
+        datetime(2026, 8, 31, 14, 11, tzinfo=UTC),
+    )
+
+    assert snapshot["provider"] == "FLOWACCOUNT"
+    assert snapshot["documentIntent"] == "CASH_INVOICE_WITH_PAYMENT"
+    assert snapshot["flowAccountContactStrategy"] == "SPA49_WALKIN"
+    assert snapshot["flowAccountPaymentStrategy"] == "CASH"
+    assert snapshot["vatPolicyVersion"] == "SPA_VAT_INCLUSIVE_7_V1"
+    assert "paymentStrategy" not in snapshot
 
 
 def test_cash_receipt_is_paid_but_remains_unsettled() -> None:

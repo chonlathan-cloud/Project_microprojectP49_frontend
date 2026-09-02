@@ -308,6 +308,7 @@ def _status_result(payment: Payment) -> PaymentStatusResult:
 def _export_data(export: AccountingExport, now: datetime) -> dict[str, Any]:
     return {
         "exportKey": export.export_key,
+        "provider": export.provider,
         "paymentId": export.payment_id,
         "bookingDocId": export.booking_doc_id,
         "bookingPublicId": export.booking_public_id,
@@ -317,8 +318,11 @@ def _export_data(export: AccountingExport, now: datetime) -> dict[str, Any]:
         "projectName": export.project_name,
         "accountingDate": export.accounting_date.isoformat(),
         "paidAt": export.paid_at,
+        "documentIntent": export.document_intent,
         "paymentSource": export.payment_source,
-        "paymentStrategy": export.payment_strategy,
+        "flowAccountContactStrategy": export.flow_account_contact_strategy,
+        "flowAccountPaymentStrategy": export.payment_strategy,
+        "vatPolicyVersion": export.vat_policy_version,
         "serviceAmountSatang": export.service_amount_satang,
         "subtotalAmountSatang": export.subtotal_amount_satang,
         "discountAmountSatang": export.discount_amount_satang,

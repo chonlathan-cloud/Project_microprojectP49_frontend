@@ -55,5 +55,9 @@ def build_accounting_export(payment: Payment) -> AccountingExport:
         discount_reason=payment.discount_reason,
         external_reference=f"SPA-PAY-{payment.payment_id}",
         external_document_id=external_document_id,
+        provider="FLOWACCOUNT",
+        document_intent="CASH_INVOICE_WITH_PAYMENT",
+        flow_account_contact_strategy="SPA49_WALKIN",
+        vat_policy_version="SPA_VAT_INCLUSIVE_7_V1",
         source_snapshot_version=payment.version,
     )

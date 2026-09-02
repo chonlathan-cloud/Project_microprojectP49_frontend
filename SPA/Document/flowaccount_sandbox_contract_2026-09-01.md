@@ -53,8 +53,31 @@ account `41210`. The tip candidate persists the provider-visible trace
 
 ## Release gate
 
-`FLOWACCOUNT_SYNC_ENABLED` and `FLOWACCOUNT_SANDBOX_CONTRACT_PROVEN` remain `false`.
-Finance/accountant must approve `CA2026090001` and `CA2026090003` before the Test
-worker receives FlowAccount secrets and before any scheduler is enabled. Production
-master-data IDs must be resolved independently and must never reuse these Sandbox
-IDs.
+As verified on 2026-09-02, the Test API has `ACCOUNTING_SYNC_ENABLED=true` and the
+Test Accounting Worker has `FLOWACCOUNT_SYNC_ENABLED=true` plus
+`FLOWACCOUNT_SANDBOX_CONTRACT_PROVEN=true`. The Test Scheduler remains `PAUSED` at
+`15 0 * * *` in `Asia/Bangkok`; enabling continuous nightly operation remains an
+explicit release action.
+
+The historical-payment Test run synchronized 61 one-payment-per-document exports:
+one authorized non-fixture historical cash payment plus 60 positive-value
+`HISTORICAL_RECORD` Test fixtures. The completed nightly run processed and synced
+all 60 selected fixture exports with zero failed or review results. Two zero-value
+fixtures were correctly ineligible for export, and one cancelled/excluded fixture
+was not exported. This is runtime integration evidence, not a substitute for formal
+Finance/accountant UAT sign-off.
+
+Automated regression validation on 2026-09-02 also passed:
+
+- SPA API payment/accounting selection: 44 tests, including same-day distinct exports,
+  replay idempotency, immutable FlowAccount contract metadata, routes, historical
+  backfill, Firestore transaction helpers, reconciliation, and payment routes.
+- Accounting Worker: 21 tests covering payload/client behavior, delivery and
+  reconciliation outcomes, Firestore transaction helpers, and health/readiness.
+- Ruff passed for both tested service scopes. The only warning was the existing
+  Starlette `TestClient`/`httpx` deprecation warning.
+
+Production remains disabled until its credentials, company identity, Project,
+contact, payment channel, revenue account, Firestore indexes/TTL, controlled smoke,
+and Finance sign-off pass independently. Sandbox IDs must never be reused in
+Production.

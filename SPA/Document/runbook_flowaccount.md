@@ -28,6 +28,33 @@ Never copy secret values into an environment file, command line, document, task,
 deploy script validates the enabled Secret Manager versions and direct runtime IAM binding without
 reading the values.
 
+## Deployment commands
+
+Run deployments from the repository `main` branch after committing the intended changes. The API
+deploy also requires the SPA worktree to be clean.
+
+Test reads its accounting flags from `services/api/.env-test` and
+`services/accounting-worker/.env-test`:
+
+```bash
+cd SPA
+DEPLOY_ENVIRONMENT=test SERVICE_NAME=spa-api-test bash deploy_API.sh
+DEPLOY_ENVIRONMENT=test bash deploy_Accounting_Worker.sh
+```
+
+Production must remain fail-closed while Production FlowAccount readiness is incomplete. Confirm
+`ACCOUNTING_SYNC_ENABLED=false` in `services/api/.env-prod`; explicitly force the Worker flag off:
+
+```bash
+cd SPA
+DEPLOY_ENVIRONMENT=prod bash deploy_API.sh
+DEPLOY_ENVIRONMENT=prod FLOWACCOUNT_SYNC_ENABLED=false bash deploy_Accounting_Worker.sh
+```
+
+After Production credentials, master data, indexes/TTL, controlled smoke, and Finance sign-off pass,
+turning on Production sync is a separate approved change to both Production environment files and a
+new deployment. Do not enable it only through an ad-hoc shell override.
+
 ## Pause
 
 Pause the environment's Scheduler job, pause its Cloud Tasks queue, and deploy both API and Worker
