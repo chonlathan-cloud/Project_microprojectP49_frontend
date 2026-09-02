@@ -1,0 +1,166 @@
+"use client";
+
+import type { User } from "firebase/auth";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { useAdminFeedback } from "@/components/admin-feedback";
+import { adminApi } from "@/lib/admin-api";
+import type { Locale } from "@spa/shared-types";
+
+type Therapist = { therapistId: string; displayName: string; active: boolean };
+type Allocation = {
+  participantId: string;
+  participantSequence: number;
+  participantName: string;
+  serviceNameTh: string;
+  serviceNameEn: string;
+  durationMinutes: number;
+  therapistId: string | null;
+  therapistName: string | null;
+  therapistPaySatang: number;
+  tipShareSatang: number;
+};
+type Settlement = {
+  bookingId: string;
+  bookingStatus: string;
+  eligible: boolean;
+  settled: boolean;
+  requiresTipReallocation: boolean;
+  version: number;
+  subtotalAmountSatang: number;
+  discountAmountSatang: number;
+  netServiceAmountSatang: number;
+  tipAmountSatang: number;
+  grossAmountSatang: number;
+  therapistPaySatang: number;
+  therapistTipSatang: number;
+  shopServiceAmountSatang: number;
+  shopTipSatang: number;
+  shopTotalSatang: number;
+  negativeShopServiceAmount: boolean;
+  allocations: Allocation[];
+};
+
+function baht(value: number, locale: Locale): string {
+  return new Intl.NumberFormat(locale === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB", maximumFractionDigits: 0 }).format(value / 100);
+}
+
+export function BookingSettlementDialog({ bookingId, locale, user, onClose, onSaved }: { bookingId: string; locale: Locale; user: User; onClose: () => void; onSaved: () => void }) {
+  const { notify, requestConfirmation } = useAdminFeedback();
+  const [settlement, setSettlement] = useState<Settlement | null>(null);
+  const [therapists, setTherapists] = useState<Therapist[]>([]);
+  const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [state, setState] = useState<"loading" | "ready" | "saving" | "error">("loading");
+  const [error, setError] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      adminApi<Settlement>(user, `/bookings/${encodeURIComponent(bookingId)}/settlement`),
+      adminApi<{ items: Therapist[] }>(user, "/therapists"),
+    ]).then(([payload, roster]) => {
+      if (!active) return;
+      setSettlement(payload);
+      setAllocations(payload.allocations);
+      setTherapists(roster.items);
+      setState("ready");
+    }).catch((caught) => {
+      if (!active) return;
+      setError(caught instanceof Error ? caught.message : "Settlement unavailable");
+      setState("error");
+    });
+    return () => { active = false; };
+  }, [bookingId, user]);
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && state !== "saving") onClose();
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const controls = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled])'));
+      if (!controls.length) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); document.body.style.overflow = previousOverflow; previous?.focus(); };
+  }, [onClose, state]);
+
+  const totals = useMemo(() => {
+    const therapistPay = allocations.reduce((sum, item) => sum + item.therapistPaySatang, 0);
+    const therapistTip = allocations.reduce((sum, item) => sum + item.tipShareSatang, 0);
+    const net = settlement?.netServiceAmountSatang ?? 0;
+    const tip = settlement?.tipAmountSatang ?? 0;
+    const shopService = net - therapistPay;
+    const shopTip = tip - therapistTip;
+    return { therapistPay, therapistTip, shopService, shopTip, shopTotal: shopService + shopTip };
+  }, [allocations, settlement]);
+
+  const invalidTip = totals.shopTip < 0;
+  const missingTherapist = allocations.some((item) => (item.therapistPaySatang > 0 || item.tipShareSatang > 0) && !item.therapistId);
+
+  const update = (participantId: string, change: Partial<Allocation>) => setAllocations((current) => current.map((item) => item.participantId === participantId ? { ...item, ...change } : item));
+
+  async function save() {
+    if (!settlement || state === "saving" || invalidTip || missingTherapist) return;
+    const confirmation = await requestConfirmation({
+      title: locale === "th" ? "ยืนยันสรุปรายได้รายการนี้?" : "Confirm this service settlement?",
+      message: locale === "th"
+        ? `ค่าหมอ ${baht(totals.therapistPay, locale)} • ทิปหมอ ${baht(totals.therapistTip, locale)} • ส่วนร้าน ${baht(totals.shopTotal, locale)} การแก้ไขภายหลังจะถูกบันทึกใน Audit Log`
+        : `Therapist pay ${baht(totals.therapistPay, locale)} • therapist tips ${baht(totals.therapistTip, locale)} • shop share ${baht(totals.shopTotal, locale)}. Later edits remain audited.`,
+      confirmLabel: locale === "th" ? "ยืนยันบันทึก" : "Save settlement",
+      cancelLabel: locale === "th" ? "กลับไปตรวจ" : "Review again",
+    });
+    if (!confirmation.confirmed) return;
+    setState("saving");
+    try {
+      const saved = await adminApi<Settlement>(user, `/bookings/${encodeURIComponent(bookingId)}/settlement`, {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedVersion: settlement.version,
+          allocations: allocations.map((item) => ({ participantId: item.participantId, therapistId: item.therapistId || null, therapistPaySatang: item.therapistPaySatang, tipShareSatang: item.tipShareSatang })),
+        }),
+      });
+      setSettlement(saved);
+      setAllocations(saved.allocations);
+      setState("ready");
+      notify({ tone: "success", title: locale === "th" ? "บันทึกค่าหมอและส่วนร้านแล้ว" : "Service settlement saved", message: bookingId });
+      onSaved();
+      onClose();
+    } catch (caught) {
+      setState("error");
+      setError(caught instanceof Error ? caught.message : "Settlement save failed");
+    }
+  }
+
+  return <div className="modal-backdrop settlement-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && state !== "saving") onClose(); }}>
+    <div ref={dialogRef} className="settlement-dialog" role="dialog" aria-modal="true" aria-labelledby="settlement-title" aria-describedby="settlement-description">
+      <div className="drawer-header"><div><p className="eyebrow">SERVICE SETTLEMENT • {bookingId}</p><h2 id="settlement-title">{locale === "th" ? "สรุปรายได้และค่าหมอ" : "Service revenue settlement"}</h2></div><button ref={closeRef} type="button" disabled={state === "saving"} aria-label={locale === "th" ? "ปิดหน้าต่าง" : "Close dialog"} onClick={onClose}>×</button></div>
+      <p id="settlement-description" className="settlement-description">{locale === "th" ? "ส่วนลดเป็น Promotion ของร้านและไม่ลดค่าหมอ ทิปที่ไม่ได้แบ่งให้หมอจะเป็นส่วนของร้านอัตโนมัติ" : "Shop promotions do not reduce therapist pay. Unallocated tips remain with the shop."}</p>
+      {state === "loading" && <div className="module-state" role="status">{locale === "th" ? "กำลังโหลดข้อมูลบริการ…" : "Loading service details…"}</div>}
+      {error && <div className="drawer-feedback error" role="alert">{error}</div>}
+      {settlement && <>
+        {settlement.requiresTipReallocation && <div className="settlement-warning" role="alert">{locale === "th" ? "ยอดทิปเปลี่ยนหลังการสรุปครั้งก่อน กรุณาแบ่งทิปใหม่" : "The received tip changed after the last settlement. Reallocate the tip."}</div>}
+        <dl className="settlement-financial-strip"><div><dt>{locale === "th" ? "ราคาปกติ" : "Regular price"}</dt><dd>{baht(settlement.subtotalAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ส่วนลดร้าน" : "Shop promotion"}</dt><dd>−{baht(settlement.discountAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ค่าบริการสุทธิ" : "Net service"}</dt><dd>{baht(settlement.netServiceAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ทิปทั้งหมด" : "Total tip"}</dt><dd>{baht(settlement.tipAmountSatang, locale)}</dd></div></dl>
+        <div className="settlement-allocation-list">{allocations.map((item) => <section key={item.participantId} className="settlement-allocation-row" aria-labelledby={`allocation-${item.participantId}`}>
+          <div className="settlement-service"><strong id={`allocation-${item.participantId}`}>{item.participantName}</strong><span>{locale === "th" ? item.serviceNameTh : item.serviceNameEn} • {item.durationMinutes} {locale === "th" ? "นาที" : "min"}</span></div>
+          <label><span>{locale === "th" ? "หมอนวด" : "Therapist"}</span><select value={item.therapistId ?? ""} onChange={(event) => update(item.participantId, { therapistId: event.target.value || null })}><option value="">— {locale === "th" ? "ไม่ระบุ" : "Not assigned"} —</option>{therapists.map((therapist) => <option value={therapist.therapistId} key={therapist.therapistId}>{therapist.displayName}{therapist.active ? "" : locale === "th" ? " (ปิดใช้งาน)" : " (inactive)"}</option>)}</select></label>
+          <label><span>{locale === "th" ? "ค่าหมอ (บาท)" : "Therapist pay (THB)"}</span><input type="number" min="0" step="1" inputMode="numeric" value={item.therapistPaySatang / 100} onChange={(event) => update(item.participantId, { therapistPaySatang: Math.max(0, Math.round(Number(event.target.value || 0))) * 100 })} /></label>
+          <label><span>{locale === "th" ? "แบ่งทิปให้หมอ (บาท)" : "Therapist tip (THB)"}</span><input type="number" min="0" step="1" inputMode="numeric" value={item.tipShareSatang / 100} onChange={(event) => update(item.participantId, { tipShareSatang: Math.max(0, Math.round(Number(event.target.value || 0))) * 100 })} /></label>
+        </section>)}</div>
+        {missingTherapist && <p className="settlement-warning" role="alert">{locale === "th" ? "ต้องเลือกหมอนวดสำหรับแถวที่มีค่าหมอหรือทิป" : "Select a therapist for every row with pay or tip."}</p>}
+        {invalidTip && <p className="settlement-warning" role="alert">{locale === "th" ? "ยอดแบ่งทิปให้หมอมากกว่าทิปที่ได้รับ" : "Therapist tip shares exceed the received tip."}</p>}
+        <dl className="settlement-result"><div><dt>{locale === "th" ? "ค่าหมอรวม" : "Therapist pay"}</dt><dd>{baht(totals.therapistPay, locale)}</dd></div><div><dt>{locale === "th" ? "ทิปหมอรวม" : "Therapist tips"}</dt><dd>{baht(totals.therapistTip, locale)}</dd></div><div><dt>{locale === "th" ? "ทิปส่วนร้าน" : "Shop tip"}</dt><dd>{baht(totals.shopTip, locale)}</dd></div><div className={totals.shopService < 0 ? "negative" : ""}><dt>{locale === "th" ? "ส่วนร้านจากค่าบริการ" : "Shop service share"}</dt><dd>{baht(totals.shopService, locale)}</dd></div><div className="settlement-shop-total"><dt>{locale === "th" ? "ส่วนร้านรวม" : "Total shop share"}</dt><dd>{baht(totals.shopTotal, locale)}</dd></div></dl>
+        {totals.shopService < 0 && <p className="settlement-loss-warning" role="alert">{locale === "th" ? "ส่วนร้านจากค่าบริการติดลบ ระบบอนุญาตให้บันทึกเพราะส่วนลดเป็น Promotion ของร้าน" : "The shop service share is negative. Saving is allowed because the promotion is borne by the shop."}</p>}
+        <div className="dialog-actions settlement-actions"><button type="button" disabled={state === "saving"} onClick={onClose}>{locale === "th" ? "ไว้กรอกภายหลัง" : "Save later"}</button><button type="button" className="confirm-button" disabled={state === "saving" || invalidTip || missingTherapist} onClick={() => { void save(); }}>{state === "saving" ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : settlement.settled ? (locale === "th" ? "บันทึกการแก้ไข" : "Save revision") : (locale === "th" ? "ยืนยันสรุปรายได้" : "Save settlement")}</button></div>
+      </>}
+    </div>
+  </div>;
+}

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { AdminModulePage, type AdminView } from "@/components/admin-module-pages";
 import { useAdminFeedback } from "@/components/admin-feedback";
+import { BookingSettlementDialog } from "@/components/booking-settlement-dialog";
 import { WalkInBookingDrawer } from "@/components/walk-in-booking-drawer";
 import { adminApi } from "@/lib/admin-api";
 import { countNotificationsRequiringAction } from "@/lib/notification-state";
@@ -27,6 +28,7 @@ function adminEntryLabel(booking: PreviewBooking, locale: Locale): string {
 
 const navItems = [
   ["bookings", "▦", "รายการจอง", "Bookings"],
+  ["dashboard", "▥", "Dashboard", "Dashboard"],
   ["calendar", "◫", "ปฏิทิน", "Calendar"],
   ["capacity", "⌁", "สล็อตและความจุ", "Capacity"],
   ["services", "◇", "บริการและราคา", "Services"],
@@ -158,6 +160,8 @@ export function AdminDashboard({ user }: { user: User }) {
   const [paymentLoadState, setPaymentLoadState] = useState<"idle" | "loading" | "ready" | "saving" | "error">("idle");
   const [cashTipSatang, setCashTipSatang] = useState(0);
   const [walkInOpen, setWalkInOpen] = useState(false);
+  const [adminRole, setAdminRole] = useState<"ADMIN" | "STAFF" | null>(null);
+  const [settlementBookingId, setSettlementBookingId] = useState("");
   const detailDrawerRef = useRef<HTMLElement>(null);
   const closeDrawerButtonRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -195,6 +199,14 @@ export function AdminDashboard({ user }: { user: User }) {
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
+
+  useEffect(() => {
+    let active = true;
+    adminApi<{ role: "ADMIN" | "STAFF" }>(user, "/me")
+      .then((payload) => { if (active) setAdminRole(payload.role); })
+      .catch(() => { if (active) setAdminRole(null); });
+    return () => { active = false; };
+  }, [user]);
 
   useEffect(() => {
     const restorePagination = () => {
@@ -397,6 +409,7 @@ export function AdminDashboard({ user }: { user: User }) {
         ? { ...item, status: payload.status as BookingStatus, version: payload.version ?? item.version + 1 }
         : item));
       setBookingRefresh((value) => value + 1);
+      if (action === "complete" && adminRole === "ADMIN") setSettlementBookingId(booking.bookingId);
       notify({
         tone: "success",
         title: action === "cancel" && booking.status === "RECORDED"
@@ -456,6 +469,7 @@ export function AdminDashboard({ user }: { user: User }) {
         ? { ...booking, paymentStatus: "PAID", paidAmountSatang: grossAmount }
         : booking));
       setPaymentLoadState("ready");
+      if (adminRole === "ADMIN") setSettlementBookingId(selected.bookingId);
       notify({
         tone: "success",
         title: locale === "th" ? "รับเงินสดแล้ว • รอนำเข้าบัญชี" : "Cash received • awaiting deposit",
@@ -554,7 +568,7 @@ export function AdminDashboard({ user }: { user: User }) {
         <div className="admin-brand"><div><strong>SPA 49</strong><small>BRANCH OPERATIONS</small></div></div>
         <div className="branch-chip"><span className="live-dot" />{text.branch}</div>
         <nav aria-label="Main navigation">
-          {navItems.map(([id, icon, th, en]) => {
+          {navItems.filter(([id]) => id !== "dashboard" || adminRole === "ADMIN").map(([id, icon, th, en]) => {
             const label = locale === "th" ? th : en;
             const isNotifications = id === "notifications";
             const ariaLabel = isNotifications && notificationFailures > 0
@@ -564,7 +578,7 @@ export function AdminDashboard({ user }: { user: User }) {
           })}
         </nav>
         <div className="sidebar-footer">
-          <div className="avatar">พ</div><div><strong>คุณภา</strong><small>ADMIN</small></div>
+          <div className="avatar">พ</div><div><strong>คุณภา</strong><small>{adminRole ?? "—"}</small></div>
         </div>
       </aside>
 
@@ -647,13 +661,15 @@ export function AdminDashboard({ user }: { user: User }) {
             {!paymentOptions.eligible && paymentOptions.status !== "PAID" && <p className="api-gate">{paymentOptions.reason}</p>}
           </>}
         </section>}
+        {adminRole === "ADMIN" && ["COMPLETED", "RECORDED"].includes(selected.status) && <section className="booking-settlement-entry" aria-label={locale === "th" ? "สรุปรายได้และค่าหมอ" : "Service settlement"}><div><p className="eyebrow">SERVICE SETTLEMENT</p><h3>{locale === "th" ? "ค่าหมอ ทิป และส่วนร้าน" : "Therapist pay, tips & shop share"}</h3><p>{locale === "th" ? "ส่วนลดไม่ลดค่าหมอ และแก้ไขได้โดยมี Audit Trail" : "Promotions do not reduce therapist pay; revisions remain audited."}</p></div><button type="button" className="primary-compact-button" onClick={() => setSettlementBookingId(selected.bookingId)}>{locale === "th" ? "เปิดสรุปรายได้" : "Open settlement"}</button></section>}
         {selected.status === "PENDING" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button></div>}
         {selected.status === "CONFIRMED" && <div className="drawer-actions"><button className="confirm-button" disabled={!selected.therapistName || actionState === "submitting"} onClick={() => transitionBooking("start")}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button><button className="cancel-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="cancel-button" disabled={actionState === "submitting" || currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button></div>}
         {selected.status === "IN_SERVICE" && <div className="drawer-actions"><button className="confirm-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("complete")}>{locale === "th" ? "จบบริการ" : "Complete"}</button></div>}
         {selected.status === "RECORDED" && <div className="drawer-actions"><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{locale === "th" ? "ยกเลิกรายการย้อนหลัง" : "Cancel historical record"}</button></div>}
         {selected.status === "CONFIRMED" && !selected.therapistName && <p className="api-gate">{locale === "th" ? "ต้องมอบหมายหมอนวดให้ผู้รับบริการทุกคนก่อนเริ่มบริการ" : "Assign every guest before starting service."}</p>}
       </aside>}
-      {walkInOpen && <WalkInBookingDrawer user={user} locale={locale} onClose={() => setWalkInOpen(false)} onCreated={(bookingId, status) => { setWalkInOpen(false); setBookingRefresh((value) => value + 1); setSelectedId(bookingId); notify({ tone: "success", title: status === "RECORDED" ? (locale === "th" ? "บันทึกรายการย้อนหลังแล้ว" : "Historical record saved") : (locale === "th" ? "สร้างและยืนยัน Booking แล้ว" : "Booking created and confirmed"), message: bookingId }); }} />}
+      {walkInOpen && <WalkInBookingDrawer user={user} locale={locale} onClose={() => setWalkInOpen(false)} onCreated={(bookingId, status) => { setWalkInOpen(false); setBookingRefresh((value) => value + 1); setSelectedId(bookingId); if (status === "RECORDED" && adminRole === "ADMIN") setSettlementBookingId(bookingId); notify({ tone: "success", title: status === "RECORDED" ? (locale === "th" ? "บันทึกรายการย้อนหลังแล้ว" : "Historical record saved") : (locale === "th" ? "สร้างและยืนยัน Booking แล้ว" : "Booking created and confirmed"), message: bookingId }); }} />}
+      {settlementBookingId && <BookingSettlementDialog bookingId={settlementBookingId} locale={locale} user={user} onClose={() => setSettlementBookingId("")} onSaved={() => setBookingRefresh((value) => value + 1)} />}
     </div>
   );
 }

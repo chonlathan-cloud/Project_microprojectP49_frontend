@@ -4,11 +4,11 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Technical Design (TDD) |
-| Version | 1.6 |
+| Version | 1.7 |
 | Status | Approved technical baseline |
-| Last updated | 1 September 2026 |
-| Business baseline | [Business Logic v1.9](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.6](./HLD.md) |
+| Last updated | 2 September 2026 |
+| Business baseline | [Business Logic v2.0](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.7](./HLD.md) |
 | Initial branch scope | One branch, multi-branch-ready data ownership |
 | Runtime location | `asia-southeast1` |
 
@@ -301,8 +301,12 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | `GET` | `/api/v1/admin/coupons:search` | `ADMIN` or `STAFF`; exact code |
 | `POST` | `/api/v1/admin/coupons/{couponId}:redeem` | `ADMIN` or `STAFF`; Firestore transaction |
 | `POST` | `/api/v1/admin/coupons/{couponId}:void` | `ADMIN`; reason and Firestore transaction |
+| `GET/PUT` | `/api/v1/admin/bookings/{bookingId}/settlement` | `ADMIN`; read/versioned replace of therapist and shop allocation |
+| `GET` | `/api/v1/admin/analytics/overview` | `ADMIN`; date-range operational and financial summary |
 
 Exact request and response bodies are defined in the LLD and OpenAPI contract.
+
+Settlement writes use optimistic versioning and one Firestore transaction across `service_settlements`, the Booking settlement projection, and append-only audit evidence. Booking completion is intentionally independent: an unallocated Booking is valid operational state and appears in the Dashboard follow-up count. Analytics query Booking `branchId` plus local-date range and join bounded line-item and settlement snapshots server-side; no financial aggregation is trusted from the browser.
 
 ### 9.3 Integration and Internal API
 
@@ -394,6 +398,7 @@ Public Booking ID sequence contention is acceptable at the approved volume. The 
 | `customer_profile_merges` | Audited source-to-target reconciliation without plaintext health detail |
 | `resource_reservations` | Booking-to-resource allocation with bucket references |
 | `therapists` | Operational therapist data and active state |
+| `service_settlements` | Versioned ADMIN allocation of therapist pay, therapist tip, and shop remainder per completed/historical Booking |
 | `app_users` | Firebase UID, email, role, active state |
 | `app_user_invitations` | Invite-only email allowlist before first login |
 | `line_groups` | Registered Admin Group IDs and status; no channel secret |
@@ -906,7 +911,9 @@ Production LINE sandbox/test channels are used for pre-production integration; C
 | `BL-ADM-001`–`005` | Firebase roles, permission dependencies, separate verified group command boundary |
 | `BL-LINE-001`–`006` | Channel separation, explicit registered-Admin-Group health projection, masked customer/task/log projections, verified links, outbox/task worker, and LINE-Group-only operational alerts |
 | `BL-OPS-001`–`002` | Assignment condition and Admin-only operational commands |
-| `BL-PAY-001` | No payment endpoints, fields, or service |
+| `BL-PAY-001` | Payment repository/endpoint tests and Booking/Payment state separation |
+| `BL-FIN-001`–`004` | Settlement validation, ADMIN denial tests, optimistic versioning, and audit transaction tests |
+| `BL-ANL-001` | Analytics date-range, status exclusion, ranking, actual-time, and financial reconciliation tests |
 | `BL-PRI-001`–`003` | Profile/snapshot isolation, versioned consent receipts, explicit projections, and audited health operations |
 | `BL-CAT-001` | Versioned initial seed, `pricingMode`, `requiredPax`, and charge-once Booking line items |
 | `HLD-001`–`002` | Existing `the49-487609` project, named `spa-db` database, SPA-isolated resources, and Singapore region |

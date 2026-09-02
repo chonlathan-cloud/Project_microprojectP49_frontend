@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Low-Level Design (LLD) |
-| Version | 1.6 |
+| Version | 1.7 |
 | Status | Implementation baseline |
-| Last updated | 1 September 2026 |
-| Business baseline | [Business Logic v1.9](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.6](./HLD.md) |
-| Technical baseline | [TDD v1.6](./TDD.md) |
+| Last updated | 2 September 2026 |
+| Business baseline | [Business Logic v2.0](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.7](./HLD.md) |
+| Technical baseline | [TDD v1.7](./TDD.md) |
 
 ## 1. Purpose
 
@@ -847,6 +847,53 @@ The corresponding `bookings/{bookingDocId}` stores only the derived list index:
 
 Firestore applies branch/date/status equality filters and the descending index before pagination. Because Firestore does not provide case-insensitive substring search, `search` scans that ordered query in 100-document cursor batches and matches Booking ID, customer name, masked phone, or normalized E.164 phone until one page plus a look-ahead row is found. The API returns `items`, `nextPageToken`, `hasMore`, `pageSize`, and branch-wide aggregate counts for `PENDING` and confirmed/unassigned work. The Admin Web must not calculate those operational counts from the current page.
 
+### 6.14.2 Service Settlement and Analytics contract
+
+`service_settlements/{bookingDocId}` is the ADMIN-owned financial allocation projection for one eligible `COMPLETED` or `RECORDED` Booking:
+
+```json
+{
+  "bookingDocId": "internal-booking-id",
+  "bookingPublicId": "BK-...",
+  "branchId": "branch_001",
+  "serviceDate": "2026-09-02",
+  "sourceBookingVersion": 4,
+  "subtotalAmountSatang": 60000,
+  "discountAmountSatang": 2000,
+  "netServiceAmountSatang": 58000,
+  "sourceTipAmountSatang": 10000,
+  "therapistPaySatang": 40000,
+  "therapistTipSatang": 7000,
+  "shopServiceAmountSatang": 18000,
+  "shopTipSatang": 3000,
+  "shopTotalSatang": 21000,
+  "negativeShopServiceAmount": false,
+  "allocations": [
+    {
+      "participantId": "participant-id",
+      "serviceId": "service-id",
+      "variantId": "variant-id",
+      "therapistId": "therapist-id",
+      "therapistName": "snapshot name",
+      "therapistPaySatang": 40000,
+      "tipShareSatang": 7000
+    }
+  ],
+  "state": "ALLOCATED",
+  "version": 1,
+  "createdBy": "firebase-uid",
+  "createdAt": "timestamp",
+  "updatedBy": "firebase-uid",
+  "updatedAt": "timestamp"
+}
+```
+
+`PUT /api/v1/admin/bookings/{bookingId}/settlement` requires `expectedVersion` and exactly one allocation per Booking Participant. Amounts are non-negative whole-baht satang values. Positive therapist pay or tip requires a valid therapist; therapist tip shares cannot exceed the Booking tip. The service share is `netServiceAmountSatang - therapistPaySatang`; a negative result is persisted with an exception flag rather than rejected. Every write appends `SERVICE_SETTLEMENT_RECORDED` audit evidence and updates only the Booking settlement projection fields, not the Booking lifecycle version.
+
+When a successful Payment changes `tipAmountSatang`, the Payment transaction also updates Booking `tipAmountSatang` and `grossAmountSatang`. A Settlement whose `sourceTipAmountSatang` no longer matches is stale, is excluded from allocated totals, and is surfaced for reallocation.
+
+`GET /api/v1/admin/analytics/overview?dateFrom=YYYY-MM-DD&dateTo=YYYY-MM-DD&branchId=...` accepts at most 366 inclusive local dates. It includes non-cancelled `COMPLETED` and `RECORDED` records, reads immutable Booking line snapshots for service rankings, uses verified `PAID` projection for collected cash, and uses valid Settlement snapshots for therapist/shop totals. `serviceStartedAt` is set on transition to `IN_SERVICE` and `serviceCompletedAt` on transition to `COMPLETED`; old records without those timestamps remain absent from actual-hour analytics.
+
 ### 6.15 Guard and Idempotency Documents
 
 `phone_booking_guards/{branchId_phoneKey}`:
@@ -1447,7 +1494,7 @@ Firebase authentication state is held by the Firebase SDK. The API client obtain
 Route access:
 
 - Any active role: booking, calendar, service, capacity, therapist, notification operational pages
-- `ADMIN` only: users, roles, security, LINE groups, global audit
+- `ADMIN` only: financial Dashboard, service settlement, users, roles, security, LINE groups, global audit
 
 Admin mutation forms always send `expectedVersion` and surface `RESOURCE_VERSION_CONFLICT` by reloading current data before allowing another save.
 
@@ -1708,7 +1755,9 @@ The last-capacity test launches at least 20 concurrent create attempts against o
 | `BL-ADM-004`–`005` | Permission matrix and separate group-principal tests |
 | `BL-LINE-001`–`006` | Template privacy, linking, outbox, provider failure, and LINE-only operational alert tests |
 | `BL-OPS-001`–`002` | Assignment gate and absence of customer mutation endpoints |
-| `BL-PAY-001` | Contract assertion that no payment fields/endpoints exist |
+| `BL-PAY-001` | Payment contract and Booking/Payment state separation tests |
+| `BL-FIN-001`–`004` | Settlement amount invariants, role denial, stale version, tip reallocation, and negative-shop warning tests |
+| `BL-ANL-001` | Analytics inclusion/ranking/date-boundary and scheduled-vs-actual-hour tests |
 | `BL-PRI-001`–`003` | Projection, profile/snapshot, consent, merge, withdrawal, retention, log, task, and rules security tests |
 | `BL-CAT-001` | Seed inventory, stable IDs, pricing mode, required-pax, and charge-once tests |
 

@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | High-Level Design (HLD) |
-| Version | 1.6 |
+| Version | 1.7 |
 | Status | Approved architecture baseline |
-| Last updated | 1 September 2026 |
+| Last updated | 2 September 2026 |
 | Initial branch scope | One branch |
 | Timezone / currency | Asia/Bangkok / THB |
-| Business baseline | [Business Logic v1.9](./BusinessLogic.md) |
+| Business baseline | [Business Logic v2.0](./BusinessLogic.md) |
 
 ## 1. Purpose
 
@@ -43,18 +43,18 @@ This HLD intentionally does not define exact API payloads, Firestore document sc
 - Approval from a registered LINE Admin Group
 - Customer LINE acknowledgements and status messages when LINE is linked
 - Secure status tracking for Website Guests
-- Pay-at-store workflow with no online payment
+- Post-service Beam or Admin-recorded cash payment with a separate Payment lifecycle
+- ADMIN-only therapist/shop revenue and tip allocation plus operational analytics
 - Health-detail delivery to the access-controlled registered Admin LINE Group, while retaining masking in Customer LINE and customer status views
 - Persistent customer health profiles with immutable visit-time snapshots and versioned consent evidence
 - Audit trails, operational monitoring, backup, and recovery
 
 ### 3.2 Out of Scope
 
-- Online payment, payment reconciliation, or receipt issuance
 - Customer-selected therapists
 - Customer self-service reschedule or cancellation
-- Membership, visit rewards, birthday vouchers, CRM campaigns, and advanced analytics
-- Therapist commission calculations
+- Membership, visit rewards, birthday vouchers, and CRM campaigns
+- Formula-driven payroll, tax withholding, and automatic therapist commission calculation
 - BigQuery or an analytics warehouse
 - Multi-branch operations in Phase 1
 - SMS or email notifications
@@ -185,10 +185,13 @@ Responsibilities:
 - Display health details only to authorized `ADMIN` or `STAFF` users
 - Restrict user, role, and security configuration screens to `ADMIN`
 - Display notification failures, audit context, and integration health
+- Show the ADMIN-only financial Dashboard and allow fixed per-participant therapist pay/tip allocation for completed and historical records
 
 The Admin Web may hide actions by role for usability, but the SPA API remains the authoritative authorization layer.
 
 An Admin-entered discount is a Booking-level financial adjustment. Coupon search/redeem remains a separate transactional domain; a discount reason may reference a coupon campaign but cannot mutate coupon lifecycle state by itself. Payment and accounting projections consume the immutable net total while preserving the original service-line subtotal and discount evidence.
+
+Therapist compensation is a separate, versioned settlement projection keyed by Booking. The Admin-entered amount is not derived from the discounted customer total: discounts remain the shop's promotion. Tip shares may be distributed across the selected therapists and the remainder belongs to the shop. A negative shop service share is allowed only as an explicit, audited Admin decision and is highlighted as an exception. Missing settlement never blocks service completion; it becomes an operational follow-up on the Dashboard.
 
 ### 7.3 SPA API
 
@@ -710,7 +713,9 @@ The baseline is RPO 24 hours and RTO 4 hours. A future requirement for lower RPO
 | `BL-LINE-005` | Optional post-booking LINE account linking |
 | `BL-LINE-006` | Operational alert renderer targets only the registered LINE Admin Group |
 | `BL-OPS-001`–`BL-OPS-002` | Admin assignment before service; no customer self-service changes |
-| `BL-PAY-001` | No payment component or online payment state in Phase 1 |
+| `BL-PAY-001` | Booking and Payment state separation with verified Beam/Admin-cash evidence |
+| `BL-FIN-001`–`BL-FIN-004` | ADMIN-only versioned settlement projection and audit, with manual participant allocation |
+| `BL-ANL-001` | Date-range Admin analytics over completed and active historical financial records |
 | `BL-PRI-001`–`BL-PRI-003` | API privacy projections, profile/snapshot separation, versioned explicit consent, masked external views, and authorized health access |
 | `BL-CAT-001` | Versioned initial service seed with line-item pricing mode and required-pax constraints |
 

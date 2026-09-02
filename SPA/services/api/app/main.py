@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.v1.accounting import router as accounting_router
+from app.api.v1.analytics import router as analytics_router
 from app.api.v1.bookings import router as bookings_router
 from app.api.v1.campaign_admin import router as campaign_admin_router
 from app.api.v1.campaigns import router as campaigns_router
@@ -37,6 +38,7 @@ app.include_router(payment_public_router)
 app.include_router(payment_admin_router)
 app.include_router(payment_webhook_router)
 app.include_router(accounting_router)
+app.include_router(analytics_router)
 app.include_router(cash_deposit_router)
 app.add_middleware(
     CORSMiddleware,

@@ -78,12 +78,19 @@
 ---
 
 ## 7. Screen 6: Store Dashboard & Analytics
-- **Top Row (4 Horizontal KPI Metrics Cards):**
-  1. `Today's Bookings`: Count & breakdown (`Completed`, `Upcoming`, `Cancelled`).
-  2. `Estimated Revenue`: Today's Total (`฿`).
-  3. `Weekly Revenue`: Current Week Total (`฿`).
-  4. `Active Therapists`: On-duty count vs total staff.
-- **Main Analytics Grid (2-Column Charts):**
-  - **Left Panel (Peak Hours Bar Chart):** Visualizes popular booking time slots throughout the day.
-  - **Right Panel (Top Services Donut Chart):** Distribution of top-selling treatment courses.
-- **Time Range Filter Pill Bar:** Top right filter (`Daily`, `Weekly`, `Monthly`).
+- **Access:** `ADMIN` only. `STAFF` does not see the navigation item and the API independently returns `403`.
+- **Date Range Header:** Explicit start/end local dates with an Apply action; default is the latest 30 days.
+- **Financial Summary Strip:** Net service revenue after shop discount, verified collected payment, historical-record gross, outstanding payment, therapist pay/tip, and allocated shop share. These values are labelled separately and never collapsed into one ambiguous revenue number.
+- **Attention State:** Highlights completed/historical Bookings still awaiting allocation, stale tip allocations, and negative shop service shares.
+- **Revenue Trend:** Daily service revenue and tip bars for the chosen range.
+- **Top Services Table:** Ranked by participant count, sessions, duration variant, gross price, allocated discount, and net service revenue.
+- **Peak Hours:** Separate scheduled-start and actual-service-start bars. Historical rows without an actual start timestamp are omitted from the actual series rather than inferred.
+- **Therapist Performance Table:** Sessions, service minutes, fixed Admin-entered therapist pay, and therapist tip share. It is an operational allocation report, not an automated payroll engine.
+
+## 8. Completed/Historical Booking Financial Allocation
+
+- Finishing an active Booking or creating a `RECORDED` history row may open a centered `ADMIN` settlement dialog; Admin may close it and return later without blocking service completion.
+- Each participant row shows the immutable service snapshot and accepts therapist, fixed therapist pay in whole THB, and therapist tip share. Two-person Packages retain independent rows and values.
+- The footer continuously reconciles customer net service amount, total therapist pay, shop service remainder, received tip, therapist tip, and shop tip remainder.
+- Shop promotion discount never reduces the entered therapist pay automatically. A negative shop service remainder remains saveable but requires a prominent warning and final confirmation.
+- Saving is version-checked, audited, and available again from Booking detail for correction. If a later Payment changes the received tip, the UI requires tip reallocation.

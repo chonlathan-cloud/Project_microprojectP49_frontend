@@ -4,9 +4,9 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Business Logic |
-| Version | 1.9 |
+| Version | 2.0 |
 | Status | Approved business baseline |
-| Last updated | 1 กันยายน 2026 |
+| Last updated | 2 กันยายน 2026 |
 | Initial branch scope | 1 สาขา |
 | Timezone / Currency | Asia/Bangkok / THB |
 
@@ -84,7 +84,7 @@ Google Stitch ที่อนุญาตให้ใช้อ้างอิง
 - กรอกชื่อเล่นและ Health Declaration แยกตามผู้รับบริการ พร้อมเบอร์โทรศัพท์ของผู้ติดต่อหลัก
 - Health Declaration เป็นคำถามบังคับ แต่ลูกค้าเลือก “ไม่มีข้อมูลสุขภาพที่ต้องแจ้ง” ได้ หากเลือกว่ามีจึงกรอกรายละเอียดที่จำเป็น
 - แสดงสรุปรายการและราคาประเมินก่อนส่งคำขอ
-- ชำระเงินที่ร้าน ไม่มี Online Payment
+- ชำระหลังให้บริการผ่านช่องทาง Beam ที่ร้านเปิดใช้ หรือให้ Admin บันทึกรับเงินสด โดยสถานะชำระเงินแยกจากสถานะ Booking
 - ลูกค้าเลือกหมอนวดไม่ได้
 - ลูกค้าไม่มี Self-service Reschedule หรือ Cancel ใน Phase 1
 - หากต้องการเปลี่ยนแปลงหรือยกเลิก ลูกค้าต้องติดต่อร้านผ่าน LINE หรือโทรศัพท์
@@ -124,7 +124,7 @@ Google Stitch ที่อนุญาตให้ใช้อ้างอิง
 - ทั้ง `ADMIN` และ `STAFF` ที่เข้าสู่ระบบ Admin Web สามารถ Confirm หรือ Cancel Booking ตามกฎสถานะได้
 - ทุกการเปลี่ยนแปลงสิทธิ์และทุกการดำเนินการสำคัญต้องมี Audit Trail
 
-Analytics, loyalty, birthday automation, therapist commission และ CRM campaign ไม่อยู่ใน Phase 1
+Loyalty, birthday automation, formula-driven payroll และ CRM campaign ไม่อยู่ใน Phase 1; Dashboard และการจัดสรรค่าหมอ/ทิปแบบ Admin กรอกเองอยู่ในขอบเขตตามหัวข้อ 19.2
 
 ## 6. Branch และ Operating Configuration
 
@@ -482,9 +482,9 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 - ยอดสุทธิของ Booking เท่ากับ `subtotalAmountSatang - discountAmountSatang`; ระบบต้องเก็บ Price Snapshot เดิมไว้ ไม่แก้ราคาต้นฉบับของ Service line
 - Admin สามารถบันทึกผลของ Coupon เป็นส่วนลด Booking พร้อมเหตุผล เช่น `คูปองสมัครครั้งแรก`; การค้นหาและ Redeem coupon code จริงยังเป็น transaction แยก และข้อความเหตุผลเพียงอย่างเดียวต้องไม่เปลี่ยนสถานะ Coupon
 - การให้ส่วนลดต้องเก็บผู้ดำเนินการ เวลา เหตุผล ราคาปกติ ส่วนลด และยอดสุทธิใน Audit Trail
-- ไม่มี Online Payment และไม่มีสถานะ `PAID` ใน Phase 1
-- ลูกค้าชำระที่ร้าน
-- วิธีชำระจริงและการออกใบเสร็จอยู่นอก Scope ของ Phase 1 Booking
+- Booking Status และ Payment Status เป็นคนละ state machine; ห้ามเปลี่ยน Booking เป็น `PAID`
+- ยอดรับเงินจริงเกิดจาก Beam ที่ตรวจสอบกับ Provider แล้ว หรือการบันทึกรับเงินสดแบบ idempotent โดย Admin
+- ทิปต้องเก็บแยกจากค่าบริการ และ Payment ที่เปลี่ยนทิปต้องสะท้อนยอด Tip/Gross ล่าสุดกลับไปที่ Booking เพื่อใช้ตรวจ Settlement
 - นโยบาย VAT และข้อความทางภาษีต้องได้รับการยืนยันก่อน Production ไม่ใช้ข้อความตัวอย่างใน Stitch เป็นข้อสรุป
 
 ## 17. Admin Change Rules
@@ -540,7 +540,12 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 | BL-LINE-006 | Phase 1 ส่ง Operational Alert ออกไปที่ LINE Admin Group ที่ลงทะเบียนไว้เท่านั้น; ไม่มี Email, SMS หรือ Alert Destination อื่น |
 | BL-OPS-001 | Booking Confirm ได้ก่อนมอบหมายหมอนวด แต่เริ่มบริการไม่ได้จนกว่าจะมอบหมายครบ |
 | BL-OPS-002 | ลูกค้าเปลี่ยนหรือยกเลิกด้วยตนเองไม่ได้ใน Phase 1 และต้องติดต่อร้าน |
-| BL-PAY-001 | ไม่มี Online Payment และลูกค้าชำระที่ร้าน |
+| BL-PAY-001 | สถานะการให้บริการและสถานะการชำระเงินต้องแยกจากกัน โดยยอดรับเงินจริงยืนยันจาก Beam หรือการบันทึกรับเงินสดโดย Admin เท่านั้น |
+| BL-FIN-001 | เฉพาะ `ADMIN` บันทึกหรือแก้ไขการแบ่งค่าหมอและทิปได้ และทุกครั้งต้องมี Audit Trail |
+| BL-FIN-002 | ค่าหมอกำหนดเป็นจำนวนเงินบาทต่อผู้รับบริการและต่อหมอนวดได้อย่างอิสระ ส่วนลดเป็น Promotion ของร้านและไม่ลดฐานค่าหมออัตโนมัติ |
+| BL-FIN-003 | ทิปแบ่งให้หมอนวดหลายคนได้ ยอดที่เหลือเป็นของร้าน และผลรวมส่วนแบ่งหมอนวดต้องไม่เกินทิปที่รับจริง |
+| BL-FIN-004 | Package สองคนบันทึกค่าหมอแยกตามผู้รับบริการได้โดย Admin ไม่ใช้สูตรตายตัว |
+| BL-ANL-001 | Dashboard ใช้เฉพาะ `COMPLETED` และ `RECORDED` ที่ไม่ถูกยกเลิก แสดงรายได้ บริการยอดนิยม ช่วงเวลานัด/ให้บริการจริง และผลงานหมอนวดตามช่วงวันที่ |
 | BL-PRI-001 | รายละเอียดสุขภาพเปิดดูได้เฉพาะใน Admin System ที่มีสิทธิ์และ Registered Admin LINE Group ที่ควบคุมสมาชิกตามหน้าที่งาน พร้อม Audit การเปิดเผยโดยไม่บันทึกรายละเอียดซ้ำ |
 | BL-PRI-002 | Health Profile ใช้ข้าม Visit ได้ แต่ทุก Booking ต้องมี Health Snapshot และการแก้ไข/merge ต้อง Audit |
 | BL-PRI-003 | Booking acknowledgement และ Explicit Health Consent ต้องแยก checkbox, ไม่ pre-check และเก็บหลักฐานแบบ versioned ต่อ Participant |
@@ -555,6 +560,17 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 - รอบนี้เป็น Read-only; ลูกค้ายังไม่สามารถ Reschedule หรือ Cancel เองและต้องติดต่อร้าน
 - `/status` ยังคงเป็น Bearer Link สำหรับ Booking เดียวและไม่เปลี่ยนเป็นหน้าบัญชีลูกค้า
 
+### 19.2 Admin Financial Allocation และ Dashboard
+
+- หลัง Booking เป็น `COMPLETED` หรือ `RECORDED` เฉพาะ `ADMIN` เปิดหน้าต่างแบ่งรายได้ได้ การไม่กรอกทันทีไม่ขวางการจบบริการ แต่ Dashboard ต้องนับเป็นรายการรอจัดสรร
+- Admin กรอกค่าหมอเป็นเงินบาทเต็มจำนวนแยกตาม Participant หมอนวดหนึ่งคนรับหลาย Participant ได้ และ Package สองคนเลือกหมอนวด/จำนวนเงินต่างกันได้
+- ส่วนลดลดเฉพาะรายได้สุทธิของร้าน ไม่เปลี่ยนค่าหมอที่ Admin กรอก ระบบแสดงคำเตือนเมื่อค่าหมอรวมสูงกว่ารายได้ค่าบริการสุทธิ แต่อนุญาตให้บันทึกพร้อม Audit ได้
+- ทิปที่รับจริงแบ่งให้หมอนวดแต่ละคนได้ ยอดคงเหลือเป็นของร้านโดยอัตโนมัติ ผลรวมส่วนแบ่งหมอนวดต้องไม่เกินยอดทิป
+- เมื่อยอดทิปจาก Payment เปลี่ยนหลังเคยแบ่ง ระบบทำเครื่องหมายให้จัดสรรทิปใหม่ และไม่นำ Settlement เก่าที่ไม่ตรงยอดมาสรุป
+- `RECORDED` ใช้กฎเดียวกัน แม้ไม่มี Therapist Assignment เดิม Admin สามารถเลือกหมอนวดภายหลังได้ การยกเลิกย้อนหลังต้องตัดออกจาก Dashboard
+- Dashboard เรียงข้อมูลตามช่วงวันที่และแยกยอดบริการ, ทิป, เงินรับจริงที่ตรวจสอบแล้ว, ยอดค้างชำระ, ค่าหมอ, ส่วนทิปหมอ และส่วนของร้านอย่างชัดเจน
+- ชั่วโมงยอดนิยมแสดงทั้งเวลานัดและเวลาเริ่มบริการจริง โดยข้อมูลเก่าที่ไม่เคยเก็บเวลาเริ่มจริงต้องไม่ถูกสมมติขึ้น
+
 ## 20. Phase 2 — CRM & Membership
 
 รายการต่อไปนี้ถูกวางแผนไว้แต่ไม่เปิดใช้ใน Phase 1:
@@ -567,9 +583,6 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 - Customer Directory และ Visit History เชิง CRM
 - Loyalty Tier และ Campaign
 - Customer Self-service Reschedule และ Cancel (My Bookings แบบ Read-only เปิดใช้ใน Phase 1.5 แล้ว)
-- Online Payment
-- Analytics ขั้นสูง
-- Therapist commission reporting
 
 รายละเอียด Phase 2 ต้องมี Business Logic และการอนุมัติแยกก่อนพัฒนา
 

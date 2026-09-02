@@ -764,6 +764,15 @@ class FirestorePaymentRepository:
                     "updatedAt": now,
                 },
             )
+            transaction.update(
+                booking_snapshot.reference,
+                {
+                    "tipAmountSatang": payment.amounts.tip_amount_satang,
+                    "grossAmountSatang": payment.amounts.gross_amount_satang,
+                    "amountDueSatang": payment.amounts.gross_amount_satang,
+                    "paymentUpdatedAt": now,
+                },
+            )
             transaction.create(
                 self._client.collection("payment_status_tokens").document(
                     _status_token_id(status_token)
@@ -1212,6 +1221,8 @@ class FirestorePaymentRepository:
                     booking_ref,
                     {
                         "paymentStatus": PaymentStatus.PAID,
+                        "tipAmountSatang": paid.amounts.tip_amount_satang,
+                        "grossAmountSatang": paid.amounts.gross_amount_satang,
                         "amountDueSatang": 0,
                         "paidAmountSatang": paid.amounts.gross_amount_satang,
                         "paymentUpdatedAt": now,
@@ -1463,6 +1474,8 @@ class FirestorePaymentRepository:
                 booking_snapshot.reference,
                 {
                     "paymentStatus": PaymentStatus.PAID,
+                    "tipAmountSatang": paid.amounts.tip_amount_satang,
+                    "grossAmountSatang": paid.amounts.gross_amount_satang,
                     "amountDueSatang": 0,
                     "paidAmountSatang": paid.amounts.gross_amount_satang,
                     "paymentUpdatedAt": now,

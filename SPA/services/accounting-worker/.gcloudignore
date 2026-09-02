@@ -1,11 +1,8 @@
-.gcloudignore
-.git
-.venv
-__pycache__
-.pytest_cache
-.ruff_cache
-tests
-*.pyc
 .env
 .env-*
-!.env.example
+.git
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+tests

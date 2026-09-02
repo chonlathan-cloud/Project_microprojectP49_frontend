@@ -754,6 +754,10 @@ async def transition_admin_booking(
             "version": next_version,
             "updatedAt": now,
         }
+        if target is BookingStatus.IN_SERVICE:
+            update["serviceStartedAt"] = now
+        if target is BookingStatus.COMPLETED:
+            update["serviceCompletedAt"] = now
         if target is BookingStatus.CANCELLED:
             update["cancellation"] = {
                 "reason": request.reason,
