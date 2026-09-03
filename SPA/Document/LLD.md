@@ -919,6 +919,23 @@ Settlement validity compares `sourceBookingVersion`, discount/net snapshots, and
 
 `PUT /api/v1/admin/bookings/{bookingId}/settlement` requires `expectedVersion` and exactly one allocation per Booking Participant. Amounts are non-negative whole-baht satang values. Positive therapist pay or tip requires a valid therapist; therapist tip shares cannot exceed the Booking tip. The service share is `netServiceAmountSatang - therapistPaySatang`; a negative result is persisted with an exception flag rather than rejected. Every write appends `SERVICE_SETTLEMENT_RECORDED` audit evidence and updates only the Booking settlement projection fields, not the Booking lifecycle version.
 
+### Therapist compensation ledger and payout
+
+`GET /api/v1/admin/therapist-compensation` is `ADMIN`-only and accepts `dateFrom`, `dateTo`, and `branchId`. The inclusive local-date range is limited to 93 days. It joins active/inactive therapist records, effective guarantee rates, attendance, service settlements, shop adjustments, and payouts on the server. The response contains therapist summaries, daily rows, source-tagged ledger entries, payout history, and totals; the browser must not recompute authoritative outstanding amounts.
+
+Daily compensation is calculated as:
+
+```text
+servicePay = sum(valid service settlement allocations for therapist/day)
+guaranteeTopUp = present ? max(0, guaranteeRateSnapshot - servicePay) : 0
+totalEarned = servicePay + therapistTip + guaranteeTopUp + signedShopAdjustments
+outstanding = totalEarned - payoutDailyAllocations
+```
+
+Tips never reduce the guarantee top-up. `PUT /therapist-compensation/attendance/{therapistId}/{localDate}` uses optimistic versioning and snapshots the latest guarantee rate whose `effectiveFrom` is not after the attendance date. `PATCH /therapists/{therapistId}/compensation-profile` appends an effective-dated rate and rejects changes that would overlap an already-paid period.
+
+Shop bonuses/corrections use append-oriented `therapist_compensation_adjustments`. Before payout they may be version-edited with a reason; after payout the source entry is immutable and a new signed adjustment must be created. `POST /therapist-compensation/payouts` uses `commandId` idempotency, calculates the full current outstanding balance in a transaction, and persists `dailyAllocations[]` inside the append-only payout. The daily split makes paid/outstanding results stable when later queried through overlapping or single-day filters. Every profile, attendance, adjustment, and payout mutation appends an ADMIN actor audit event.
+
 When a successful Payment changes `tipAmountSatang`, the Payment transaction also updates Booking `tipAmountSatang` and `grossAmountSatang`. A Settlement whose `sourceTipAmountSatang` no longer matches is stale, is excluded from allocated totals, and is surfaced for reallocation.
 
 `GET /api/v1/admin/analytics/overview?dateFrom=YYYY-MM-DD&dateTo=YYYY-MM-DD&branchId=...` accepts at most 366 inclusive local dates. It includes non-cancelled `COMPLETED` and `RECORDED` records, reads immutable Booking line snapshots for service rankings, uses verified `PAID` projection for collected cash, and uses valid Settlement snapshots for therapist/shop totals. `serviceStartedAt` is set on transition to `IN_SERVICE` and `serviceCompletedAt` on transition to `COMPLETED`; old records without those timestamps remain absent from actual-hour analytics.

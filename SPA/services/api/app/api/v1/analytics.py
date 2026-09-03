@@ -55,6 +55,7 @@ class SettlementAllocationInput(ApiModel):
 class SettlementInput(ApiModel):
     expected_version: int = Field(ge=0)
     allocations: list[SettlementAllocationInput] = Field(min_length=1, max_length=50)
+    correction_reason: str | None = Field(default=None, min_length=1, max_length=300)
 
 
 class InsightExportInput(ApiModel):
@@ -79,6 +80,25 @@ class InsightExportInput(ApiModel):
 def _require_admin(actor: dict[str, object]) -> None:
     if actor.get("role") != "ADMIN":
         raise HTTPException(status_code=403, detail="ADMIN role is required")
+
+
+def _payout_covers_service_date(
+    payout: dict[str, object], *, therapist_ids: set[str], service_date: str
+) -> bool:
+    if str(payout.get("therapistId") or "") not in therapist_ids:
+        return False
+    daily_allocations = payout.get("dailyAllocations")
+    if isinstance(daily_allocations, list):
+        return any(
+            isinstance(item, dict)
+            and item.get("localDate") == service_date
+            and int(item.get("amountSatang", 0)) != 0
+            for item in daily_allocations
+        )
+    return (
+        str(payout.get("dateFrom") or "") <= service_date
+        and str(payout.get("dateTo") or "") >= service_date
+    )
 
 
 def _booking_snapshot(
@@ -388,6 +408,30 @@ def save_booking_settlement(
             therapist_id: str((snapshot.to_dict() or {}).get("displayName", therapist_id))
             for therapist_id, snapshot in therapist_snapshots.items()
         }
+        service_date = str(current_booking.get("localDate") or "")
+        paid_therapist_ids = {
+            str(item.get("therapistId"))
+            for item in current_settlement.get("allocations") or []
+            if isinstance(item, dict) and item.get("therapistId")
+        } | {item.therapist_id for item in allocation_inputs if item.therapist_id}
+        payout_snapshots = list(
+            client.collection("therapist_payouts")
+            .where(
+                "branchId", "==", current_booking.get("branchId", "branch_001")
+            )
+            .stream(transaction=tx)
+        )
+        if service_date and any(
+            _payout_covers_service_date(
+                snapshot.to_dict() or {},
+                therapist_ids=paid_therapist_ids,
+                service_date=service_date,
+            )
+            for snapshot in payout_snapshots
+        ):
+            raise ConflictDomainError(
+                "Paid therapist compensation cannot be overwritten; create an adjustment"
+            )
         net_service_amount = int(current_booking.get("estimatedAmountSatang", 0))
         tip_amount = int(current_booking.get("tipAmountSatang", 0))
         totals = calculate_settlement_totals(
@@ -468,6 +512,7 @@ def save_booking_settlement(
                 "netServiceAmountSatang": totals.net_service_amount_satang,
                 "sourceTipAmountSatang": totals.source_tip_amount_satang,
                 "therapistPaySatang": totals.therapist_pay_satang,
+                "correctionReason": request.correction_reason,
                 "therapistTipSatang": totals.therapist_tip_satang,
                 "shopServiceAmountSatang": totals.shop_service_amount_satang,
                 "shopTipSatang": totals.shop_tip_satang,

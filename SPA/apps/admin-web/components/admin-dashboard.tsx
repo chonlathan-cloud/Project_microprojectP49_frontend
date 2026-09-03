@@ -1017,7 +1017,7 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
               </div>
             </nav>
           </section>
-        </main> : <AdminModulePage view={activeView} locale={locale} user={user} bookings={bookings} notificationFilter={notificationFilter} onNotificationFilterChange={setNotificationFilter} onNotificationCountChange={setNotificationFailures} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} onSelectBooking={(bookingId) => { setSelectedId(bookingId); setHealthDetails(null); }} onOpenWalkIn={() => { setSelectedId(""); setWalkInOpen(true); }} />}
+        </main> : <AdminModulePage view={activeView} locale={locale} user={user} role={adminRole} bookings={bookings} notificationFilter={notificationFilter} onNotificationFilterChange={setNotificationFilter} onNotificationCountChange={setNotificationFailures} onBookingsChanged={() => setBookingRefresh((value) => value + 1)} onSelectBooking={(bookingId) => { setSelectedId(bookingId); setHealthDetails(null); }} onOpenWalkIn={() => { setSelectedId(""); setWalkInOpen(true); }} />}
       </div>
 
       {selected && !settlementBookingId && <div className="modal-backdrop booking-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && assignmentState !== "saving") { setSelectedId(""); setHealthDetails(null); } }}>

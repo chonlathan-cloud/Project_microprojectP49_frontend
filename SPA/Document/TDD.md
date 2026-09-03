@@ -304,6 +304,11 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | `POST` | `/api/v1/admin/coupons/{couponId}:redeem` | `ADMIN` or `STAFF`; Firestore transaction |
 | `POST` | `/api/v1/admin/coupons/{couponId}:void` | `ADMIN`; reason and Firestore transaction |
 | `GET/PUT` | `/api/v1/admin/bookings/{bookingId}/settlement` | `ADMIN`; read/versioned replace of therapist and shop allocation |
+| `GET` | `/api/v1/admin/therapist-compensation` | `ADMIN`; bounded date-range summary, source ledger, attendance, payout status |
+| `PUT` | `/api/v1/admin/therapist-compensation/attendance/{therapistId}/{localDate}` | `ADMIN`; versioned attendance and effective guarantee snapshot |
+| `POST/PATCH` | `/api/v1/admin/therapist-compensation/adjustments[/{adjustmentId}]` | `ADMIN`; signed shop entry with reason; paid entries are immutable |
+| `POST` | `/api/v1/admin/therapist-compensation/payouts` | `ADMIN`; idempotent full-outstanding payout with daily allocation |
+| `PATCH` | `/api/v1/admin/therapists/{therapistId}/compensation-profile` | `ADMIN`; effective-dated guarantee rate and audit |
 | `GET` | `/api/v1/admin/analytics/overview` | `ADMIN`; date-range operational and financial summary |
 | `GET` | `/api/v1/admin/analytics/insight` | `ADMIN`; filtered and paginated Revenue/Service/Therapist/Booking detail |
 | `POST` | `/api/v1/admin/analytics/insight:export` | `ADMIN`; audited UTF-8 CSV for the selected Insight view and filters |
@@ -403,6 +408,10 @@ Public Booking ID sequence contention is acceptable at the approved volume. The 
 | `resource_reservations` | Booking-to-resource allocation with bucket references |
 | `therapists` | Operational therapist data and active state |
 | `service_settlements` | Versioned ADMIN allocation of therapist pay, therapist tip, and shop remainder per completed/historical Booking |
+| `therapist_guarantee_rates` | Effective-dated ADMIN configuration of daily hand-guarantee rate |
+| `therapist_attendance` | Versioned daily presence record with the guarantee-rate snapshot used for that day |
+| `therapist_compensation_adjustments` | Signed shop-funded bonus/correction entries with reason and immutable paid history |
+| `therapist_payouts` | Append-only payout evidence for one therapist and period, including per-day amount allocation |
 | `app_users` | Firebase UID, email, role, active state |
 | `app_user_invitations` | Invite-only email allowlist before first login |
 | `line_groups` | Registered Admin Group IDs and status; no channel secret |

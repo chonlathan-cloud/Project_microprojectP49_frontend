@@ -917,6 +917,51 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .insight-pagination > div { display: flex; gap: 7px; }
 .insight-pagination button { min-height: 36px; padding: 0 11px; border: 1px solid #c7cdc3; border-radius: 7px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 10px; font-weight: 800; }
 .insight-pagination button:disabled { cursor: not-allowed; opacity: .45; }
+.therapist-tablist { margin-bottom: 16px; display: flex; gap: 4px; border-bottom: 1px solid #cfd4cc; }
+.therapist-tablist button { min-height: 44px; padding: 0 18px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; font-weight: 800; }
+.therapist-tablist button[aria-selected="true"] { border-bottom-color: var(--forest); color: var(--forest-dark); }
+.compensation-panel { position: relative; }
+.compensation-toolbar { min-height: 62px; padding: 10px 16px; display: flex; align-items: end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: #fbfcfa; }
+.compensation-toolbar > div, .compensation-ledger-filters { display: flex; align-items: end; gap: 10px; }
+.compensation-toolbar label, .compensation-ledger-filters label, .compensation-editor-body label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 800; }
+.compensation-toolbar input, .compensation-ledger-filters select, .compensation-editor-body input, .compensation-editor-body select, .compensation-editor-body textarea { min-height: 40px; padding: 8px 10px; border: 1px solid #aeb6aa; border-radius: 8px; background: white; color: var(--text); font: inherit; }
+.compensation-toolbar button, .table-action, .compensation-row-actions button { min-height: 38px; padding: 0 11px; border: 1px solid #aeb6aa; border-radius: 7px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.compensation-summary-strip { margin: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+.compensation-summary-strip > div { padding: 13px 16px; border-right: 1px solid var(--line); }
+.compensation-summary-strip > div:last-child { border-right: 0; }
+.compensation-summary-strip dt, .compensation-summary-strip dd { margin: 0; }
+.compensation-summary-strip dt { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+.compensation-summary-strip dd { margin-top: 4px; color: var(--forest-dark); font-size: 18px; font-weight: 900; }
+.compensation-summary-strip .outstanding { background: #fffaf0; }
+.compensation-summary-strip .outstanding dd { color: #805513; }
+.compensation-summary-table { min-width: 1320px; }
+.compensation-ledger-table { min-width: 1080px; }
+.compensation-profile-table { min-width: 760px; }
+.attendance-switch { min-height: 34px; padding: 0 9px; border: 1px solid #cfd4cc; border-radius: 999px; background: white; color: var(--muted); cursor: pointer; font-size: 10px; font-weight: 800; }
+.attendance-switch.active { border-color: #79b98d; background: #e3f5e8; color: #166534; }
+.compensation-source { width: max-content; padding: 4px 8px; display: inline-flex; border: 1px solid; border-radius: 999px; font-size: 10px; font-weight: 800; }
+.compensation-source.service { border-color: #8bb196; background: #edf7ef; color: #166534; }
+.compensation-source.shop { border-color: #d5b678; background: #fff8e8; color: #6f5224; }
+.negative-amount { color: #9f1717; font-weight: 800; }
+.compensation-row-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.compensation-row-actions button.primary { border-color: var(--forest); background: var(--forest); color: white; }
+.compensation-row-actions button:disabled, .table-action:disabled, .compensation-toolbar button:disabled, .attendance-switch:disabled { cursor: not-allowed; opacity: .5; }
+.compensation-ledger-filters { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.compensation-ledger-filters label { min-width: 180px; }
+.compensation-payout-history { padding: 14px 16px; border-top: 1px solid var(--line); background: #fbfcfa; }
+.compensation-payout-history h3 { margin: 0 0 8px; font-size: 13px; }
+.compensation-payout-history > div { padding: 8px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #e7eae5; }
+.compensation-payout-history span strong, .compensation-payout-history span small { display: block; }
+.compensation-payout-history span small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.compensation-editor-backdrop { z-index: 88; background: rgb(20 28 19 / 62%); }
+.compensation-editor { width: min(560px, 100%); max-height: calc(100dvh - 40px); display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 28px 90px rgb(20 28 19 / 38%); }
+.compensation-editor form { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.compensation-editor-body { min-height: 0; padding: 18px 20px; display: grid; gap: 13px; overflow-y: auto; }
+.compensation-editor-body textarea { resize: vertical; }
+.compensation-payout-due { padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-left: 4px solid var(--gold); background: #fffaf0; }
+.compensation-payout-due span { color: var(--muted); font-size: 11px; font-weight: 700; }
+.compensation-payout-due strong { color: var(--forest-dark); font-size: 20px; }
+.compensation-editor-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 
 @media (max-width: 1279px) {
   .detail-drawer { width: 350px; }
@@ -970,6 +1015,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .variant-editor-row button { grid-column: 1 / -1; }
   .inline-form { align-items: stretch; flex-direction: column; }
   .therapist-dispatch-grid { grid-template-columns: 1fr; }
+  .compensation-summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .compensation-summary-strip > div { border-bottom: 1px solid var(--line); }
   .assignment-item { grid-template-columns: 1fr; }
   .coupon-workspace { grid-template-columns: 1fr; }
   .accounting-summary { grid-template-columns: 1fr 1fr; }
@@ -1013,6 +1060,12 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .assignment-controls > button { width: 100%; }
   .modal-backdrop { padding: 12px; }
   .start-service-dialog { max-height: calc(100dvh - 24px); }
+  .therapist-tablist { overflow-x: auto; }
+  .therapist-tablist button { flex: 0 0 auto; }
+  .compensation-toolbar, .compensation-toolbar > div, .compensation-ledger-filters { align-items: stretch; flex-direction: column; }
+  .compensation-summary-strip { grid-template-columns: 1fr; }
+  .compensation-summary-strip > div { border-right: 0; }
+  .compensation-editor { max-height: calc(100dvh - 24px); }
   .start-service-header, .start-service-body, .start-service-actions, .add-service-body, .complete-service-body { padding-inline: 15px; }
   .start-service-context { grid-template-columns: 1fr; }
   .start-service-context > div + div { border-top: 1px solid var(--line); border-left: 0; }

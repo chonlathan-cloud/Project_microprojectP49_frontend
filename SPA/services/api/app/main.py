@@ -10,6 +10,7 @@ from app.api.v1.bookings import router as bookings_router
 from app.api.v1.campaign_admin import router as campaign_admin_router
 from app.api.v1.campaigns import router as campaigns_router
 from app.api.v1.cash_deposits import router as cash_deposit_router
+from app.api.v1.compensation import router as compensation_router
 from app.api.v1.operations import router as operations_router
 from app.api.v1.payments import admin_router as payment_admin_router
 from app.api.v1.payments import public_router as payment_public_router
@@ -40,6 +41,7 @@ app.include_router(payment_webhook_router)
 app.include_router(accounting_router)
 app.include_router(analytics_router)
 app.include_router(cash_deposit_router)
+app.include_router(compensation_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,

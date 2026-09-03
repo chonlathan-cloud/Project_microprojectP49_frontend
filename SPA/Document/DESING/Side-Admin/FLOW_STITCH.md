@@ -70,13 +70,14 @@
 ---
 
 ## 6. Screen 5: Therapist Roster & Assignment (Dispatch Board)
-- **Split-Screen Layout:**
-  - **Left Board (Daily Staff Roster - 40% Width):**
-    - Cards of working therapists today: Photo, Name, Current Status (`Available`, `In-Session - Ends 15:30`, `On Break`).
-  - **Right Board (Unassigned Bookings Queue - 60% Width):**
-    - Table/Cards of incoming bookings lacking assigned therapists.
-    - **Dispatch Control:** Dropdown inside each booking row to select and assign an available therapist from today's roster.
-    - Saves therapist ID for future commission reporting.
+- **Access:** `STAFF` retains roster and assignment operations. Financial tabs and actions are visible only to `ADMIN`, with independent API authorization.
+- **Primary Tab List:**
+  - **วันนี้:** Dense therapist table with attendance, jobs/minutes, service pay, shop-funded amount, tip, total earned, paid/outstanding, `+ จากร้าน`, and `บันทึกจ่าย`. Attendance must be marked before guarantee top-up is earned.
+  - **รายการค่ามือ:** Date range and therapist/source filters. Every row carries either `จากการให้บริการ` or `จากร้านนวด`; paid rows are locked and corrections are new audited adjustments.
+  - **เงื่อนไขค่าประกัน:** Effective-dated daily guarantee per therapist plus the existing therapist roster editor.
+- **Guarantee Rule:** `max(0, daily guarantee - service pay)` for a present therapist. Tips are separate and never reduce the guarantee. Shop-source rows include guarantee top-up, bonus, and signed adjustment.
+- **Payout:** Records the full outstanding amount for the selected period, presents a final confirmation, keeps per-day allocations, and shows append-only payout history. A paid service settlement/attendance/shop entry cannot be overwritten.
+- **Assignment Queue:** Remains available in the `วันนี้` view so Admin can assign an available therapist without leaving this page.
 
 ---
 
