@@ -15,6 +15,7 @@
   - Date Filter Bar: Interactive Date Picker with quick buttons (`Today`, `Tomorrow`, `This Week`).
   - View Switcher Toggle: `Timeline Grid View` (Rooms vs Time) vs `Data Table View`.
   - Search & Filter: Server-side search by Booking ID/name/phone and status filter (`All`, `Pending`, `Confirmed`, `In-Service`). Changing either returns to page 1.
+  - Identifier visibility: show human-operational references such as Booking ID, coupon/campaign code, and accounting document number; never render internal database IDs (therapist, resource, service/variant, customer, payment, event, sync run, or cash-deposit IDs) in the Admin UI.
 - **Main View A: Timeline Grid View (Gantt style):**
   - X-Axis: Time Slots (10:00 to 21:00).
   - Y-Axis: Rooms / Beds (Room 1, Room 2, Couple Room, Foot Area).

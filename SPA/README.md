@@ -98,6 +98,18 @@ identity authority and coupon uniqueness key; the browser never supplies a trust
 Following alone creates no CRM customer or PII record—those are created only after form submission
 and privacy acknowledgement.
 
+`welcome-50` requires a complete date of birth. Customer Web accepts the year as Buddhist Era and
+sends the canonical Gregorian year to the API. CRM export includes both year formats only for
+customers whose `BIRTHDAY_MARKETING` status is `GRANTED`; Generation labels are derived later and
+are not persisted. Update an existing campaign safely with a dry-run followed by the confirmed write:
+
+```bash
+cd SPA/services/api
+uv run python scripts/require_campaign_birth_year.py --database spa-test-db
+uv run python scripts/require_campaign_birth_year.py \
+  --database spa-test-db --apply --confirm-database spa-test-db
+```
+
 Set the policy on an already-seeded campaign with a dry-run followed by the confirmed write. The
 policy script accepts `--project`, `--database`, `--campaign`, and the required
 `--allow-liff-evidence true|false` options. For example:

@@ -234,7 +234,7 @@ export function CashDepositWorkflow({ locale, user, initialDepositId, initialPay
   return <>
     <div className="accounting-scrim" aria-hidden="true" onClick={onClose} />
     <aside ref={drawerRef} className="detail-drawer cash-deposit-drawer" role="dialog" aria-modal="true" aria-labelledby="cash-deposit-title">
-      <div className="drawer-header cash-deposit-header"><div><p className="eyebrow">TREASURY • BEAM</p><h2 id="cash-deposit-title">{locale === "th" ? "นำเงินสดเข้าบัญชี" : "Deposit cash"}</h2><p>{deposit?.depositId || (locale === "th" ? "เลือกเฉพาะรายการ UNSETTLED" : "Select UNSETTLED cash payments")}</p></div><button ref={closeRef} type="button" aria-label={locale === "th" ? "ปิด" : "Close"} onClick={onClose}>×</button></div>
+      <div className="drawer-header cash-deposit-header"><div><p className="eyebrow">TREASURY • BEAM</p><h2 id="cash-deposit-title">{locale === "th" ? "นำเงินสดเข้าบัญชี" : "Deposit cash"}</h2><p>{deposit ? (locale === "th" ? "ตรวจสอบยอดและสถานะการนำเงินเข้าบัญชี" : "Review the total and deposit status") : (locale === "th" ? "เลือกเฉพาะรายการ UNSETTLED" : "Select UNSETTLED cash payments")}</p></div><button ref={closeRef} type="button" aria-label={locale === "th" ? "ปิด" : "Close"} onClick={onClose}>×</button></div>
       {error && <div className="cash-deposit-alert" role="alert">{error}</div>}
       {loading && <div className="cash-deposit-loading" role="status">{locale === "th" ? "กำลังโหลด…" : "Loading…"}</div>}
 

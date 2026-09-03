@@ -50,13 +50,13 @@ def campaign_document() -> dict[str, object]:
             "allowLiffFriendshipEvidence": True,
         },
         "form": {
-            "requiredFields": ["fullName", "phone", "birthDay", "birthMonth"],
+            "requiredFields": ["fullName", "phone", "birthDay", "birthMonth", "birthYear"],
             "optionalFields": ["gender"],
         },
-        "privacyNoticeVersion": "privacy-draft-v2",
+        "privacyNoticeVersion": "privacy-draft-v3",
         "requiredPurposeIds": ["COUPON_FULFILLMENT"],
         "optionalPurposeIds": ["BIRTHDAY_MARKETING"],
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "version": 1,
     }
 
@@ -80,7 +80,10 @@ def main() -> int:
         return 0
     payload = campaign_document()
     payload["updatedAt"] = datetime.now(UTC)
-    if not existing.exists:
+    if existing.exists:
+        current = existing.to_dict() or {}
+        payload["version"] = int(current.get("version", 1)) + 1
+    else:
         payload["createdAt"] = payload["updatedAt"]
     ref.set(payload, merge=args.allow_update)
     print("Campaign config written.")

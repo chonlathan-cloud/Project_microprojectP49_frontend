@@ -27,6 +27,7 @@ class CampaignClaimRequest(ApiModel):
     phone: str = Field(min_length=7, max_length=30)
     birth_day: int = Field(ge=1, le=31)
     birth_month: int = Field(ge=1, le=12)
+    birth_year: int = Field(ge=1900, le=2100)
     gender: Literal["FEMALE", "MALE", "NON_BINARY", "PREFER_NOT_TO_SAY"] | None = None
     privacy_acknowledged: bool
     birthday_marketing_consent: bool = False
@@ -57,6 +58,7 @@ async def create_campaign_claim(
         phone=request.phone,
         birth_day=request.birth_day,
         birth_month=request.birth_month,
+        birth_year=request.birth_year,
         gender=request.gender,
         privacy_acknowledged=request.privacy_acknowledged,
         birthday_marketing_consent=request.birthday_marketing_consent,

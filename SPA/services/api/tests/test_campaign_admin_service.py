@@ -102,17 +102,25 @@ class Database:
                     "phoneE164": "+66811111111",
                     "birthDay": 1,
                     "birthMonth": 9,
+                    "birthYear": 1992,
                 },
                 "customer-denied": {
                     "fullName": "Denied Customer",
                     "phoneE164": "+66822222222",
                     "birthDay": 2,
                     "birthMonth": 9,
+                    "birthYear": 1988,
                 },
             },
             "marketing_profiles": {
-                "customer-granted": {"birthdayMarketingStatus": "GRANTED"},
-                "customer-denied": {"birthdayMarketingStatus": "DENIED"},
+                "customer-granted": {
+                    "birthdayMarketingStatus": "GRANTED",
+                    "birthYear": 1992,
+                },
+                "customer-denied": {
+                    "birthdayMarketingStatus": "DENIED",
+                    "birthYear": 1988,
+                },
             },
             "campaign_participations": {
                 "p1": {
@@ -165,6 +173,8 @@ def test_staff_has_masked_crm_access_but_cannot_reveal_pii(database) -> None:
     )
 
     assert rows[0]["phoneMasked"] == "081-xxx-1111"
+    assert rows[0]["birthYear"] == 1992
+    assert rows[1]["birthYear"] is None
     assert "phoneE164" not in rows[0]
     with pytest.raises(HTTPException) as error:
         admin_service.reveal_customer_pii(
@@ -181,6 +191,8 @@ def test_crm_export_contains_only_granted_marketing_customers(database) -> None:
 
     assert "Granted Customer" in content
     assert "Denied Customer" not in content
+    assert "birthYear,birthYearBuddhist" in content
+    assert "1992,2535" in content
     audit = next(iter(database.data["audit_events"].values()))
     assert audit["eventType"] == "CRM_CUSTOMERS_EXPORTED"
     assert audit["consentFilter"] == "BIRTHDAY_MARKETING=GRANTED"

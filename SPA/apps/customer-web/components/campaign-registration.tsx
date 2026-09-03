@@ -36,10 +36,12 @@ const copy = {
     lead: "กรอกข้อมูลให้ครบ แล้วรับคูปองดิจิทัลได้ทันที",
     fullName: "ชื่อ-นามสกุล",
     phone: "เบอร์โทรศัพท์",
-    birthday: "วัน/เดือนเกิด",
-    birthdayHint: "เราไม่เก็บปีเกิดสำหรับแคมเปญนี้",
+    birthday: "วัน/เดือน/ปีเกิด",
+    birthdayHint: "กรอกปีเกิดเป็น พ.ศ. เพื่อใช้วิเคราะห์ช่วงวัยและออกแบบสิทธิประโยชน์ เมื่อคุณยินยอมด้านการตลาด",
     day: "วัน",
     month: "เดือน",
+    yearBuddhist: "ปีเกิด (พ.ศ.)",
+    yearPlaceholder: "เช่น 2535",
     gender: "เพศ (ไม่บังคับ)",
     genderPlaceholder: "ไม่ระบุ",
     female: "หญิง",
@@ -48,7 +50,7 @@ const copy = {
     preferNot: "ไม่ประสงค์ระบุ",
     privacy: "ฉันรับทราบการเก็บและใช้ข้อมูลเพื่อดำเนินการออกคูปองตาม",
     privacyLink: "ประกาศความเป็นส่วนตัว",
-    marketing: "ยินยอมให้ใช้วัน/เดือนเกิดเพื่อส่งสิทธิพิเศษวันเกิดและข่าวสารการตลาด (ไม่บังคับ)",
+    marketing: "ยินยอมให้ใช้วันเดือนปีเกิดและประวัติการใช้บริการ เพื่อวิเคราะห์ช่วงวัย ออกแบบสิทธิประโยชน์ และส่งข่าวสารการตลาด (ไม่บังคับ)",
     marketingHint: "ไม่เลือกข้อนี้ก็ยังรับคูปองได้",
     submit: "ยืนยันรับสิทธิ์ 50 บาท",
     submitting: "กำลังออกคูปอง…",
@@ -78,10 +80,12 @@ const copy = {
     lead: "Complete the form to receive your digital coupon instantly.",
     fullName: "Full name",
     phone: "Phone number",
-    birthday: "Birth day/month",
-    birthdayHint: "We do not collect your birth year for this campaign.",
+    birthday: "Date of birth",
+    birthdayHint: "Enter the Buddhist Era year. With marketing consent, it helps us analyze age groups and design relevant benefits.",
     day: "Day",
     month: "Month",
+    yearBuddhist: "Birth year (B.E.)",
+    yearPlaceholder: "e.g. 2535",
     gender: "Gender (optional)",
     genderPlaceholder: "Not specified",
     female: "Female",
@@ -90,7 +94,7 @@ const copy = {
     preferNot: "Prefer not to say",
     privacy: "I acknowledge the collection and use of my data to issue this coupon under the",
     privacyLink: "Privacy Notice",
-    marketing: "I consent to using my birth day/month for birthday offers and marketing (optional).",
+    marketing: "I consent to the use of my date of birth and service history for age-group analysis, benefit design, and marketing (optional).",
     marketingHint: "You can receive the coupon without selecting this.",
     submit: "Confirm and get THB 50",
     submitting: "Issuing coupon…",
@@ -137,8 +141,8 @@ function expirationLabel(value: string, locale: Locale) {
   }).format(new Date(value));
 }
 
-function daysInMonth(month: number) {
-  return month === 2 ? 29 : [4, 6, 9, 11].includes(month) ? 30 : 31;
+function daysInMonth(month: number, year: number) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 export function CampaignRegistration({ campaignCode }: { campaignCode: string }) {
@@ -153,6 +157,7 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
   const [phone, setPhone] = useState("");
   const [birthDay, setBirthDay] = useState("");
   const [birthMonth, setBirthMonth] = useState("");
+  const [birthYearBuddhist, setBirthYearBuddhist] = useState("");
   const [gender, setGender] = useState("");
   const [privacyAcknowledged, setPrivacyAcknowledged] = useState(false);
   const [marketingConsent, setMarketingConsent] = useState(false);
@@ -162,8 +167,14 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
   const [result, setResult] = useState<CouponResult | null>(null);
   const errorRef = useRef<HTMLDivElement>(null);
   const t = copy[locale];
-  const maximumDay = birthMonth ? daysInMonth(Number(birthMonth)) : 31;
-  const valid = fullName.trim().length >= 2 && /^0[0-9\s-]{8,}$/.test(phone.trim()) && Boolean(birthDay) && Boolean(birthMonth) && privacyAcknowledged;
+  const currentGregorianYear = Number(new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone: "Asia/Bangkok" }).format(new Date()));
+  const currentBuddhistYear = currentGregorianYear + 543;
+  const birthYearGregorian = Number(birthYearBuddhist) - 543;
+  const validBirthYear = /^\d{4}$/.test(birthYearBuddhist) && birthYearGregorian >= 1900 && birthYearGregorian <= currentGregorianYear;
+  const calendarYear = validBirthYear ? birthYearGregorian : 2000;
+  const maximumDay = birthMonth ? daysInMonth(Number(birthMonth), calendarYear) : 31;
+  const validBirthDate = Boolean(birthDay) && Boolean(birthMonth) && Number(birthDay) <= maximumDay;
+  const valid = fullName.trim().length >= 2 && /^0[0-9\s-]{8,}$/.test(phone.trim()) && validBirthDate && validBirthYear && privacyAcknowledged;
 
   useEffect(() => { document.documentElement.lang = locale; }, [locale]);
 
@@ -257,6 +268,7 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
           phone,
           birthDay: Number(birthDay),
           birthMonth: Number(birthMonth),
+          birthYear: birthYearGregorian,
           gender: gender || null,
           privacyAcknowledged,
           birthdayMarketingConsent: marketingConsent,
@@ -363,9 +375,9 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
           <label className="field">{t.phone} <span className="required-mark">* <span className="sr-only">{t.required}</span></span>
             <input type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(event) => setPhone(event.target.value)} aria-invalid={showValidation && !/^0[0-9\s-]{8,}$/.test(phone.trim())} placeholder="08x-xxx-xxxx" />
           </label>
-          <fieldset className="birthday-fieldset">
+          <fieldset className="birthday-fieldset" aria-describedby="campaign-birthday-hint">
             <legend>{t.birthday} <span className="required-mark">* <span className="sr-only">{t.required}</span></span></legend>
-            <p>{t.birthdayHint}</p>
+            <p id="campaign-birthday-hint">{t.birthdayHint}</p>
             <div className="birthday-grid">
               <label htmlFor="campaign-birth-day">{t.day}
                 <select id="campaign-birth-day" value={birthDay} onChange={(event) => setBirthDay(event.target.value)} aria-invalid={showValidation && !birthDay}>
@@ -377,11 +389,19 @@ export function CampaignRegistration({ campaignCode }: { campaignCode: string })
                 <select id="campaign-birth-month" value={birthMonth} onChange={(event) => {
                   const nextMonth = event.target.value;
                   setBirthMonth(nextMonth);
-                  if (nextMonth && Number(birthDay) > daysInMonth(Number(nextMonth))) setBirthDay("");
+                  if (nextMonth && Number(birthDay) > daysInMonth(Number(nextMonth), calendarYear)) setBirthDay("");
                 }} aria-invalid={showValidation && !birthMonth}>
                   <option value="">--</option>
                   {monthLabels[locale].map((month, index) => <option key={month} value={index + 1}>{month}</option>)}
                 </select>
+              </label>
+              <label htmlFor="campaign-birth-year">{t.yearBuddhist}
+                <input id="campaign-birth-year" type="number" inputMode="numeric" min="2443" max={currentBuddhistYear} step="1" value={birthYearBuddhist} onChange={(event) => {
+                  const nextYear = event.target.value;
+                  const nextGregorianYear = Number(nextYear) - 543;
+                  setBirthYearBuddhist(nextYear);
+                  if (/^\d{4}$/.test(nextYear) && nextGregorianYear >= 1900 && nextGregorianYear <= currentGregorianYear && birthMonth && Number(birthDay) > daysInMonth(Number(birthMonth), nextGregorianYear)) setBirthDay("");
+                }} aria-invalid={showValidation && !validBirthYear} placeholder={t.yearPlaceholder} />
               </label>
             </div>
           </fieldset>

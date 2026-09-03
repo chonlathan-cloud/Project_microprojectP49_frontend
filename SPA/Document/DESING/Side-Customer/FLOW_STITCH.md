@@ -88,3 +88,8 @@ Accessible via top bar toggle ("Room Matrix View").
 
 ## 6. Information Modals
 - **Spa Policies Modal:** Footer link trigger displaying early arrival advice, VAT details, and health disclosure guidelines.
+
+## 7. LINE Campaign Registration (`welcome-50`)
+- Collect full name, phone, day/month of birth, and a required birth year entered as Buddhist Era (`พ.ศ.`); validate the year and convert it to Gregorian before submission.
+- Explain why birth year is collected next to the field. Keep the separate marketing consent optional and state that age-group analysis may combine date of birth with service history only when that consent is granted.
+- Do not persist a fixed Generation label. Store the canonical Gregorian birth year and derive cohort labels when CRM or Insight rules are executed so boundaries can change without rewriting customer profiles.

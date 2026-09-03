@@ -98,7 +98,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .participant-service h2 { margin: 0 0 18px; color: var(--forest-deep); font-family: var(--font-display), Georgia, serif; font-size: 21px; }
 
 label { color: var(--text); font-size: 14px; font-weight: 750; }
-select, input[type="text"], input[type="tel"], input:not([type]), textarea { width: 100%; min-height: 50px; margin-top: 8px; padding: 11px 13px; border: 1px solid #7c857a; border-radius: 9px; background: white; color: var(--text); }
+select, input[type="text"], input[type="tel"], input[type="number"], input:not([type]), textarea { width: 100%; min-height: 50px; margin-top: 8px; padding: 11px 13px; border: 1px solid #7c857a; border-radius: 9px; background: white; color: var(--text); }
 input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border: 2px solid var(--error); }
 textarea { min-height: 110px; resize: vertical; }
 .field { display: block; margin: 18px 0; }
@@ -363,7 +363,7 @@ textarea { min-height: 110px; resize: vertical; }
 .birthday-fieldset { margin: 24px 0 18px; padding: 0; border: 0; }
 .birthday-fieldset legend { color: var(--text); font-size: 14px; font-weight: 750; }
 .birthday-fieldset > p { margin: 4px 0 12px; color: var(--muted); font-size: 12px; }
-.birthday-grid { display: grid; grid-template-columns: minmax(100px, .7fr) 1.3fr; gap: 12px; }
+.birthday-grid { display: grid; grid-template-columns: minmax(86px, .65fr) minmax(150px, 1.35fr) minmax(130px, 1fr); gap: 12px; }
 .consent-section { padding: 22px 24px 12px; }
 .campaign-consent { font-size: 13px; font-weight: 550; }
 .campaign-consent + .campaign-consent { margin-top: 15px; }
@@ -416,6 +416,8 @@ textarea { min-height: 110px; resize: vertical; }
   .offer-amount strong { font-size: 23px; }
   .campaign-form-section, .consent-section { padding-inline: 16px; }
   .campaign-submit { width: calc(100% - 32px); margin-inline: 16px; }
+  .birthday-grid { grid-template-columns: minmax(76px, .7fr) minmax(0, 1.3fr); }
+  .birthday-grid label:last-child { grid-column: 1 / -1; }
   .my-bookings-content { width: calc(100% - 32px); }
   .my-bookings-actions a, .empty-actions a { flex: 1 1 150px; }
   .customer-payment-panel { margin-inline: -8px; padding: 17px 14px; }

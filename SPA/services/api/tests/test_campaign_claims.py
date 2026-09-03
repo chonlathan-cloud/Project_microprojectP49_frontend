@@ -110,6 +110,7 @@ def claim(
         phone="081-234-5678",
         birth_day=29,
         birth_month=2,
+        birth_year=1992,
         gender=None,
         privacy_acknowledged=True,
         birthday_marketing_consent=marketing,
@@ -130,6 +131,9 @@ def test_claim_creates_separated_customer_coupon_and_consent_records(database) -
     private = next(iter(database.data["customer_private"].values()))
     assert private["phoneE164"] == "+66812345678"
     assert private["birthMonthDay"] == "02-29"
+    assert private["birthYear"] == 1992
+    marketing_profile = next(iter(database.data["marketing_profiles"].values()))
+    assert marketing_profile["birthYear"] == 1992
     summary = next(iter(database.data["customers"].values()))
     assert "phoneE164" not in summary
     assert summary["phoneMasked"] == "081-xxx-5678"
@@ -151,6 +155,31 @@ def test_second_claim_for_same_line_identity_returns_existing_coupon(database) -
     assert len(database.data["coupons"]) == 1
 
 
+def test_existing_coupon_submission_refreshes_birth_year_and_consent(database) -> None:
+    claim(database, idempotency_key="claim-request-original")
+    customer_id = next(iter(database.data["customer_private"]))
+    database.data["customer_private"][customer_id].pop("birthYear")
+    database.data["marketing_profiles"][customer_id].pop("birthYear")
+
+    result = claim(
+        database,
+        idempotency_key="claim-request-profile-refresh",
+        marketing=True,
+    )
+
+    assert result["alreadyClaimed"] is True
+    assert len(database.data["coupons"]) == 1
+    assert database.data["customer_private"][customer_id]["birthYear"] == 1992
+    assert database.data["marketing_profiles"][customer_id]["birthYear"] == 1992
+    assert database.data["marketing_profiles"][customer_id][
+        "birthdayMarketingStatus"
+    ] == "GRANTED"
+    assert any(
+        event["eventType"] == "CAMPAIGN_CUSTOMER_PROFILE_UPDATED"
+        for event in database.data["audit_events"].values()
+    )
+
+
 def test_invalid_calendar_day_is_rejected_before_writes(database) -> None:
     with pytest.raises(ValidationDomainError, match="Birth day is invalid"):
         service.claim_campaign(
@@ -160,11 +189,53 @@ def test_invalid_calendar_day_is_rejected_before_writes(database) -> None:
             phone="0812345678",
             birth_day=31,
             birth_month=4,
+            birth_year=1992,
             gender=None,
             privacy_acknowledged=True,
             birthday_marketing_consent=False,
             idempotency_key="claim-request-003",
             line_identity={"sub": "line-user-002"},
+        )
+
+    assert "coupons" not in database.data
+
+
+def test_future_birth_year_is_rejected_before_writes(database) -> None:
+    with pytest.raises(ValidationDomainError, match="Birth year is invalid"):
+        service.claim_campaign(
+            database,
+            campaign_code="welcome-50",
+            full_name="Manee Sukjai",
+            phone="0812345678",
+            birth_day=1,
+            birth_month=9,
+            birth_year=2027,
+            gender=None,
+            privacy_acknowledged=True,
+            birthday_marketing_consent=False,
+            idempotency_key="claim-request-future-year",
+            line_identity={"sub": "line-user-future-year"},
+            now=datetime(2026, 9, 3, tzinfo=UTC),
+        )
+
+    assert "coupons" not in database.data
+
+
+def test_non_leap_year_february_29_is_rejected_before_writes(database) -> None:
+    with pytest.raises(ValidationDomainError, match="Birth day is invalid"):
+        service.claim_campaign(
+            database,
+            campaign_code="welcome-50",
+            full_name="Manee Sukjai",
+            phone="0812345678",
+            birth_day=29,
+            birth_month=2,
+            birth_year=1991,
+            gender=None,
+            privacy_acknowledged=True,
+            birthday_marketing_consent=False,
+            idempotency_key="claim-request-non-leap-year",
+            line_identity={"sub": "line-user-non-leap-year"},
         )
 
     assert "coupons" not in database.data

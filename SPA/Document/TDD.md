@@ -260,6 +260,8 @@ Each LINE endpoint validates `x-line-signature` against the raw request body and
 | `POST` | `/api/v1/public/bookings` | Guest checks; optional LINE ID token | Create an atomic `PENDING` Booking |
 | `POST` | `/api/v1/public/booking-status:resolve` | Status bearer in body | Resolve privacy-minimized status |
 | `POST` | `/api/v1/public/booking-line-links` | Status bearer plus LINE ID token | Link a verified LINE User ID to one Booking |
+| `GET` | `/api/v1/public/campaigns/{campaignCode}` | None | Customer-safe active campaign configuration |
+| `POST` | `/api/v1/public/campaigns/{campaignCode}/claims` | Verified LINE ID token | Claim once with full date of birth; Customer Web accepts Buddhist Era year and sends canonical Gregorian year |
 
 Public APIs never return health detail, internal document IDs, resource allocation details, therapist details, or audit data.
 
@@ -399,6 +401,9 @@ Public Booking ID sequence contention is acceptable at the approved volume. The 
 | `booking_participants` | Nickname, selected line-item reference, allocation and assignment summary |
 | `participant_health` | Immutable Booking-time health declaration snapshot, isolated from customer-safe projections and joined only for authorized Admin Web reads or registered Admin Group rendering |
 | `customers` | Reusable minimal customer profile and provisional/verified/merged lifecycle |
+| `customer_private` | Restricted CRM PII including normalized phone and canonical Gregorian date-of-birth fields |
+| `marketing_profiles` | Consent-aware birthday/age-segmentation attributes; birth year is exposed to masked CRM views only for `BIRTHDAY_MARKETING=GRANTED` |
+| `campaigns` / `campaign_participations` / `coupons` | Versioned campaign policy, one-claim identity participation, and coupon lifecycle |
 | `customer_identity_links` | Verified LINE identity linkage; phone is never stored as proof of identity |
 | `line_friendships` | Pseudonymous OA friendship state and evidence assurance; raw LINE User ID and CRM PII are not stored |
 | `line_friendship_sync_runs` | Metadata-only summary for an authorized Followers API backfill; no follower IDs |

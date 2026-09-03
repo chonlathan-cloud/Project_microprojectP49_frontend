@@ -97,6 +97,7 @@ def claim_campaign(
     phone: str,
     birth_day: int,
     birth_month: int,
+    birth_year: int,
     gender: str | None,
     privacy_acknowledged: bool,
     birthday_marketing_consent: bool,
@@ -109,7 +110,10 @@ def claim_campaign(
         raise ValidationDomainError("Idempotency-Key is required")
     if not privacy_acknowledged:
         raise ValidationDomainError("Privacy acknowledgement is required")
-    if birth_day > monthrange(2000, birth_month)[1]:
+    current_time = now or datetime.now(UTC)
+    if birth_year < 1900 or birth_year > current_time.year:
+        raise ValidationDomainError("Birth year is invalid")
+    if birth_day > monthrange(birth_year, birth_month)[1]:
         raise ValidationDomainError("Birth day is invalid for the selected month")
 
     normalized_name = " ".join(full_name.split())
@@ -121,7 +125,6 @@ def claim_campaign(
         raise ValidationDomainError("Verified LINE identity is required")
 
     settings = get_settings()
-    current_time = now or datetime.now(UTC)
     identity_hash = line_identity_hash(
         line_user_id, settings.line_customer_login_channel_id
     )
@@ -131,6 +134,7 @@ def claim_campaign(
         "phoneE164": phone_e164,
         "birthDay": birth_day,
         "birthMonth": birth_month,
+        "birthYear": birth_year,
         "gender": gender,
         "privacyAcknowledged": privacy_acknowledged,
         "birthdayMarketingConsent": birthday_marketing_consent,
@@ -227,49 +231,6 @@ def claim_campaign(
                 .get(transaction=tx)
             )
 
-        if existing_coupon_snapshot and existing_coupon_snapshot.exists:
-            coupon = existing_coupon_snapshot.to_dict() or {}
-            result = {
-                "campaignCode": campaign_code,
-                "alreadyClaimed": True,
-                "coupon": {
-                    "code": coupon.get("code"),
-                    "status": coupon.get("status"),
-                    "amountSatang": coupon.get("amountSatang"),
-                    "currency": coupon.get("currency", "THB"),
-                    "issuedAt": coupon.get("issuedAt"),
-                    "expiresAt": coupon.get("expiresAt"),
-                },
-            }
-            tx.set(
-                idempotency_ref,
-                {
-                    "requestHash": request_hash,
-                    "response": result,
-                    "createdAt": current_time,
-                    "expiresAt": current_time + timedelta(hours=24),
-                },
-            )
-            return result
-
-        benefit = campaign.get("benefit") if isinstance(campaign.get("benefit"), dict) else {}
-        amount_satang = int(benefit.get("amountSatang", 0))
-        if amount_satang <= 0:
-            raise ValidationDomainError("Campaign benefit is not configured")
-        coupon_code = f"W50-{uuid4().hex[:10].upper()}"
-        coupon_expires_at = campaign.get("couponExpiresAt")
-        result = {
-            "campaignCode": campaign_code,
-            "alreadyClaimed": False,
-            "coupon": {
-                "code": coupon_code,
-                "status": "ISSUED",
-                "amountSatang": amount_satang,
-                "currency": benefit.get("currency", "THB"),
-                "issuedAt": current_time,
-                "expiresAt": coupon_expires_at,
-            },
-        }
         if not identity_snapshot.exists:
             tx.set(
                 identity_ref,
@@ -324,6 +285,7 @@ def claim_campaign(
                 "phoneE164": phone_e164,
                 "birthDay": birth_day,
                 "birthMonth": birth_month,
+                "birthYear": birth_year,
                 "birthMonthDay": f"{birth_month:02d}-{birth_day:02d}",
                 "gender": gender,
                 "source": "LINE_CAMPAIGN",
@@ -337,39 +299,13 @@ def claim_campaign(
                 "customerId": customer_id,
                 "birthDay": birth_day,
                 "birthMonth": birth_month,
+                "birthYear": birth_year,
                 "birthdayMarketingStatus": (
                     "GRANTED" if birthday_marketing_consent else "DENIED"
                 ),
                 "updatedAt": current_time,
             },
             merge=True,
-        )
-        tx.set(
-            new_coupon_ref,
-            {
-                "code": coupon_code,
-                "campaignCode": campaign_code,
-                "customerId": customer_id,
-                "status": "ISSUED",
-                "amountSatang": amount_satang,
-                "currency": benefit.get("currency", "THB"),
-                "issuedAt": current_time,
-                "expiresAt": coupon_expires_at,
-                "redeemedAt": None,
-                "version": 1,
-            },
-        )
-        tx.set(
-            participation_ref,
-            {
-                "campaignCode": campaign_code,
-                "customerId": customer_id,
-                "identityHash": identity_hash,
-                "couponId": new_coupon_ref.id,
-                "status": "CLAIMED",
-                "claimedAt": current_time,
-                "friendshipEvidence": friendship_evidence,
-            },
         )
         notice_version = campaign.get(
             "privacyNoticeVersion", settings.privacy_notice_version
@@ -417,6 +353,89 @@ def claim_campaign(
                 "status": marketing_action,
                 "noticeVersion": notice_version,
                 "updatedAt": current_time,
+            },
+        )
+
+        if existing_coupon_snapshot and existing_coupon_snapshot.exists:
+            coupon = existing_coupon_snapshot.to_dict() or {}
+            result = {
+                "campaignCode": campaign_code,
+                "alreadyClaimed": True,
+                "coupon": {
+                    "code": coupon.get("code"),
+                    "status": coupon.get("status"),
+                    "amountSatang": coupon.get("amountSatang"),
+                    "currency": coupon.get("currency", "THB"),
+                    "issuedAt": coupon.get("issuedAt"),
+                    "expiresAt": coupon.get("expiresAt"),
+                },
+            }
+            tx.set(
+                idempotency_ref,
+                {
+                    "requestHash": request_hash,
+                    "response": result,
+                    "createdAt": current_time,
+                    "expiresAt": current_time + timedelta(hours=24),
+                },
+            )
+            tx.set(
+                audit_ref,
+                {
+                    "eventType": "CAMPAIGN_CUSTOMER_PROFILE_UPDATED",
+                    "campaignCode": campaign_code,
+                    "customerId": customer_id,
+                    "couponId": existing_coupon_snapshot.id,
+                    "actorType": "LINE_CUSTOMER",
+                    "actorIdHash": identity_hash,
+                    "createdAt": current_time,
+                },
+            )
+            return result
+
+        benefit = campaign.get("benefit") if isinstance(campaign.get("benefit"), dict) else {}
+        amount_satang = int(benefit.get("amountSatang", 0))
+        if amount_satang <= 0:
+            raise ValidationDomainError("Campaign benefit is not configured")
+        coupon_code = f"W50-{uuid4().hex[:10].upper()}"
+        coupon_expires_at = campaign.get("couponExpiresAt")
+        result = {
+            "campaignCode": campaign_code,
+            "alreadyClaimed": False,
+            "coupon": {
+                "code": coupon_code,
+                "status": "ISSUED",
+                "amountSatang": amount_satang,
+                "currency": benefit.get("currency", "THB"),
+                "issuedAt": current_time,
+                "expiresAt": coupon_expires_at,
+            },
+        }
+        tx.set(
+            new_coupon_ref,
+            {
+                "code": coupon_code,
+                "campaignCode": campaign_code,
+                "customerId": customer_id,
+                "status": "ISSUED",
+                "amountSatang": amount_satang,
+                "currency": benefit.get("currency", "THB"),
+                "issuedAt": current_time,
+                "expiresAt": coupon_expires_at,
+                "redeemedAt": None,
+                "version": 1,
+            },
+        )
+        tx.set(
+            participation_ref,
+            {
+                "campaignCode": campaign_code,
+                "customerId": customer_id,
+                "identityHash": identity_hash,
+                "couponId": new_coupon_ref.id,
+                "status": "CLAIMED",
+                "claimedAt": current_time,
+                "friendshipEvidence": friendship_evidence,
             },
         )
         tx.set(

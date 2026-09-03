@@ -462,6 +462,7 @@ test("LINE campaign registration issues one digital coupon", async ({ page }) =>
       phone: "0812345678",
       birthDay: 29,
       birthMonth: 2,
+      birthYear: 1992,
       privacyAcknowledged: true,
       birthdayMarketingConsent: false,
       lineFriendshipConfirmed: true
@@ -490,6 +491,7 @@ test("LINE campaign registration issues one digital coupon", async ({ page }) =>
   await page.getByRole("textbox", { name: /เบอร์โทรศัพท์/ }).fill("0812345678");
   await page.locator("#campaign-birth-day").selectOption("29");
   await page.locator("#campaign-birth-month").selectOption("2");
+  await page.locator("#campaign-birth-year").fill("2535");
   await page.getByRole("checkbox").first().check();
   await page.getByRole("button", { name: "ยืนยันรับสิทธิ์ 50 บาท" }).click();
 

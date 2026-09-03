@@ -266,6 +266,7 @@ def _masked_customer(
     customer = customer_snapshot.to_dict() or {}
     marketing_snapshot = client.collection("marketing_profiles").document(customer_id).get()
     marketing = marketing_snapshot.to_dict() or {} if marketing_snapshot.exists else {}
+    marketing_status = str(marketing.get("birthdayMarketingStatus", "UNKNOWN"))
     return {
         "customerId": customer_id,
         "displayName": _mask_name(customer.get("displayName")),
@@ -274,7 +275,8 @@ def _masked_customer(
         "campaignCode": participation.get("campaignCode"),
         "claimedAt": participation.get("claimedAt"),
         "couponId": participation.get("couponId"),
-        "birthdayMarketingStatus": marketing.get("birthdayMarketingStatus", "UNKNOWN"),
+        "birthdayMarketingStatus": marketing_status,
+        "birthYear": marketing.get("birthYear") if marketing_status == "GRANTED" else None,
     }
 
 
@@ -368,7 +370,7 @@ def reveal_customer_pii(
         )
         return {
             key: private.get(key)
-            for key in ("fullName", "phoneE164", "birthDay", "birthMonth", "gender")
+            for key in ("fullName", "phoneE164", "birthDay", "birthMonth", "birthYear", "gender")
         }
 
     return read_and_audit(transaction)
@@ -392,6 +394,8 @@ def export_campaign_customers_csv(
             "phoneE164",
             "birthMonth",
             "birthDay",
+            "birthYear",
+            "birthYearBuddhist",
             "gender",
             "friendStatus",
             "campaignCode",
@@ -412,6 +416,10 @@ def export_campaign_customers_csv(
                 "phoneE164": private.get("phoneE164"),
                 "birthMonth": private.get("birthMonth"),
                 "birthDay": private.get("birthDay"),
+                "birthYear": private.get("birthYear"),
+                "birthYearBuddhist": (
+                    int(private["birthYear"]) + 543 if private.get("birthYear") else None
+                ),
                 "gender": private.get("gender"),
                 "friendStatus": row.get("friendStatus"),
                 "campaignCode": row.get("campaignCode"),
