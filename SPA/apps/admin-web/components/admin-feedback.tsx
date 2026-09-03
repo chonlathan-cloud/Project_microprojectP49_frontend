@@ -113,10 +113,12 @@ export function AdminFeedbackProvider({ children }: { children: ReactNode }) {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopPropagation();
         closeConfirmation(false);
         return;
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
+      event.stopPropagation();
       const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
         "button:not([disabled]), input:not([disabled]), textarea:not([disabled])"
       ));
@@ -131,9 +133,9 @@ export function AdminFeedbackProvider({ children }: { children: ReactNode }) {
         first.focus();
       }
     };
-    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown, true);
     return () => {
-      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("keydown", handleKeyDown, true);
       previousFocusRef.current?.focus();
     };
   }, [confirmation, closeConfirmation]);

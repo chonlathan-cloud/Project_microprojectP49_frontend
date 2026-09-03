@@ -46,6 +46,7 @@ class ApiModel(BaseModel):
 
 class SettlementAllocationInput(ApiModel):
     participant_id: str = Field(min_length=1)
+    booking_line_item_id: str | None = Field(default=None, min_length=1, max_length=160)
     therapist_id: str | None = None
     therapist_pay_satang: int = Field(ge=0, multiple_of=100)
     tip_share_satang: int = Field(ge=0, multiple_of=100)
@@ -53,7 +54,7 @@ class SettlementAllocationInput(ApiModel):
 
 class SettlementInput(ApiModel):
     expected_version: int = Field(ge=0)
-    allocations: list[SettlementAllocationInput] = Field(min_length=1, max_length=2)
+    allocations: list[SettlementAllocationInput] = Field(min_length=1, max_length=50)
 
 
 class InsightExportInput(ApiModel):
@@ -111,22 +112,31 @@ def _booking_children(
     return participants, lines
 
 
-def _line_by_participant(
+def _allocation_lines(
     lines: list[firestore.DocumentSnapshot],
-) -> dict[str, dict[str, object]]:
-    result: dict[str, dict[str, object]] = {}
+) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
     for snapshot in lines:
         line = snapshot.to_dict() or {}
+        if line.get("financiallyExcluded"):
+            continue
         service = line.get("serviceSnapshot")
         if not isinstance(service, dict):
             continue
         for participant_id in line.get("participantIds") or []:
             if participant_id:
-                result[str(participant_id)] = {
-                    "bookingLineItemId": snapshot.id,
-                    "lineTotalSatang": int(line.get("lineTotalSatang", 0)),
-                    **service,
-                }
+                assignment = line.get("assignment")
+                result.append(
+                    {
+                        "bookingLineItemId": snapshot.id,
+                        "participantId": str(participant_id),
+                        "sequence": int(line.get("sequence", 0)),
+                        "source": line.get("source", "ORIGINAL"),
+                        "lineTotalSatang": int(line.get("lineTotalSatang", 0)),
+                        "assignment": assignment if isinstance(assignment, dict) else {},
+                        **service,
+                    }
+                )
     return result
 
 
@@ -141,28 +151,54 @@ def _settlement_response(
     booking = booking_snapshot.to_dict() or {}
     settlement = settlement_snapshot.to_dict() if settlement_snapshot.exists else {}
     settlement = settlement or {}
-    line_map = _line_by_participant(lines)
-    existing_rows = {
+    allocation_lines = _allocation_lines(lines)
+    participant_map = {
+        snapshot.id: snapshot.to_dict() or {} for snapshot in participants
+    }
+    participant_order = {snapshot.id: index for index, snapshot in enumerate(participants)}
+    allocation_lines.sort(
+        key=lambda line: (
+            int(line.get("sequence", 0))
+            or participant_order.get(str(line["participantId"]), 0) + 1,
+            str(line["bookingLineItemId"]),
+        )
+    )
+    existing_by_line = {
+        str(item.get("bookingLineItemId")): item
+        for item in settlement.get("allocations") or []
+        if isinstance(item, dict) and item.get("bookingLineItemId")
+    }
+    existing_by_participant = {
         str(item.get("participantId")): item
         for item in settlement.get("allocations") or []
         if isinstance(item, dict) and item.get("participantId")
     }
     assigned_ids = [str(value) for value in booking.get("therapistIds") or []]
     rows: list[dict[str, object]] = []
-    for index, snapshot in enumerate(participants):
-        participant = snapshot.to_dict() or {}
-        line = line_map.get(snapshot.id, {})
-        existing = existing_rows.get(snapshot.id, {})
+    for index, line in enumerate(allocation_lines):
+        participant_id = str(line["participantId"])
+        participant = participant_map.get(participant_id, {})
+        line_item_id = str(line["bookingLineItemId"])
+        existing = existing_by_line.get(line_item_id, {})
+        if not existing and sum(
+            1 for item in allocation_lines if item["participantId"] == participant_id
+        ) == 1:
+            existing = existing_by_participant.get(participant_id, {})
+        assignment = line.get("assignment")
+        assignment_data = assignment if isinstance(assignment, dict) else {}
         therapist_id = existing.get("therapistId")
-        if therapist_id is None and index < len(assigned_ids):
-            therapist_id = assigned_ids[index]
+        if therapist_id is None:
+            therapist_id = assignment_data.get("therapistId")
+        participant_index = participant_order.get(participant_id, index)
+        if therapist_id is None and participant_index < len(assigned_ids):
+            therapist_id = assigned_ids[participant_index]
         therapist_id = str(therapist_id) if therapist_id else None
         rows.append(
             {
-                "participantId": snapshot.id,
+                "participantId": participant_id,
                 "participantSequence": int(participant.get("sequence", index + 1)),
                 "participantName": participant.get("nickname") or f"Guest {index + 1}",
-                "bookingLineItemId": line.get("bookingLineItemId"),
+                "bookingLineItemId": line_item_id,
                 "serviceId": line.get("serviceId") or booking.get("serviceId"),
                 "variantId": line.get("variantId"),
                 "serviceNameTh": line.get("nameTh") or booking.get("serviceNameTh"),
@@ -266,19 +302,44 @@ def save_booking_settlement(
     booking_snapshot = _booking_snapshot(client, booking_id)
     participants, lines = _booking_children(client, booking_snapshot.id)
     participant_ids = {item.id for item in participants}
-    request_ids = {item.participant_id for item in request.allocations}
-    if request_ids != participant_ids or len(request_ids) != len(request.allocations):
-        raise ValidationDomainError("Every Booking participant must be allocated exactly once")
+    allocation_lines = _allocation_lines(lines)
+    lines_by_id = {str(item["bookingLineItemId"]): item for item in allocation_lines}
+    lines_by_participant: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for line in allocation_lines:
+        lines_by_participant[str(line["participantId"])].append(line)
+    resolved_line_ids: list[str] = []
+    for item in request.allocations:
+        if item.participant_id not in participant_ids:
+            raise ValidationDomainError("Settlement participant does not belong to Booking")
+        if item.booking_line_item_id:
+            line = lines_by_id.get(item.booking_line_item_id)
+            if not line or line["participantId"] != item.participant_id:
+                raise ValidationDomainError(
+                    "Settlement service line does not belong to participant"
+                )
+            resolved_line_ids.append(item.booking_line_item_id)
+            continue
+        participant_lines = lines_by_participant.get(item.participant_id, [])
+        if len(participant_lines) != 1:
+            raise ValidationDomainError(
+                "Booking line item ID is required when a participant has multiple services"
+            )
+        resolved_line_ids.append(str(participant_lines[0]["bookingLineItemId"]))
+    if (
+        set(resolved_line_ids) != set(lines_by_id)
+        or len(resolved_line_ids) != len(request.allocations)
+    ):
+        raise ValidationDomainError("Every Booking service must be allocated exactly once")
 
-    line_map = _line_by_participant(lines)
     allocation_inputs = tuple(
         SettlementAllocation(
             participant_id=item.participant_id,
             therapist_id=item.therapist_id,
             therapist_pay_satang=item.therapist_pay_satang,
             tip_share_satang=item.tip_share_satang,
+            booking_line_item_id=line_item_id,
         )
-        for item in request.allocations
+        for item, line_item_id in zip(request.allocations, resolved_line_ids, strict=True)
     )
     settlement_ref = client.collection("service_settlements").document(booking_snapshot.id)
     booking_ref = booking_snapshot.reference
@@ -342,12 +403,12 @@ def save_booking_settlement(
                 (item for item in participants if item.id == allocation.participant_id), None
             )
             participant_data = participant.to_dict() or {} if participant else {}
-            line = line_map.get(allocation.participant_id, {})
+            line = lines_by_id.get(allocation.booking_line_item_id or "", {})
             rows.append(
                 {
                     "participantId": allocation.participant_id,
                     "participantSequence": int(participant_data.get("sequence", 0)),
-                    "bookingLineItemId": line.get("bookingLineItemId"),
+                    "bookingLineItemId": allocation.booking_line_item_id,
                     "serviceId": line.get("serviceId") or current_booking.get("serviceId"),
                     "variantId": line.get("variantId"),
                     "serviceNameTh": line.get("nameTh") or current_booking.get("serviceNameTh"),

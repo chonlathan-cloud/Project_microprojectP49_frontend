@@ -6,6 +6,7 @@ import hmac
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, status
 from fastapi import Query as FastAPIQuery
@@ -14,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.auth import require_admin_user
 from app.core.errors import (
+    CapacityUnavailable,
     ConflictDomainError,
     NotFoundDomainError,
     PermissionDenied,
@@ -23,6 +25,9 @@ from app.core.settings import get_settings
 from app.core.types import BookingStatus
 from app.domains.bookings.pricing import validate_fixed_discount
 from app.domains.bookings.service import (
+    _bucket_id,
+    _validate_operating_hours,
+    _validate_walk_in_window,
     _variant,
     create_booking,
     customer_list_bucket,
@@ -30,6 +35,7 @@ from app.domains.bookings.service import (
 )
 from app.domains.bookings.state_machine import BookingStateMachine
 from app.domains.capacity.availability import search_capacity_slots
+from app.domains.capacity.buckets import required_bucket_starts
 from app.infrastructure.firestore import get_firestore_client
 from app.integrations.line_identity import (
     line_identity_hash,
@@ -101,6 +107,18 @@ class TransitionRequest(ApiModel):
     discount_reason: str | None = Field(default=None, max_length=200)
 
 
+class AddBookingServiceRequest(ApiModel):
+    participant_id: str = Field(min_length=1, max_length=160)
+    service_variant_id: str = Field(min_length=1, max_length=160)
+    therapist_id: str = Field(min_length=1, max_length=160)
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    time: str = Field(pattern=r"^\d{2}:\d{2}$")
+    expected_version: int = Field(ge=1)
+    command_id: str = Field(min_length=8, max_length=128)
+    discount_amount_satang: int | None = Field(default=None, ge=0, multiple_of=100)
+    discount_reason: str | None = Field(default=None, max_length=200)
+
+
 class StatusResolveRequest(ApiModel):
     booking_id: str
     status_token: str = Field(min_length=20)
@@ -120,6 +138,7 @@ class CustomerBookingListRequest(ApiModel):
 CUSTOMER_BOOKING_SCAN_BATCH_SIZE = 100
 CUSTOMER_ACTIVE_STATUSES = {"PENDING", "CONFIRMED"}
 ADMIN_BOOKING_SCAN_BATCH_SIZE = 100
+BANGKOK = ZoneInfo("Asia/Bangkok")
 
 
 def _utc_now() -> datetime:
@@ -681,14 +700,81 @@ async def get_admin_booking_detail(
         .stream()
     )
     service_by_participant: dict[str, dict[str, object]] = {}
+    participant_by_id = {
+        snapshot.id: snapshot.to_dict() or {} for snapshot in participant_snapshots
+    }
+    service_items: list[dict[str, object]] = []
     for line_snapshot in line_snapshots:
         line = line_snapshot.to_dict() or {}
         service = line.get("serviceSnapshot")
         if not isinstance(service, dict):
             continue
-        for participant_id in line.get("participantIds") or []:
-            service_by_participant[str(participant_id)] = service
+        participant_ids = [str(value) for value in line.get("participantIds") or []]
+        for participant_id in participant_ids:
+            service_by_participant.setdefault(participant_id, service)
+        participant_id = participant_ids[0] if participant_ids else ""
+        participant = participant_by_id.get(participant_id, {})
+        assignment = line.get("assignment")
+        assignment_data = assignment if isinstance(assignment, dict) else {}
+        scheduled_start = line.get("scheduledStartAt")
+        if not isinstance(scheduled_start, datetime):
+            scheduled_start = booking_data.get("serviceStartedAt") or booking_data.get("startAt")
+        scheduled_end = line.get("scheduledEndAt")
+        if not isinstance(scheduled_end, datetime) and isinstance(scheduled_start, datetime):
+            scheduled_end = scheduled_start + timedelta(
+                minutes=int(service.get("durationMinutes", 0))
+            )
+        service_items.append(
+            {
+                "lineItemId": line_snapshot.id,
+                "participantId": participant_id,
+                "participantName": participant.get("nickname") or "Guest",
+                "sequence": int(
+                    line.get("sequence", participant.get("sequence", len(service_items) + 1))
+                ),
+                "source": line.get("source", "ORIGINAL"),
+                "serviceId": service.get("serviceId"),
+                "variantId": service.get("variantId"),
+                "serviceNameTh": service.get("nameTh"),
+                "serviceNameEn": service.get("nameEn"),
+                "durationMinutes": int(service.get("durationMinutes", 0)),
+                "lineTotalSatang": int(line.get("lineTotalSatang", 0)),
+                "therapistId": assignment_data.get("therapistId"),
+                "therapistName": assignment_data.get("therapistName"),
+                "scheduledStartAt": (
+                    scheduled_start.isoformat()
+                    if isinstance(scheduled_start, datetime)
+                    else None
+                ),
+                "scheduledEndAt": (
+                    scheduled_end.isoformat()
+                    if isinstance(scheduled_end, datetime)
+                    else None
+                ),
+            }
+        )
+    service_items.sort(key=lambda item: (int(item["sequence"]), str(item["lineItemId"])))
     assigned_ids = [str(item) for item in booking_data.get("therapistIds") or []]
+    assigned_names = [
+        value.strip()
+        for value in str(booking_data.get("therapistName") or "").split(",")
+        if value.strip()
+    ]
+    therapist_names = {
+        therapist_id: assigned_names[index]
+        for index, therapist_id in enumerate(assigned_ids)
+        if index < len(assigned_names)
+    }
+    participant_index = {
+        snapshot.id: index for index, snapshot in enumerate(participant_snapshots)
+    }
+    for item in service_items:
+        if item.get("therapistId"):
+            continue
+        index = participant_index.get(str(item.get("participantId")), -1)
+        if 0 <= index < len(assigned_ids):
+            item["therapistId"] = assigned_ids[index]
+            item["therapistName"] = therapist_names.get(assigned_ids[index])
     participants = []
     for index, participant_snapshot in enumerate(participant_snapshots):
         participant = participant_snapshot.to_dict() or {}
@@ -713,7 +799,22 @@ async def get_admin_booking_detail(
                 "therapistId": str(therapist_id) if therapist_id else None,
             }
         )
-    return {**serialize_booking(booking_snapshot), "participants": participants}
+    next_service_start = booking_data.get("endAt")
+    if isinstance(next_service_start, datetime):
+        current_bucket = datetime.now(BANGKOK).replace(second=0, microsecond=0)
+        if current_bucket.minute % 15:
+            current_bucket += timedelta(minutes=15 - current_bucket.minute % 15)
+        next_service_start = max(next_service_start.astimezone(BANGKOK), current_bucket)
+    return {
+        **serialize_booking(booking_snapshot),
+        "participants": participants,
+        "serviceItems": service_items,
+        "nextServiceStartLocal": (
+            next_service_start.isoformat()
+            if isinstance(next_service_start, datetime)
+            else None
+        ),
+    }
 
 
 @router.get("/api/v1/admin/bookings/{booking_id}/health")
@@ -765,6 +866,396 @@ async def get_admin_booking_health(
         }
     )
     return {"bookingId": booking_id, "participants": items}
+
+
+@router.post("/api/v1/admin/bookings/{booking_id}/services")
+async def add_admin_booking_service(
+    booking_id: str,
+    request: AddBookingServiceRequest,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> dict[str, object]:
+    if request.discount_amount_satang is not None and actor.get("role") != "ADMIN":
+        raise PermissionDenied("Only ADMIN may change a booking discount")
+    if request.discount_amount_satang is None and request.discount_reason is not None:
+        raise ValidationDomainError("Discount amount is required with a discount reason")
+    try:
+        start_at = datetime.fromisoformat(f"{request.date}T{request.time}:00").replace(
+            tzinfo=BANGKOK
+        )
+    except ValueError as error:
+        raise ValidationDomainError("Invalid additional service date or time") from error
+    if start_at.minute % get_settings().capacity_bucket_minutes:
+        raise ValidationDomainError("Additional service time must align to 15 minutes")
+
+    service, variant = _variant(client, request.service_variant_id)
+    if variant.pricing_mode != "PER_PARTICIPANT" or variant.required_pax != 1:
+        raise ValidationDomainError(
+            "Only single-participant services may be added to an active Booking"
+        )
+    end_at = start_at + timedelta(minutes=variant.duration_minutes)
+    bucket_starts = required_bucket_starts(start_at, variant.duration_minutes, 0)
+    command_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "bookingId": booking_id,
+                "action": "ADD_SERVICE",
+                "request": request.model_dump(mode="json"),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    matches = list(
+        client.collection("bookings")
+        .where("publicBookingId", "==", booking_id)
+        .limit(1)
+        .stream()
+    )
+    if not matches:
+        raise NotFoundDomainError("Booking not found")
+    booking_ref = matches[0].reference
+    participant_ref = client.collection("booking_participants").document(
+        request.participant_id
+    )
+    therapist_ref = client.collection("therapists").document(request.therapist_id)
+    branch_id = str((matches[0].to_dict() or {}).get("branchId", "branch_001"))
+    branch_ref = client.collection("branches").document(branch_id)
+    bucket_refs = [
+        client.collection("capacity_buckets").document(_bucket_id(branch_id, value))
+        for value in bucket_starts
+    ]
+    line_ref = client.collection("booking_line_items").document()
+    command_ref = client.collection("admin_commands").document(
+        hashlib.sha256(request.command_id.encode()).hexdigest()
+    )
+    transaction = client.transaction()
+
+    @firestore.transactional
+    def write(tx: firestore.Transaction) -> dict[str, object]:
+        command_snapshot = command_ref.get(transaction=tx)
+        if command_snapshot.exists:
+            command = command_snapshot.to_dict() or {}
+            if (
+                command.get("bookingDocId") != booking_ref.id
+                or command.get("action") != "ADD_SERVICE"
+                or command.get("requestDigest") != command_digest
+            ):
+                raise ConflictDomainError(
+                    "Command ID was already used with different booking data"
+                )
+            response = command.get("response")
+            if not isinstance(response, dict):
+                raise ConflictDomainError("Stored command response is unavailable")
+            return response
+
+        booking_snapshot = booking_ref.get(transaction=tx)
+        booking = booking_snapshot.to_dict() or {}
+        participant_snapshot = participant_ref.get(transaction=tx)
+        participant = participant_snapshot.to_dict() or {}
+        therapist_snapshot = therapist_ref.get(transaction=tx)
+        therapist = therapist_snapshot.to_dict() or {}
+        branch_snapshot = branch_ref.get(transaction=tx)
+        branch = branch_snapshot.to_dict() or {}
+        line_snapshots = list(
+            client.collection("booking_line_items")
+            .where("bookingDocId", "==", booking_ref.id)
+            .stream(transaction=tx)
+        )
+        closure_snapshots = list(
+            client.collection("special_closures")
+            .where("branchId", "==", branch_id)
+            .where("localDate", "==", request.date)
+            .limit(1)
+            .stream(transaction=tx)
+        )
+        bucket_snapshots = [ref.get(transaction=tx) for ref in bucket_refs]
+
+        if int(booking.get("version", 1)) != request.expected_version:
+            raise ConflictDomainError("Booking changed; reload before trying again")
+        if booking.get("status") != BookingStatus.IN_SERVICE.value:
+            raise ValidationDomainError(
+                "Services may only be added while the Booking is in service"
+            )
+        if booking.get("capacityReleased"):
+            raise ValidationDomainError("Booking capacity has already been released")
+        if (
+            not participant_snapshot.exists
+            or participant.get("bookingDocId") != booking_ref.id
+        ):
+            raise ValidationDomainError("Booking participant is invalid")
+        if (
+            not therapist_snapshot.exists
+            or not therapist.get("active")
+            or (
+                therapist.get("branchId")
+                and therapist.get("branchId") != branch_id
+            )
+        ):
+            raise ValidationDomainError(
+                "The selected therapist must be active in the Booking branch"
+            )
+        if not branch_snapshot.exists:
+            raise ValidationDomainError("Branch is not configured")
+        if closure_snapshots:
+            raise CapacityUnavailable("The branch is closed on the selected date")
+
+        now = _utc_now()
+        _validate_walk_in_window(
+            start_at,
+            now=now,
+            bucket_minutes=get_settings().capacity_bucket_minutes,
+        )
+        _validate_operating_hours(start_at, variant.duration_minutes, branch)
+        current_end_at = booking.get("endAt")
+        if not isinstance(current_end_at, datetime):
+            raise ValidationDomainError("Booking end time is unavailable")
+        if start_at < current_end_at.astimezone(BANGKOK):
+            raise ValidationDomainError(
+                "Additional service must start after the current Booking schedule"
+            )
+
+        capacity = int(
+            branch.get("activeCapacityUnits", branch.get("capacityUnits", 0))
+        )
+        if capacity <= 0:
+            raise ValidationDomainError("Branch resource configuration is incomplete")
+        for snapshot in bucket_snapshots:
+            used = int((snapshot.to_dict() or {}).get("usedUnits", 0)) if snapshot.exists else 0
+            if used + 1 > capacity:
+                raise CapacityUnavailable(
+                    "No capacity is available for the additional service duration"
+                )
+
+        old_subtotal = int(
+            booking.get(
+                "subtotalAmountSatang",
+                int(booking.get("estimatedAmountSatang", 0))
+                + int(booking.get("discountAmountSatang", 0)),
+            )
+        )
+        new_subtotal = old_subtotal + int(variant.price_satang)
+        old_discount = int(booking.get("discountAmountSatang", 0))
+        old_discount_reason = str(booking.get("discountReason") or "") or None
+        discount = old_discount
+        discount_reason = old_discount_reason
+        discount_audit_reason: str | None = None
+        discount_changed = False
+        if request.discount_amount_satang is not None:
+            discount = request.discount_amount_satang
+            requested_reason = (request.discount_reason or "").strip()
+            reason_changed = bool(
+                discount > 0
+                and request.discount_reason is not None
+                and requested_reason != (old_discount_reason or "")
+            )
+            discount_changed = discount != old_discount or reason_changed
+            if discount_changed:
+                discount_audit_reason = validate_fixed_discount(
+                    subtotal_amount_satang=new_subtotal,
+                    discount_amount_satang=discount,
+                    reason=request.discount_reason,
+                )
+                discount_reason = discount_audit_reason if discount > 0 else None
+            elif discount == 0 and requested_reason:
+                raise ValidationDomainError("Discount reason requires a discount amount")
+
+        net_amount = new_subtotal - discount
+        tip_amount = int(booking.get("tipAmountSatang", 0))
+        gross_amount = net_amount + tip_amount
+        next_version = request.expected_version + 1
+        therapist_name = str(therapist.get("displayName") or request.therapist_id)
+        sequence = max(
+            [
+                int((snapshot.to_dict() or {}).get("sequence", index + 1))
+                for index, snapshot in enumerate(line_snapshots)
+            ],
+            default=0,
+        ) + 1
+        added_service = {
+            "lineItemId": line_ref.id,
+            "participantId": participant_ref.id,
+            "participantName": participant.get("nickname") or "Guest",
+            "sequence": sequence,
+            "source": "ADMIN_ADD_ON",
+            "serviceId": service.id,
+            "variantId": variant.id,
+            "serviceNameTh": service.name_th,
+            "serviceNameEn": service.name_en,
+            "durationMinutes": int(variant.duration_minutes),
+            "lineTotalSatang": int(variant.price_satang),
+            "therapistId": request.therapist_id,
+            "therapistName": therapist_name,
+            "scheduledStartAt": start_at.isoformat(),
+            "scheduledEndAt": end_at.isoformat(),
+        }
+        response: dict[str, object] = {
+            "bookingId": booking_id,
+            "status": BookingStatus.IN_SERVICE.value,
+            "version": next_version,
+            "subtotalAmountSatang": new_subtotal,
+            "discountAmountSatang": discount,
+            "discountReason": discount_reason,
+            "estimatedAmountSatang": net_amount,
+            "tipAmountSatang": tip_amount,
+            "grossAmountSatang": gross_amount,
+            "endAt": end_at.isoformat(),
+            "nextServiceStartLocal": end_at.isoformat(),
+            "addedService": added_service,
+        }
+
+        reservation = booking.get("capacityReservation")
+        reservation_data = dict(reservation) if isinstance(reservation, dict) else {}
+        additions = list(reservation_data.get("additions") or [])
+        additions.append(
+            {
+                "lineItemId": line_ref.id,
+                "bucketIds": [ref.id for ref in bucket_refs],
+                "units": 1,
+            }
+        )
+        reservation_data["additions"] = additions
+        service_names_th = list(booking.get("serviceNamesTh") or [])
+        service_names_en = list(booking.get("serviceNamesEn") or [])
+        service_names_th.append(service.name_th)
+        service_names_en.append(service.name_en)
+        booking_update: dict[str, object] = {
+            "serviceNamesTh": service_names_th,
+            "serviceNamesEn": service_names_en,
+            "endAt": end_at,
+            "subtotalAmountSatang": new_subtotal,
+            "discountAmountSatang": discount,
+            "discountReason": discount_reason,
+            "estimatedAmountSatang": net_amount,
+            "grossAmountSatang": gross_amount,
+            "capacityReservation": reservation_data,
+            "version": next_version,
+            "updatedAt": now,
+        }
+        if discount_changed:
+            booking_update.update(
+                {
+                    "discountType": "ADMIN_FIXED" if discount > 0 else None,
+                    "discountAppliedBy": actor["uid"] if discount > 0 else None,
+                    "discountAppliedAt": now if discount > 0 else None,
+                }
+            )
+
+        tx.set(
+            line_ref,
+            {
+                "bookingDocId": booking_ref.id,
+                "branchId": branch_id,
+                "sequence": sequence,
+                "source": "ADMIN_ADD_ON",
+                "serviceSnapshot": {
+                    "serviceId": service.id,
+                    "variantId": variant.id,
+                    "nameTh": service.name_th,
+                    "nameEn": service.name_en,
+                    "durationMinutes": int(variant.duration_minutes),
+                    "pricingMode": variant.pricing_mode,
+                    "requiredPax": int(variant.required_pax),
+                    "unitPriceSatang": int(variant.price_satang),
+                },
+                "quantity": 1,
+                "lineTotalSatang": int(variant.price_satang),
+                "financiallyExcluded": False,
+                "participantIds": [participant_ref.id],
+                "assignment": {
+                    "therapistId": request.therapist_id,
+                    "therapistName": therapist_name,
+                    "assignedAt": now,
+                    "assignedBy": actor["uid"],
+                },
+                "scheduledStartAt": start_at,
+                "scheduledEndAt": end_at,
+                "createdAt": now,
+                "createdBy": actor["uid"],
+            },
+        )
+        tx.update(booking_ref, booking_update)
+        for ref, snapshot, bucket_start in zip(
+            bucket_refs, bucket_snapshots, bucket_starts, strict=True
+        ):
+            used = int((snapshot.to_dict() or {}).get("usedUnits", 0)) if snapshot.exists else 0
+            tx.set(
+                ref,
+                {
+                    "branchId": branch_id,
+                    "bucketStart": bucket_start,
+                    "usedUnits": used + 1,
+                    "capacityUnits": capacity,
+                    "updatedAt": now,
+                },
+                merge=True,
+            )
+        tx.set(
+            client.collection("audit_events").document(),
+            {
+                "eventType": "BOOKING_SERVICE_ADDED",
+                "bookingDocId": booking_ref.id,
+                "publicBookingId": booking_id,
+                "bookingLineItemId": line_ref.id,
+                "participantId": participant_ref.id,
+                "serviceId": service.id,
+                "variantId": variant.id,
+                "therapistId": request.therapist_id,
+                "lineTotalSatang": int(variant.price_satang),
+                "oldSubtotalAmountSatang": old_subtotal,
+                "newSubtotalAmountSatang": new_subtotal,
+                "actorType": "ADMIN_USER",
+                "actorId": actor["uid"],
+                "actorRole": actor.get("role"),
+                "commandId": request.command_id,
+                "createdAt": now,
+            },
+        )
+        if discount_changed:
+            event_type = (
+                "BOOKING_DISCOUNT_APPLIED"
+                if old_discount == 0 and discount > 0
+                else "BOOKING_DISCOUNT_REMOVED"
+                if old_discount > 0 and discount == 0
+                else "BOOKING_DISCOUNT_UPDATED"
+            )
+            tx.set(
+                client.collection("audit_events").document(),
+                {
+                    "eventType": event_type,
+                    "bookingDocId": booking_ref.id,
+                    "publicBookingId": booking_id,
+                    "actorType": "ADMIN_USER",
+                    "actorId": actor["uid"],
+                    "actorRole": actor.get("role"),
+                    "oldDiscountAmountSatang": old_discount,
+                    "newDiscountAmountSatang": discount,
+                    "oldDiscountReason": old_discount_reason,
+                    "discountReason": discount_audit_reason,
+                    "oldServiceAmountSatang": int(
+                        booking.get("estimatedAmountSatang", old_subtotal - old_discount)
+                    ),
+                    "newServiceAmountSatang": net_amount,
+                    "bookingVersion": next_version,
+                    "commandId": request.command_id,
+                    "occurredAt": now,
+                    "createdAt": now,
+                },
+            )
+        tx.set(
+            command_ref,
+            {
+                "bookingDocId": booking_ref.id,
+                "action": "ADD_SERVICE",
+                "requestDigest": command_digest,
+                "response": response,
+                "createdAt": now,
+            },
+        )
+        return response
+
+    return write(transaction)
 
 
 @router.post("/api/v1/admin/bookings/{booking_id}:{action}")
@@ -960,10 +1451,21 @@ async def transition_admin_booking(
             BookingStatus.NO_SHOW,
         } and not data.get("capacityReleased"):
             reservation = data.get("capacityReservation") or {}
-            units = int(reservation.get("units", data.get("pax", 1)))
+            bucket_units: dict[str, int] = {}
+            legacy_units = int(reservation.get("units", data.get("pax", 1)))
+            for bucket_id in reservation.get("bucketIds", []):
+                bucket_units[str(bucket_id)] = bucket_units.get(str(bucket_id), 0) + legacy_units
+            for addition in reservation.get("additions", []):
+                if not isinstance(addition, dict):
+                    continue
+                addition_units = int(addition.get("units", 1))
+                for bucket_id in addition.get("bucketIds", []):
+                    bucket_units[str(bucket_id)] = (
+                        bucket_units.get(str(bucket_id), 0) + addition_units
+                    )
             bucket_refs = [
                 client.collection("capacity_buckets").document(bucket_id)
-                for bucket_id in reservation.get("bucketIds", [])
+                for bucket_id in bucket_units
             ]
             bucket_snapshots = [ref.get(transaction=tx) for ref in bucket_refs]
             update["capacityReleased"] = True
@@ -972,7 +1474,11 @@ async def transition_admin_booking(
                 tx.set(
                     bucket_ref,
                     {
-                        "usedUnits": max(0, int(bucket.get("usedUnits", 0)) - units),
+                        "usedUnits": max(
+                            0,
+                            int(bucket.get("usedUnits", 0))
+                            - bucket_units[bucket_ref.id],
+                        ),
                         "updatedAt": now,
                     },
                     merge=True,

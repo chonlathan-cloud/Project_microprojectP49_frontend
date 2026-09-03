@@ -10,6 +10,7 @@ import type { Locale } from "@spa/shared-types";
 type Therapist = { therapistId: string; displayName: string; active: boolean };
 type Allocation = {
   participantId: string;
+  bookingLineItemId: string;
   participantSequence: number;
   participantName: string;
   serviceNameTh: string;
@@ -107,7 +108,7 @@ export function BookingSettlementDialog({ bookingId, locale, user, onClose, onSa
   const invalidTip = totals.shopTip < 0;
   const missingTherapist = allocations.some((item) => (item.therapistPaySatang > 0 || item.tipShareSatang > 0) && !item.therapistId);
 
-  const update = (participantId: string, change: Partial<Allocation>) => setAllocations((current) => current.map((item) => item.participantId === participantId ? { ...item, ...change } : item));
+  const update = (bookingLineItemId: string, change: Partial<Allocation>) => setAllocations((current) => current.map((item) => item.bookingLineItemId === bookingLineItemId ? { ...item, ...change } : item));
 
   async function save() {
     if (!settlement || state === "saving" || invalidTip || missingTherapist) return;
@@ -126,7 +127,7 @@ export function BookingSettlementDialog({ bookingId, locale, user, onClose, onSa
         method: "PUT",
         body: JSON.stringify({
           expectedVersion: settlement.version,
-          allocations: allocations.map((item) => ({ participantId: item.participantId, therapistId: item.therapistId || null, therapistPaySatang: item.therapistPaySatang, tipShareSatang: item.tipShareSatang })),
+          allocations: allocations.map((item) => ({ bookingLineItemId: item.bookingLineItemId, participantId: item.participantId, therapistId: item.therapistId || null, therapistPaySatang: item.therapistPaySatang, tipShareSatang: item.tipShareSatang })),
         }),
       });
       setSettlement(saved);
@@ -150,11 +151,11 @@ export function BookingSettlementDialog({ bookingId, locale, user, onClose, onSa
       {settlement && <>
         {settlement.requiresFinancialReallocation && <div className="settlement-warning" role="alert">{settlement.requiresTipReallocation ? (locale === "th" ? "ยอดทิปเปลี่ยนหลังการสรุปครั้งก่อน กรุณาตรวจและแบ่งทิปใหม่" : "The received tip changed after the last settlement. Review and reallocate the tip.") : (locale === "th" ? "ส่วนลดหรือยอดค่าบริการเปลี่ยนหลังการสรุปครั้งก่อน กรุณาตรวจส่วนร้านและบันทึกใหม่" : "The discount or net service amount changed after the last settlement. Review the shop share and save again.")}</div>}
         <dl className="settlement-financial-strip"><div><dt>{locale === "th" ? "ราคาปกติ" : "Regular price"}</dt><dd>{baht(settlement.subtotalAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ส่วนลดร้าน" : "Shop promotion"}</dt><dd>−{baht(settlement.discountAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ค่าบริการสุทธิ" : "Net service"}</dt><dd>{baht(settlement.netServiceAmountSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ทิปทั้งหมด" : "Total tip"}</dt><dd>{baht(settlement.tipAmountSatang, locale)}</dd></div></dl>
-        <div className="settlement-allocation-list">{allocations.map((item) => <section key={item.participantId} className="settlement-allocation-row" aria-labelledby={`allocation-${item.participantId}`}>
-          <div className="settlement-service"><strong id={`allocation-${item.participantId}`}>{item.participantName}</strong><span>{locale === "th" ? item.serviceNameTh : item.serviceNameEn} • {item.durationMinutes} {locale === "th" ? "นาที" : "min"}</span></div>
-          <label><span>{locale === "th" ? "หมอนวด" : "Therapist"}</span><select value={item.therapistId ?? ""} onChange={(event) => update(item.participantId, { therapistId: event.target.value || null })}><option value="">— {locale === "th" ? "ไม่ระบุ" : "Not assigned"} —</option>{therapists.map((therapist) => <option value={therapist.therapistId} key={therapist.therapistId}>{therapist.displayName}{therapist.active ? "" : locale === "th" ? " (ปิดใช้งาน)" : " (inactive)"}</option>)}</select></label>
-          <label><span>{locale === "th" ? "ค่าหมอ (บาท)" : "Therapist pay (THB)"}</span><input type="number" min="0" step="1" inputMode="numeric" value={item.therapistPaySatang / 100} onChange={(event) => update(item.participantId, { therapistPaySatang: Math.max(0, Math.round(Number(event.target.value || 0))) * 100 })} /></label>
-          <label><span>{locale === "th" ? "แบ่งทิปให้หมอ (บาท)" : "Therapist tip (THB)"}</span><input type="number" min="0" step="1" inputMode="numeric" value={item.tipShareSatang / 100} onChange={(event) => update(item.participantId, { tipShareSatang: Math.max(0, Math.round(Number(event.target.value || 0))) * 100 })} /></label>
+        <div className="settlement-allocation-list">{allocations.map((item) => <section key={item.bookingLineItemId} className="settlement-allocation-row" aria-labelledby={`allocation-${item.bookingLineItemId}`}>
+          <div className="settlement-service"><strong id={`allocation-${item.bookingLineItemId}`}>{item.participantName}</strong><span>{locale === "th" ? item.serviceNameTh : item.serviceNameEn} • {item.durationMinutes} {locale === "th" ? "นาที" : "min"}</span></div>
+          <label><span>{locale === "th" ? "หมอนวด" : "Therapist"}</span><select value={item.therapistId ?? ""} onChange={(event) => update(item.bookingLineItemId, { therapistId: event.target.value || null })}><option value="">— {locale === "th" ? "ไม่ระบุ" : "Not assigned"} —</option>{therapists.map((therapist) => <option value={therapist.therapistId} key={therapist.therapistId}>{therapist.displayName}{therapist.active ? "" : locale === "th" ? " (ปิดใช้งาน)" : " (inactive)"}</option>)}</select></label>
+          <label><span>{locale === "th" ? "ค่าหมอ (บาท)" : "Therapist pay (THB)"}</span><input type="number" min="0" step="1" inputMode="numeric" value={item.therapistPaySatang / 100} onChange={(event) => update(item.bookingLineItemId, { therapistPaySatang: Math.max(0, Math.round(Number(event.target.value || 0))) * 100 })} /></label>
+          <label><span>{locale === "th" ? "แบ่งทิปให้หมอ (บาท)" : "Therapist tip (THB)"}</span><input type="number" min="0" step="1" inputMode="numeric" value={item.tipShareSatang / 100} onChange={(event) => update(item.bookingLineItemId, { tipShareSatang: Math.max(0, Math.round(Number(event.target.value || 0))) * 100 })} /></label>
         </section>)}</div>
         {missingTherapist && <p className="settlement-warning" role="alert">{locale === "th" ? "ต้องเลือกหมอนวดสำหรับแถวที่มีค่าหมอหรือทิป" : "Select a therapist for every row with pay or tip."}</p>}
         {invalidTip && <p className="settlement-warning" role="alert">{locale === "th" ? "ยอดแบ่งทิปให้หมอมากกว่าทิปที่ได้รับ" : "Therapist tip shares exceed the received tip."}</p>}

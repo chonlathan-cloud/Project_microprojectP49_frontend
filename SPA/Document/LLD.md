@@ -859,6 +859,8 @@ Firestore applies branch/date/status equality filters and the descending index b
 
 Any failure commits neither the financial change nor the status transition.
 
+`POST /api/v1/admin/bookings/{bookingId}/services` appends one active `PER_PARTICIPANT` catalogue variant while the Booking is `IN_SERVICE`. The request contains participant, variant, therapist, local date/time, `expectedVersion`, `commandId`, and optional Admin discount fields. The transaction validates ownership/status/version, same-branch active therapist, current/future 15-minute schedule, operating hours and capacity; writes a new `booking_line_items` row with `source=ADMIN_ADD_ON`, assignment and scheduled timestamps; extends the Booking and its additive capacity reservation; recalculates subtotal/net/gross; and writes `BOOKING_SERVICE_ADDED` plus any discount audit. Replaying the same command and body returns its stored response. Final completion releases the legacy reservation and every additive line reservation, and payment remains one Booking-level transaction.
+
 The following command remains a post-service correction path:
 
 `PUT /api/v1/admin/bookings/{bookingId}/discount` is an `ADMIN`-only financial command with body `discountAmountSatang`, `discountReason`, and Booking `expectedVersion`. The amount must be non-negative whole-THB satang, less than the immutable line-item subtotal, and every apply/update/remove command requires a non-empty audit reason. A zero amount removes the stored discount reason while retaining the submitted reason only in audit evidence.
@@ -876,7 +878,7 @@ Settlement validity compares `sourceBookingVersion`, discount/net snapshots, and
 
 ### 6.14.3 Service Settlement and Analytics contract
 
-`service_settlements/{bookingDocId}` is the ADMIN-owned financial allocation projection for one eligible `COMPLETED` or `RECORDED` Booking:
+`service_settlements/{bookingDocId}` is the ADMIN-owned financial allocation projection for one eligible `COMPLETED` or `RECORDED` Booking. Each allocation is keyed by `bookingLineItemId` (with participant ID retained for reporting), so one participant may have several services and different therapists:
 
 ```json
 {

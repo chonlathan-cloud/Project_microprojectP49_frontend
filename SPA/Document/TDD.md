@@ -277,6 +277,7 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | `POST` | `/api/v1/admin/bookings/{bookingId}:confirm` | `booking.confirm` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:cancel` | `booking.cancel` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:start` | `booking.transition`; optional discount mutation requires `ADMIN` |
+| `POST` | `/api/v1/admin/bookings/{bookingId}/services` | `booking.update`; append an active single-participant service during `IN_SERVICE`; optional discount mutation requires `ADMIN` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:complete` | `booking.transition` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:no-show` | `booking.transition` |
 | `PUT` | `/api/v1/admin/bookings/{bookingId}/assignments` | `booking.update` |
@@ -541,6 +542,8 @@ Reducing resource capacity or adding a block never auto-cancels an existing Book
 | `RECORDED` | Cancel | `CANCELLED` | Reason required; set `financiallyExcluded=true`; no Capacity or notification write |
 
 `COMPLETED`, `CANCELLED`, and `NO_SHOW` cannot be reopened in Phase 1 through ordinary endpoints. `RECORDED` supports only the reason-required correction to `CANCELLED`; no other transition is valid.
+
+While status remains `IN_SERVICE`, `POST /bookings/{bookingId}/services` may run repeatedly. The command requires an existing participant, an active same-branch therapist, an active `PER_PARTICIPANT` variant, a 15-minute-aligned start at or after the Booking's current `endAt`, operating hours, available capacity, Booking `expectedVersion`, and an idempotent `commandId`. One transaction appends an immutable `ADMIN_ADD_ON` line and its therapist/schedule snapshot, increments the relevant capacity buckets, extends `endAt`, recalculates subtotal/net/gross, applies an optional `ADMIN`-only Booking discount change, and records audit evidence. Completing or cancelling later releases both original and added reservations.
 
 ## 17. Guest Abuse Protection
 

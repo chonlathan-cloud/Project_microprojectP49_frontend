@@ -11,6 +11,7 @@ class SettlementAllocation:
     therapist_id: str | None
     therapist_pay_satang: int
     tip_share_satang: int
+    booking_line_item_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,15 +48,16 @@ def calculate_settlement_totals(
     if not allocations:
         raise ValidationDomainError("At least one participant allocation is required")
 
-    participant_ids: set[str] = set()
+    allocation_keys: set[str] = set()
     therapist_pay_satang = 0
     therapist_tip_satang = 0
     for allocation in allocations:
         if not allocation.participant_id.strip():
             raise ValidationDomainError("Participant ID is required")
-        if allocation.participant_id in participant_ids:
-            raise ValidationDomainError("Each participant can be allocated only once")
-        participant_ids.add(allocation.participant_id)
+        allocation_key = allocation.booking_line_item_id or allocation.participant_id
+        if allocation_key in allocation_keys:
+            raise ValidationDomainError("Each service line can be allocated only once")
+        allocation_keys.add(allocation_key)
         _validate_whole_baht("Therapist pay", allocation.therapist_pay_satang)
         _validate_whole_baht("Therapist tip share", allocation.tip_share_satang)
         if (

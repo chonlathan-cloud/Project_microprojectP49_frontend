@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -881,6 +881,233 @@ def test_staff_start_service_preserves_existing_discount(
         and str(value.get("eventType", "")).startswith("BOOKING_DISCOUNT")
     ]
     assert discount_audits == []
+
+
+def test_admin_adds_service_and_updates_discount_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    fixed_now = datetime(2026, 9, 3, 3, 0, tzinfo=UTC)
+    booking_start = datetime(2026, 9, 3, 10, 0, tzinfo=booking_service.BRANCH_TIMEZONE)
+    database.documents.update(
+        {
+            ("bookings", "booking-active-001"): {
+                "publicBookingId": "BK-20260903-001",
+                "branchId": "branch_001",
+                "status": "IN_SERVICE",
+                "version": 4,
+                "startAt": booking_start,
+                "endAt": booking_start + timedelta(minutes=60),
+                "localDate": "2026-09-03",
+                "pax": 1,
+                "subtotalAmountSatang": 30_000,
+                "discountAmountSatang": 0,
+                "estimatedAmountSatang": 30_000,
+                "tipAmountSatang": 0,
+                "grossAmountSatang": 30_000,
+                "capacityReleased": False,
+                "capacityReservation": {
+                    "bucketIds": ["branch_001_20260903_1000"],
+                    "units": 1,
+                },
+                "serviceNamesTh": ["นวดแผนไทย"],
+                "serviceNamesEn": ["Traditional Thai Massage"],
+            },
+            ("booking_participants", "participant-001"): {
+                "bookingDocId": "booking-active-001",
+                "sequence": 1,
+                "nickname": "Som",
+            },
+            ("booking_line_items", "line-original-001"): {
+                "bookingDocId": "booking-active-001",
+                "branchId": "branch_001",
+                "serviceSnapshot": {
+                    "serviceId": "traditional-thai",
+                    "variantId": "traditional-thai-60",
+                    "nameTh": "นวดแผนไทย",
+                    "nameEn": "Traditional Thai Massage",
+                    "durationMinutes": 60,
+                },
+                "lineTotalSatang": 30_000,
+                "participantIds": ["participant-001"],
+            },
+            ("therapists", "therapist-001"): {
+                "branchId": "branch_001",
+                "displayName": "หมอเอ",
+                "active": True,
+            },
+        }
+    )
+    monkeypatch.setattr(booking_routes.firestore, "transactional", lambda function: function)
+    monkeypatch.setattr(booking_routes, "_utc_now", lambda: fixed_now)
+    previous_auth, previous_firestore = _override_dependencies(database, role="ADMIN")
+    request = {
+        "participantId": "participant-001",
+        "serviceVariantId": "traditional-thai-60",
+        "therapistId": "therapist-001",
+        "date": "2026-09-03",
+        "time": "11:00",
+        "expectedVersion": 4,
+        "commandId": "add-service-001",
+        "discountAmountSatang": 5_000,
+        "discountReason": "เพิ่มบริการพร้อมส่วนลด",
+    }
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260903-001/services", json=request
+        )
+        replay = client.post(
+            "/api/v1/admin/bookings/BK-20260903-001/services", json=request
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 200, response.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == response.json()
+    payload = response.json()
+    assert payload["status"] == "IN_SERVICE"
+    assert payload["version"] == 5
+    assert payload["subtotalAmountSatang"] == 60_000
+    assert payload["discountAmountSatang"] == 5_000
+    assert payload["estimatedAmountSatang"] == 55_000
+    assert payload["addedService"]["therapistName"] == "หมอเอ"
+    booking = database.documents[("bookings", "booking-active-001")]
+    assert booking["discountReason"] == "เพิ่มบริการพร้อมส่วนลด"
+    assert booking["capacityReservation"]["additions"][0]["units"] == 1
+    added_lines = [
+        value
+        for (collection, document_id), value in database.documents.items()
+        if collection == "booking_line_items" and document_id != "line-original-001"
+    ]
+    assert len(added_lines) == 1
+    assert added_lines[0]["source"] == "ADMIN_ADD_ON"
+    audit_types = {
+        value["eventType"]
+        for (collection, _), value in database.documents.items()
+        if collection == "audit_events"
+    }
+    assert audit_types == {"BOOKING_SERVICE_ADDED", "BOOKING_DISCOUNT_APPLIED"}
+
+
+def test_staff_adds_catalog_service_without_changing_existing_discount(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    fixed_now = datetime(2026, 9, 3, 3, 0, tzinfo=UTC)
+    booking_start = datetime(2026, 9, 3, 10, 0, tzinfo=booking_service.BRANCH_TIMEZONE)
+    database.documents.update(
+        {
+            ("bookings", "booking-active-001"): {
+                "publicBookingId": "BK-20260903-001",
+                "branchId": "branch_001",
+                "status": "IN_SERVICE",
+                "version": 4,
+                "startAt": booking_start,
+                "endAt": booking_start + timedelta(minutes=60),
+                "localDate": "2026-09-03",
+                "pax": 1,
+                "subtotalAmountSatang": 30_000,
+                "discountAmountSatang": 2_000,
+                "discountReason": "โปรโมชั่นหน้าร้าน",
+                "estimatedAmountSatang": 28_000,
+                "tipAmountSatang": 0,
+                "grossAmountSatang": 28_000,
+                "capacityReleased": False,
+                "capacityReservation": {"bucketIds": [], "units": 1},
+            },
+            ("booking_participants", "participant-001"): {
+                "bookingDocId": "booking-active-001",
+                "sequence": 1,
+                "nickname": "Som",
+            },
+            ("therapists", "therapist-001"): {
+                "branchId": "branch_001",
+                "displayName": "หมอเอ",
+                "active": True,
+            },
+        }
+    )
+    monkeypatch.setattr(booking_routes.firestore, "transactional", lambda function: function)
+    monkeypatch.setattr(booking_routes, "_utc_now", lambda: fixed_now)
+    previous_auth, previous_firestore = _override_dependencies(database, role="STAFF")
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260903-001/services",
+            json={
+                "participantId": "participant-001",
+                "serviceVariantId": "traditional-thai-60",
+                "therapistId": "therapist-001",
+                "date": "2026-09-03",
+                "time": "11:00",
+                "expectedVersion": 4,
+                "commandId": "staff-add-service-001",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["discountAmountSatang"] == 2_000
+    assert response.json()["estimatedAmountSatang"] == 58_000
+    discount_audits = [
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "audit_events"
+        and str(value.get("eventType", "")).startswith("BOOKING_DISCOUNT")
+    ]
+    assert discount_audits == []
+
+
+def test_completing_booking_releases_original_and_added_service_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    database.documents.update(
+        {
+            ("bookings", "booking-active-001"): {
+                "publicBookingId": "BK-20260903-001",
+                "branchId": "branch_001",
+                "status": "IN_SERVICE",
+                "version": 5,
+                "pax": 1,
+                "subtotalAmountSatang": 60_000,
+                "estimatedAmountSatang": 60_000,
+                "capacityReleased": False,
+                "capacityReservation": {
+                    "bucketIds": ["branch_001_20260903_1000"],
+                    "units": 1,
+                    "additions": [
+                        {
+                            "lineItemId": "line-addon-001",
+                            "bucketIds": ["branch_001_20260903_1100"],
+                            "units": 1,
+                        }
+                    ],
+                },
+            },
+            ("capacity_buckets", "branch_001_20260903_1000"): {"usedUnits": 1},
+            ("capacity_buckets", "branch_001_20260903_1100"): {"usedUnits": 1},
+        }
+    )
+    monkeypatch.setattr(booking_routes.firestore, "transactional", lambda function: function)
+    previous_auth, previous_firestore = _override_dependencies(database, role="STAFF")
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260903-001:complete",
+            json={"expectedVersion": 5, "commandId": "complete-added-service-001"},
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 200, response.text
+    assert database.documents[("bookings", "booking-active-001")]["capacityReleased"]
+    assert database.documents[
+        ("capacity_buckets", "branch_001_20260903_1000")
+    ]["usedUnits"] == 0
+    assert database.documents[
+        ("capacity_buckets", "branch_001_20260903_1100")
+    ]["usedUnits"] == 0
 
 
 def test_staff_cannot_change_discount_when_starting_service() -> None:

@@ -180,6 +180,7 @@ Responsibilities:
 - Support booking confirmation, cancellation, status progression, and capacity-safe edits
 - Create staff-assisted Bookings for today or a future date with optional phone contact, capacity validation, explicit verbal/paper consent evidence, and an audited initial `CONFIRMED` state
 - Allow only `ADMIN` to apply an optional whole-THB Booking discount with a required reason at creation or in the pre-service Start confirmation, with unpaid `COMPLETED` correction retained as a recovery path, while keeping immutable service prices, subtotal, discount, and net total distinct
+- Allow `ADMIN`/`STAFF` to append active, single-participant catalogue services while a Booking is `IN_SERVICE`; reserve later capacity per added line, assign its therapist, retain `ADMIN`-only discount mutation, and produce one final Booking payment
 - Record past appointments as financial `RECORDED` history with immutable subtotal, Admin discount, net service amount, separate optional tip, and gross amount; allow an audited reason-required correction to `CANCELLED`, but never reserve/release capacity or deliver notifications for this historical path
 - Manage services, duration variants, prices, resources, blocked periods, therapists, and the Phase 1 branch
 - Display health details only to authorized `ADMIN` or `STAFF` users
@@ -193,7 +194,7 @@ An Admin-entered discount is a Booking-level financial adjustment. Coupon search
 
 Therapist compensation is a separate, versioned settlement projection keyed by Booking. The Admin-entered amount is not derived from the discounted customer total: discounts remain the shop's promotion. Tip shares may be distributed across the selected therapists and the remainder belongs to the shop. A negative shop service share is allowed only as an explicit, audited Admin decision and is highlighted as an exception. Missing settlement never blocks service completion; it becomes an operational follow-up on the Dashboard.
 
-Operational therapist assignment is completed from the centered Booking Detail modal or the dispatch board. A two-participant Booking requires two different active therapists before service can start. Detailed Insight filters and CSV export are evaluated by the SPA API; the Admin Web never derives authoritative financial totals or exports health/contact detail from browser state.
+Operational therapist assignment is completed from the centered Booking Detail modal or the dispatch board. A two-participant Booking requires two different active therapists before service can start. While in service, additional catalogue lines are appended sequentially with their own therapist and capacity reservation; the final review freezes the combined subtotal, Booking discount, and one payment due. Detailed Insight filters and CSV export are evaluated by the SPA API; the Admin Web never derives authoritative financial totals or exports health/contact detail from browser state.
 
 ### 7.3 SPA API
 

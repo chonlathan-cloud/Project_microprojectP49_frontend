@@ -171,6 +171,14 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .booking-detail-summary dt { color: var(--muted); font-size: 11px; }
 .booking-detail-summary dd { margin: 0; font-size: 12px; font-weight: 750; }
 .booking-detail-summary dd small { display: block; margin-top: 3px; color: var(--muted); font-size: 9px; }
+.booking-service-timeline { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.booking-service-timeline ol { margin: 12px 0 0; padding: 0; display: grid; gap: 7px; list-style: none; }
+.booking-service-timeline li { padding: 10px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 9px; border-left: 3px solid #9daa97; background: #f7f9f5; }
+.booking-service-timeline li > span { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: var(--forest); color: white; font-size: 9px; font-weight: 900; }
+.booking-service-timeline li strong, .booking-service-timeline li small, .booking-service-timeline li em { display: block; }
+.booking-service-timeline li strong { font-size: 11px; }
+.booking-service-timeline li small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.booking-service-timeline li em { width: max-content; margin-top: 5px; padding: 2px 5px; background: #fff2cf; color: #7b560f; font-size: 8px; font-style: normal; font-weight: 800; }
 .booking-operation-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .booking-operation-heading h3 { margin: 0; color: var(--forest-dark); font-size: 17px; }
 .booking-operation-heading > span { padding: 4px 7px; border-radius: 999px; background: #e7ede3; color: var(--forest-dark); font-size: 9px; font-weight: 800; white-space: nowrap; }
@@ -197,6 +205,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .drawer-actions button { min-height: 44px; border-radius: 8px; font-weight: 800; }
 .confirm-button { border: 0; background: var(--forest); color: white; }
 .cancel-button { border: 1px solid #d89999; background: white; color: #a31d1d; }
+.add-service-button { border: 1px solid var(--forest); background: white; color: var(--forest-dark); }
 .api-gate { color: var(--muted); font-size: 11px; line-height: 1.5; text-align: center; }
 .admin-cash-panel { margin: 0 0 20px; padding: 18px 0; border-block: 1px solid var(--line); }
 .admin-cash-panel h3 { margin: 0; color: var(--forest-dark); font-size: 18px; }
@@ -332,6 +341,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .assignment-controls > button { min-height: 40px; padding: 0 12px; border: 1px solid var(--forest); border-radius: 8px; background: var(--forest); color: white; cursor: pointer; font-size: 12px; font-weight: 800; white-space: nowrap; }
 .assignment-warning { margin: 0 14px 14px; padding: 10px 12px; border: 1px solid #e7b958; border-radius: 8px; background: #fff7dc; color: #754500; font-size: 12px; font-weight: 700; }
 .modal-backdrop { padding: 20px; display: grid; place-items: center; position: fixed; z-index: 70; inset: 0; background: rgb(20 28 19 / 48%); }
+.modal-backdrop.confirmation-backdrop { z-index: 110; }
 .start-service-backdrop { z-index: 85; background: rgb(20 28 19 / 62%); }
 .start-service-dialog { width: min(620px, 100%); max-height: calc(100dvh - 40px); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 28px 90px rgb(20 28 19 / 38%); }
 .start-service-header { padding: 18px 20px; align-items: center; }
@@ -370,6 +380,39 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .start-service-actions button { min-height: 44px; padding: 0 16px; border: 1px solid #cfd4cc; border-radius: 8px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 12px; font-weight: 850; }
 .start-service-actions .confirm-button { min-width: 190px; border-color: var(--forest); background: var(--forest); color: white; }
 .start-service-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.add-service-backdrop, .complete-service-backdrop { z-index: 85; background: rgb(20 28 19 / 62%); }
+.add-service-dialog { width: min(760px, 100%); max-height: calc(100dvh - 40px); display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 28px 90px rgb(20 28 19 / 38%); }
+.add-service-dialog > form { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+.add-service-body { min-height: 0; padding: 18px 20px; overflow-y: auto; }
+.add-service-grid { display: grid; grid-template-columns: 1fr 1.35fr; gap: 12px; }
+.add-service-grid label, .add-service-discount label { min-width: 0; display: grid; gap: 5px; color: var(--text); font-size: 10px; font-weight: 800; }
+.add-service-grid select, .add-service-grid input, .add-service-discount input { width: 100%; min-width: 0; min-height: 42px; padding: 0 10px; border: 1px solid #aeb6aa; border-radius: 8px; background: white; color: var(--text); }
+.add-service-schedule { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.add-service-financial { margin-top: 18px; padding: 15px; border-left: 4px solid var(--gold); background: #fffaf0; }
+.add-service-financial > dl { margin: 10px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid #ead9b9; }
+.add-service-financial > dl > div { padding: 10px; border-right: 1px solid #ead9b9; }
+.add-service-financial > dl > div:last-child { border-right: 0; }
+.add-service-financial dt, .add-service-financial dd { margin: 0; }
+.add-service-financial dt { color: var(--muted); font-size: 9px; font-weight: 750; }
+.add-service-financial dd { margin-top: 4px; color: var(--forest-dark); font-size: 15px; font-weight: 900; }
+.add-service-discount { margin-top: 12px; display: grid; grid-template-columns: .65fr 1.35fr; gap: 10px; }
+.add-service-discount > label:only-child { grid-column: 1 / -1; }
+.add-service-discount input[aria-invalid="true"] { border-color: #b42318; }
+.complete-service-dialog { width: min(680px, 100%); max-height: calc(100dvh - 40px); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 28px 90px rgb(20 28 19 / 38%); }
+.complete-service-body { min-height: 0; padding: 18px 20px; overflow-y: auto; }
+.complete-service-list { margin: 0; padding: 0; display: grid; gap: 8px; list-style: none; }
+.complete-service-list li { padding: 11px 12px; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid var(--line); background: #fafbf9; }
+.complete-service-list li > span { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: #e7ede3; color: var(--forest-dark); font-size: 10px; font-weight: 900; }
+.complete-service-list strong, .complete-service-list small { display: block; }
+.complete-service-list strong { font-size: 12px; }
+.complete-service-list small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.complete-service-totals { margin: 16px 0 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-block: 1px solid var(--line); background: #f7f9f5; }
+.complete-service-totals > div { padding: 12px; border-right: 1px solid var(--line); }
+.complete-service-totals > div:last-child { border-right: 0; background: #e7ede3; }
+.complete-service-totals dt, .complete-service-totals dd { margin: 0; }
+.complete-service-totals dt { color: var(--muted); font-size: 9px; font-weight: 800; }
+.complete-service-totals dd { margin-top: 4px; color: var(--forest-dark); font-size: 17px; font-weight: 900; }
+.complete-service-note { margin: 13px 0 0; color: #754500; font-size: 10px; font-weight: 750; }
 .registration-dialog { width: min(460px, 100%); overflow: hidden; border: 1px solid var(--line); border-radius: 11px; background: white; box-shadow: 0 24px 70px rgb(20 28 19 / 28%); }
 .registration-dialog .drawer-header { padding: 18px 20px; }
 .registration-dialog form { padding: 18px 20px 20px; }
@@ -970,11 +1013,16 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .assignment-controls > button { width: 100%; }
   .modal-backdrop { padding: 12px; }
   .start-service-dialog { max-height: calc(100dvh - 24px); }
-  .start-service-header, .start-service-body, .start-service-actions { padding-inline: 15px; }
+  .start-service-header, .start-service-body, .start-service-actions, .add-service-body, .complete-service-body { padding-inline: 15px; }
   .start-service-context { grid-template-columns: 1fr; }
   .start-service-context > div + div { border-top: 1px solid var(--line); border-left: 0; }
   .start-service-actions { display: grid; grid-template-columns: 1fr; }
   .start-service-actions button { width: 100%; }
+  .add-service-dialog, .complete-service-dialog { max-height: calc(100dvh - 24px); }
+  .add-service-grid, .add-service-discount, .add-service-financial > dl, .complete-service-totals { grid-template-columns: 1fr; }
+  .add-service-schedule { grid-template-columns: 1fr 1fr; }
+  .add-service-financial > dl > div, .complete-service-totals > div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .add-service-financial > dl > div:last-child, .complete-service-totals > div:last-child { border-bottom: 0; }
   .booking-detail-dialog { max-height: calc(100dvh - 24px); }
   .booking-detail-header, .booking-detail-primary, .booking-detail-operations, .booking-detail-footer { padding-inline: 15px; }
   .booking-detail-header { align-items: flex-start; }

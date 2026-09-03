@@ -89,6 +89,25 @@ export type PreviewBooking = {
   estimatedAmountSatang?: number;
   tipAmountSatang?: number;
   grossAmountSatang?: number;
+  endAt?: string;
+  nextServiceStartLocal?: string;
+  serviceItems?: Array<{
+    lineItemId: string;
+    participantId: string;
+    participantName: string;
+    sequence: number;
+    source: "ORIGINAL" | "ADMIN_ADD_ON";
+    serviceId: string;
+    variantId: string;
+    serviceNameTh: string;
+    serviceNameEn: string;
+    durationMinutes: number;
+    lineTotalSatang: number;
+    therapistId?: string;
+    therapistName?: string;
+    scheduledStartAt?: string;
+    scheduledEndAt?: string;
+  }>;
 };
 
 export type PaymentStatus =

@@ -46,6 +46,25 @@ def test_tip_can_be_split_between_multiple_therapists_and_shop() -> None:
     assert totals.shop_total_satang == 27_000
 
 
+def test_one_participant_can_have_multiple_service_line_allocations() -> None:
+    totals = calculate_settlement_totals(
+        net_service_amount_satang=80_000,
+        source_tip_amount_satang=5_000,
+        allocations=(
+            SettlementAllocation(
+                "participant-1", "therapist-1", 20_000, 3_000, "line-original"
+            ),
+            SettlementAllocation(
+                "participant-1", "therapist-2", 15_000, 1_000, "line-addon"
+            ),
+        ),
+    )
+
+    assert totals.therapist_pay_satang == 35_000
+    assert totals.therapist_tip_satang == 4_000
+    assert totals.shop_total_satang == 46_000
+
+
 def test_store_loss_is_allowed_and_explicit() -> None:
     totals = calculate_settlement_totals(
         net_service_amount_satang=30_000,
