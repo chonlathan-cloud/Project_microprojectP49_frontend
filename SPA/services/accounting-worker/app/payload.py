@@ -69,10 +69,17 @@ def build_cash_invoice_payload(
     if export.payment_source is PaymentSource.BEAM:
         payment["otherChannelId"] = int(settings.other_channel_id or "0")
     elif export.payment_source is PaymentSource.BANK_TRANSFER:
-        if not settings.bank_account_id or not settings.transfer_bank_id:
-            raise ValueError("FlowAccount bank-transfer account is not configured")
-        payment["bankAccountId"] = int(settings.bank_account_id or "0")
-        payment["transferBankAccountId"] = int(settings.transfer_bank_id or "0")
+        configured = settings.bank_transfer_account(export.bank_account_key)
+        if (
+            configured is None
+            or configured.bank_account_id != export.bank_account_id
+            or configured.transfer_bank_account_id != export.transfer_bank_account_id
+        ):
+            raise ValueError("FlowAccount bank-transfer account is not allowlisted")
+        payment["bankAccountId"] = int(export.bank_account_id or "0")
+        payment["transferBankAccountId"] = int(
+            export.transfer_bank_account_id or "0"
+        )
 
     payload: dict[str, Any] = {
         "publishedOn": export.accounting_date.isoformat(),

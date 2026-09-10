@@ -152,6 +152,8 @@ class FirestoreAccountingRepository:
             "paymentSource": export.get("paymentSource"),
             "paidAt": export.get("paidAt"),
             "providerReferenceId": payment.get("providerResourceId"),
+            "bankAccountKey": export.get("bankAccountKey"),
+            "bankAccountLabel": export.get("bankAccountLabel"),
             "serviceAmountSatang": int(export.get("serviceAmountSatang", 0)),
             "tipAmountSatang": int(export.get("tipAmountSatang", 0)),
             "grossAmountSatang": int(export.get("grossAmountSatang", 0)),
@@ -348,6 +350,7 @@ class FirestoreAccountingRepository:
         actor_uid: str,
         payment_source: PaymentSource,
         paid_at: datetime,
+        bank_account_key: str | None,
         expected_version: int,
         idempotency_key: str,
     ) -> dict[str, Any]:
@@ -358,6 +361,11 @@ class FirestoreAccountingRepository:
         now = datetime.now(UTC)
         if paid_at.astimezone(UTC) > now:
             raise ValidationDomainError("Historical paid time cannot be in the future")
+        bank_account = self._settings.bank_transfer_account(bank_account_key)
+        if payment_source is PaymentSource.BANK_TRANSFER and bank_account is None:
+            raise ValidationDomainError("Select a configured bank-transfer account")
+        if payment_source is not PaymentSource.BANK_TRANSFER and bank_account_key:
+            raise ValidationDomainError("Bank account is only valid for bank transfer")
 
         matches = list(
             self._client.collection("bookings")
@@ -387,6 +395,7 @@ class FirestoreAccountingRepository:
                     "bookingId": booking_public_id,
                     "paymentSource": payment_source.value,
                     "paidAt": paid_at.isoformat(),
+                    "bankAccountKey": bank_account_key,
                     "expectedVersion": expected_version,
                 },
                 sort_keys=True,
@@ -454,6 +463,12 @@ class FirestoreAccountingRepository:
                     if payment_source is PaymentSource.BANK_TRANSFER
                     else None
                 ),
+                bank_account_key=(bank_account.key if bank_account else None),
+                bank_account_id=(bank_account.bank_account_id if bank_account else None),
+                transfer_bank_account_id=(
+                    bank_account.transfer_bank_account_id if bank_account else None
+                ),
+                bank_account_label=(bank_account.label_th if bank_account else None),
             )
             if payment_source is PaymentSource.CASH:
                 payment = replace(
@@ -474,6 +489,8 @@ class FirestoreAccountingRepository:
                 "exportId": export.export_id,
                 "paymentStatus": "PAID",
                 "paymentSource": payment_source.value,
+                "bankAccountKey": payment.bank_account_key,
+                "bankAccountLabel": payment.bank_account_label,
                 "paidAt": paid_at,
                 "grossAmountSatang": payment.amounts.gross_amount_satang,
                 "version": next_version,
@@ -504,6 +521,8 @@ class FirestoreAccountingRepository:
                     "publicBookingId": booking_public_id,
                     "paymentId": payment.payment_id,
                     "paymentSource": payment_source.value,
+                    "bankAccountKey": payment.bank_account_key,
+                    "bankAccountLabel": payment.bank_account_label,
                     "paidAt": paid_at,
                     "grossAmountSatang": payment.amounts.gross_amount_satang,
                     "occurredAt": now,

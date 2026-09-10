@@ -375,6 +375,10 @@ def test_bank_transfer_is_paid_without_cash_settlement() -> None:
         source=PaymentSource.BANK_TRANSFER,
         paid_at=datetime(2026, 8, 31, 14, 10, tzinfo=UTC),
         manual_received_by="admin-001",
+        bank_account_key="kbank-6073-a",
+        bank_account_id="462850",
+        transfer_bank_account_id="2",
+        bank_account_label="KBank ••••6073 · Company (บัญชี A)",
     )
     accounting_export = build_accounting_export(paid)
 
@@ -382,6 +386,7 @@ def test_bank_transfer_is_paid_without_cash_settlement() -> None:
     assert paid.cash_settlement_status is CashSettlementStatus.NOT_APPLICABLE
     assert accounting_export.payment_source is PaymentSource.BANK_TRANSFER
     assert accounting_export.payment_strategy == "BANK_TRANSFER"
+    assert accounting_export.bank_account_id == "462850"
 
 
 def test_paid_payment_rejects_different_authoritative_evidence() -> None:

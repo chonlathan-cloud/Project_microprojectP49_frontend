@@ -19,8 +19,7 @@ def settings() -> Settings:
         client_secret=SecretStr("test-secret"),
         contact_id="1001",
         other_channel_id="2001",
-        bank_account_id="3001",
-        transfer_bank_id="1",
+        bank_accounts_json='[{"key":"bank-a","bankAccountId":"3001","transferBankAccountId":"1"}]',
         sell_chart_of_account_code="41110",
     )
 

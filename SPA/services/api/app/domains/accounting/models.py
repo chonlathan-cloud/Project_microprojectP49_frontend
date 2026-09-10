@@ -37,6 +37,10 @@ class AccountingExport:
     document_intent: str
     flow_account_contact_strategy: str
     vat_policy_version: str
+    bank_account_key: str | None = None
+    bank_account_id: str | None = None
+    transfer_bank_account_id: str | None = None
+    bank_account_label: str | None = None
     status: AccountingExportStatus = AccountingExportStatus.READY
     source_snapshot_version: int = 1
     attempt_count: int = 0

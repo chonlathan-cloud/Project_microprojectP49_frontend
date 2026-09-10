@@ -59,6 +59,10 @@ def _projection(export_id: str, data: dict[str, Any]) -> ExportProjection:
                 "tip_amount_satang": data["tipAmountSatang"],
                 "gross_amount_satang": data["grossAmountSatang"],
                 "service_lines": data["serviceLines"],
+                "bank_account_key": data.get("bankAccountKey"),
+                "bank_account_id": data.get("bankAccountId"),
+                "transfer_bank_account_id": data.get("transferBankAccountId"),
+                "bank_account_label": data.get("bankAccountLabel"),
             }
         )
     except (KeyError, TypeError, ValueError) as error:

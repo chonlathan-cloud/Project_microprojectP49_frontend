@@ -77,6 +77,10 @@ class Payment:
     provider_resource_id: str | None = None
     cash_received_by: str | None = None
     manual_received_by: str | None = None
+    bank_account_key: str | None = None
+    bank_account_id: str | None = None
+    transfer_bank_account_id: str | None = None
+    bank_account_label: str | None = None
     cash_settlement_status: CashSettlementStatus = CashSettlementStatus.NOT_APPLICABLE
     version: int = 1
 
@@ -120,6 +124,10 @@ class Payment:
         provider_resource_id: str | None = None,
         cash_received_by: str | None = None,
         manual_received_by: str | None = None,
+        bank_account_key: str | None = None,
+        bank_account_id: str | None = None,
+        transfer_bank_account_id: str | None = None,
+        bank_account_label: str | None = None,
     ) -> "Payment":
         if paid_at.tzinfo is None or paid_at.utcoffset() is None:
             raise FinancialInvariantError("Authoritative paid time must be timezone-aware")
@@ -131,6 +139,16 @@ class Payment:
             raise FinancialInvariantError("Cash receipt requires an authorized actor")
         if source is PaymentSource.BANK_TRANSFER and not manual_received_by:
             raise FinancialInvariantError("Bank transfer requires an authorized actor")
+        bank_fields = (
+            bank_account_key,
+            bank_account_id,
+            transfer_bank_account_id,
+            bank_account_label,
+        )
+        if source is PaymentSource.BANK_TRANSFER and not all(bank_fields):
+            raise FinancialInvariantError("Bank transfer requires an account snapshot")
+        if source is not PaymentSource.BANK_TRANSFER and any(bank_fields):
+            raise FinancialInvariantError("Bank account evidence is only valid for bank transfer")
 
         if self.status is PaymentStatus.PAID:
             if (
@@ -139,6 +157,10 @@ class Payment:
                 and self.provider_resource_id == provider_resource_id
                 and self.cash_received_by == cash_received_by
                 and self.manual_received_by == manual_received_by
+                and self.bank_account_key == bank_account_key
+                and self.bank_account_id == bank_account_id
+                and self.transfer_bank_account_id == transfer_bank_account_id
+                and self.bank_account_label == bank_account_label
             ):
                 return self
             raise FinancialConflict("Payment is already paid with different evidence")
@@ -158,6 +180,10 @@ class Payment:
             provider_resource_id=provider_resource_id,
             cash_received_by=cash_received_by,
             manual_received_by=manual_received_by,
+            bank_account_key=bank_account_key,
+            bank_account_id=bank_account_id,
+            transfer_bank_account_id=transfer_bank_account_id,
+            bank_account_label=bank_account_label,
             cash_settlement_status=settlement_status,
             version=self.version + 1,
         )

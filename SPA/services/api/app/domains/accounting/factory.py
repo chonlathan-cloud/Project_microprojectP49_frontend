@@ -63,5 +63,9 @@ def build_accounting_export(payment: Payment) -> AccountingExport:
         document_intent="CASH_INVOICE_WITH_PAYMENT",
         flow_account_contact_strategy="SPA49_WALKIN",
         vat_policy_version="SPA_VAT_INCLUSIVE_7_V1",
+        bank_account_key=payment.bank_account_key,
+        bank_account_id=payment.bank_account_id,
+        transfer_bank_account_id=payment.transfer_bank_account_id,
+        bank_account_label=payment.bank_account_label,
         source_snapshot_version=payment.version,
     )

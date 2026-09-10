@@ -44,6 +44,10 @@ class ExportProjection(BaseModel):
     tip_amount_satang: int = Field(ge=0)
     gross_amount_satang: int = Field(gt=0)
     service_lines: tuple[ServiceLineSnapshot, ...] = Field(min_length=1)
+    bank_account_key: str | None = None
+    bank_account_id: str | None = None
+    transfer_bank_account_id: str | None = None
+    bank_account_label: str | None = None
 
     @model_validator(mode="after")
     def validate_amounts(self) -> "ExportProjection":
@@ -59,4 +63,14 @@ class ExportProjection(BaseModel):
             raise ValueError("Discount reason is required")
         if not self.discount_amount_satang and self.discount_reason is not None:
             raise ValueError("Discount reason requires a discount")
+        bank_fields = (
+            self.bank_account_key,
+            self.bank_account_id,
+            self.transfer_bank_account_id,
+            self.bank_account_label,
+        )
+        if self.payment_source is PaymentSource.BANK_TRANSFER and not all(bank_fields):
+            raise ValueError("Bank transfer requires an account snapshot")
+        if self.payment_source is not PaymentSource.BANK_TRANSFER and any(bank_fields):
+            raise ValueError("Bank account snapshot is only valid for bank transfer")
         return self

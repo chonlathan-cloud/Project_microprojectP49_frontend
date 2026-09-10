@@ -627,6 +627,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .walk-in-consent.privacy { padding: 13px; border: 1px solid #d6bd89; border-radius: 8px; background: #fffaf0; color: #5e4724; }
 .walk-in-pricing { background: #fbfcfa; }
 .historical-payment-choice { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.historical-payment-choice label:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
+.walk-in-inline-help { max-width: 520px; margin: 8px 0 0; color: #7c5b20; font-size: 11px; font-weight: 700; line-height: 1.5; }
 .historical-paid-at { max-width: 360px; }
 .walk-in-price-grid { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(280px, 1.2fr); align-items: end; gap: 16px; }
 .walk-in-price-subtotal { min-height: 68px; padding: 11px 13px; display: flex; flex-direction: column; justify-content: center; gap: 4px; border-left: 3px solid var(--gold); background: #fffaf0; }
@@ -731,12 +733,12 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .historical-accounting-record .historical-accounting-blocked { color: #9f1717; font-weight: 750; }
 .historical-accounting-record > button, .historical-accounting-form button { min-height: 36px; padding: 0 11px; border: 1px solid var(--forest); border-radius: 7px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 11px; font-weight: 850; }
 .historical-accounting-record > button:disabled { border-color: var(--line); color: var(--muted); cursor: not-allowed; }
-.historical-accounting-form { padding: 13px 18px 16px; display: grid; grid-template-columns: minmax(260px, 1fr) minmax(240px, 1fr) auto; align-items: end; gap: 18px; border-top: 1px dashed #c8cec4; background: #f7f9f5; }
+.historical-accounting-form { padding: 13px 18px 16px; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1fr) minmax(220px, 1fr) auto; align-items: end; gap: 18px; border-top: 1px dashed #c8cec4; background: #f7f9f5; }
 .historical-accounting-form fieldset { margin: 0; padding: 0; display: flex; gap: 16px; border: 0; }
 .historical-accounting-form fieldset legend, .historical-accounting-form > label > span { width: 100%; margin-bottom: 6px; display: block; color: var(--muted); font-size: 10px; font-weight: 800; }
 .historical-accounting-form fieldset label { min-height: 40px; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 750; }
 .historical-accounting-form input[type="radio"] { width: 18px; height: 18px; accent-color: var(--forest); }
-.historical-accounting-form input[type="datetime-local"] { width: 100%; min-height: 40px; padding: 0 9px; border: 1px solid #aeb6aa; border-radius: 7px; background: white; }
+.historical-accounting-form input[type="datetime-local"], .historical-accounting-form select { width: 100%; min-height: 40px; padding: 0 9px; border: 1px solid #aeb6aa; border-radius: 7px; background: white; }
 .historical-accounting-form > div { display: flex; gap: 7px; }
 .historical-accounting-form .primary-compact-button { background: var(--forest); color: white; }
 .accounting-error-code { max-width: 180px; color: #991b1b; overflow-wrap: anywhere; }

@@ -1,4 +1,6 @@
+import json
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -27,6 +29,15 @@ _REQUIRED_BEAM_REDIRECT_SCHEMES = {
     BeamPaymentMethod.KRUNGSRI_APP: "krungsri-kma",
     BeamPaymentMethod.BANGKOK_BANK_APP: "bualuangmbanking",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class BankTransferAccount:
+    key: str
+    bank_account_id: str
+    transfer_bank_account_id: str
+    label_th: str
+    label_en: str
 
 
 class Settings(BaseSettings):
@@ -77,6 +88,7 @@ class Settings(BaseSettings):
     accounting_tasks_location: str = "asia-southeast1"
     accounting_tasks_queue: str | None = None
     accounting_tasks_invoker_service_account: str | None = None
+    accounting_bank_accounts_json: str = "[]"
     flowaccount_document_allowed_hosts: str = "flowaccount.com,*.flowaccount.com"
     cash_deposit_enabled: bool = False
     cash_deposit_provider_contract_confirmed: bool = False
@@ -138,6 +150,76 @@ class Settings(BaseSettings):
             if value.strip()
         )
 
+    def _bank_transfer_account_config(
+        self,
+    ) -> tuple[tuple[BankTransferAccount, ...], tuple[str, ...]]:
+        try:
+            raw = json.loads(self.accounting_bank_accounts_json)
+        except (TypeError, json.JSONDecodeError):
+            return (), ("ACCOUNTING_BANK_ACCOUNTS_JSON_INVALID",)
+        if not isinstance(raw, list):
+            return (), ("ACCOUNTING_BANK_ACCOUNTS_JSON_INVALID",)
+
+        accounts: list[BankTransferAccount] = []
+        keys: set[str] = set()
+        provider_pairs: set[tuple[str, str]] = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                return (), ("ACCOUNTING_BANK_ACCOUNTS_JSON_INVALID",)
+            values = {
+                name: item.get(name)
+                for name in (
+                    "key",
+                    "bankAccountId",
+                    "transferBankAccountId",
+                    "labelTh",
+                    "labelEn",
+                )
+            }
+            if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+                return (), ("ACCOUNTING_BANK_ACCOUNTS_JSON_INVALID",)
+            key = str(values["key"]).strip()
+            bank_account_id = str(values["bankAccountId"]).strip()
+            transfer_bank_account_id = str(values["transferBankAccountId"]).strip()
+            provider_pair = (bank_account_id, transfer_bank_account_id)
+            if (
+                not bank_account_id.isdigit()
+                or int(bank_account_id) <= 0
+                or not transfer_bank_account_id.isdigit()
+                or int(transfer_bank_account_id) <= 0
+                or key in keys
+                or provider_pair in provider_pairs
+            ):
+                return (), ("ACCOUNTING_BANK_ACCOUNTS_JSON_INVALID",)
+            keys.add(key)
+            provider_pairs.add(provider_pair)
+            accounts.append(
+                BankTransferAccount(
+                    key=key,
+                    bank_account_id=bank_account_id,
+                    transfer_bank_account_id=transfer_bank_account_id,
+                    label_th=str(values["labelTh"]).strip(),
+                    label_en=str(values["labelEn"]).strip(),
+                )
+            )
+        return tuple(accounts), ()
+
+    @property
+    def configured_bank_transfer_accounts(self) -> tuple[BankTransferAccount, ...]:
+        return self._bank_transfer_account_config()[0]
+
+    @property
+    def bank_transfer_account_config_errors(self) -> tuple[str, ...]:
+        return self._bank_transfer_account_config()[1]
+
+    def bank_transfer_account(self, key: str | None) -> BankTransferAccount | None:
+        if not key:
+            return None
+        return next(
+            (account for account in self.configured_bank_transfer_accounts if account.key == key),
+            None,
+        )
+
     def accounting_readiness_errors(self) -> tuple[str, ...]:
         if not self.accounting_sync_enabled:
             return ("ACCOUNTING_SYNC_DISABLED",)
@@ -155,6 +237,7 @@ class Settings(BaseSettings):
                 missing.append(code)
         if self.accounting_worker_url and not self.accounting_worker_url.startswith("https://"):
             missing.append("ACCOUNTING_WORKER_URL_INVALID")
+        missing.extend(self.bank_transfer_account_config_errors)
         return tuple(missing)
 
     def cash_deposit_readiness_errors(self) -> tuple[str, ...]:

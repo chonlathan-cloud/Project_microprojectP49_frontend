@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.api.v1 import bookings as booking_routes
 from app.core.auth import require_admin_user
 from app.core.errors import AdvanceWindowViolation, ValidationDomainError
+from app.core.settings import Settings
 from app.domains.bookings import service as booking_service
 from app.infrastructure.firestore import get_firestore_client
 from app.main import app
@@ -742,6 +743,18 @@ def test_historical_record_accepts_admin_discount_and_preserves_net_amount(
         "_validate_historical_record_window",
         lambda *args, **kwargs: None,
     )
+    monkeypatch.setattr(
+        booking_service,
+        "get_settings",
+        lambda: Settings(
+            accounting_bank_accounts_json=(
+                '[{"key":"kbank-6073-a","bankAccountId":"462850",'
+                '"transferBankAccountId":"2",'
+                '"labelTh":"KBank ••••6073 · Company (บัญชี A)",'
+                '"labelEn":"KBank ••••6073 · Company (Account A)"}]'
+            )
+        ),
+    )
 
     result = booking_service.create_booking(
         database,  # type: ignore[arg-type]
@@ -770,6 +783,7 @@ def test_historical_record_accepts_admin_discount_and_preserves_net_amount(
         discount_reason="คูปองสมัครครั้งแรก",
         historical_payment_source="BANK_TRANSFER",
         historical_paid_at=datetime.fromisoformat("2026-08-20T15:00:00+07:00"),
+        historical_bank_account_key="kbank-6073-a",
     )
 
     assert result["subtotalAmountSatang"] == 30_000
@@ -1234,7 +1248,8 @@ def test_admin_historical_endpoint_maps_to_recorded_status(
                 "bookingPrivacyAcknowledged": True,
                 "consentCaptureMethod": "PAPER",
                 "tipAmountSatang": 5_000,
-                "historicalPaymentSource": "BANK_TRANSFER",
+                    "historicalPaymentSource": "BANK_TRANSFER",
+                    "historicalBankAccountKey": "kbank-6073-a",
                 "historicalPaidAt": "2026-08-20T15:00:00+07:00",
                 "participants": [
                     {
@@ -1255,6 +1270,7 @@ def test_admin_historical_endpoint_maps_to_recorded_status(
     assert captured["admin_booking_mode"] == "HISTORICAL_RECORD"
     assert captured["tip_amount_satang"] == 5_000
     assert captured["historical_payment_source"] == "BANK_TRANSFER"
+    assert captured["historical_bank_account_key"] == "kbank-6073-a"
     assert captured["historical_paid_at"] == datetime.fromisoformat(
         "2026-08-20T15:00:00+07:00"
     )

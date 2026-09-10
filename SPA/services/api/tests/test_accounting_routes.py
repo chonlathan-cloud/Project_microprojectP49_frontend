@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.v1 import accounting as accounting_routes
 from app.core.auth import require_admin_user
+from app.core.settings import Settings
 from app.main import app
 
 
@@ -136,6 +137,7 @@ def test_admin_can_classify_pending_historical_payment() -> None:
             headers={"Idempotency-Key": str(uuid4())},
             json={
                 "paymentSource": "BANK_TRANSFER",
+                "bankAccountKey": "kbank-6073-a",
                 "paidAt": "2026-08-20T15:00:00+07:00",
                 "expectedVersion": 1,
                 "confirmed": True,
@@ -147,6 +149,35 @@ def test_admin_can_classify_pending_historical_payment() -> None:
     assert response.json()["paymentSource"] == "BANK_TRANSFER"
     assert repository.historical_records[0]["booking_public_id"] == "BK-20260820-001"
     assert repository.historical_records[0]["payment_source"] == "BANK_TRANSFER"
+    assert repository.historical_records[0]["bank_account_key"] == "kbank-6073-a"
+
+
+def test_admin_payment_options_expose_safe_labels_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        accounting_routes,
+        "get_settings",
+        lambda: Settings(
+            accounting_bank_accounts_json=(
+                '[{"key":"kbank-6073-a","bankAccountId":"462850",'
+                '"transferBankAccountId":"2","labelTh":"KBank ••••6073 (บัญชี A)",'
+                '"labelEn":"KBank ••••6073 (Account A)"}]'
+            )
+        ),
+    )
+    with accounting_client() as (client, _, __):
+        response = client.get("/api/v1/admin/manual-payment-options")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "bankTransferAccounts": [
+            {
+                "key": "kbank-6073-a",
+                "labelTh": "KBank ••••6073 (บัญชี A)",
+                "labelEn": "KBank ••••6073 (Account A)",
+            }
+        ]
+    }
+    assert "462850" not in response.text
 
 
 def test_staff_cannot_classify_historical_payment() -> None:

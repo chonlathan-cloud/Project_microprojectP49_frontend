@@ -193,6 +193,7 @@ def create_booking(
     tip_amount_satang: int = 0,
     historical_payment_source: str | None = None,
     historical_paid_at: datetime | None = None,
+    historical_bank_account_key: str | None = None,
 ) -> dict[str, object]:
     settings = get_settings()
     if not idempotency_key or not 8 <= len(idempotency_key) <= 128:
@@ -299,10 +300,21 @@ def create_booking(
             )
         if historical_paid_at.astimezone(UTC) > datetime.now(UTC):
             raise ValidationDomainError("Historical paid time cannot be in the future")
-    elif historical_payment_source is not None or historical_paid_at is not None:
+        bank_account = settings.bank_transfer_account(historical_bank_account_key)
+        if historical_payment_source == "BANK_TRANSFER" and bank_account is None:
+            raise ValidationDomainError("Select a configured bank-transfer account")
+        if historical_payment_source != "BANK_TRANSFER" and historical_bank_account_key:
+            raise ValidationDomainError("Bank account is only valid for bank transfer")
+    elif (
+        historical_payment_source is not None
+        or historical_paid_at is not None
+        or historical_bank_account_key is not None
+    ):
         raise ValidationDomainError(
             "Historical payment evidence is only valid for historical records"
         )
+    else:
+        bank_account = None
     total = subtotal - discount_amount_satang
     gross_total = total + tip_amount_satang
 
@@ -324,6 +336,7 @@ def create_booking(
         "historicalPaidAt": (
             historical_paid_at.isoformat() if historical_paid_at is not None else None
         ),
+        "historicalBankAccountKey": historical_bank_account_key,
         "lineUserIdHash": (
             hashlib.sha256(str(line_identity["sub"]).encode()).hexdigest()
             if line_identity and line_identity.get("sub")
@@ -708,6 +721,12 @@ def create_booking(
                     if payment_source is PaymentSource.BANK_TRANSFER
                     else None
                 ),
+                bank_account_key=(bank_account.key if bank_account else None),
+                bank_account_id=(bank_account.bank_account_id if bank_account else None),
+                transfer_bank_account_id=(
+                    bank_account.transfer_bank_account_id if bank_account else None
+                ),
+                bank_account_label=(bank_account.label_th if bank_account else None),
             )
             accounting_export = build_accounting_export(payment)
             tx.set(
@@ -731,6 +750,8 @@ def create_booking(
                     "publicBookingId": public_id,
                     "paymentId": payment.payment_id,
                     "paymentSource": payment_source.value,
+                    "bankAccountKey": payment.bank_account_key,
+                    "bankAccountLabel": payment.bank_account_label,
                     "paidAt": historical_paid_at,
                     "grossAmountSatang": gross_total,
                     "occurredAt": now,
@@ -773,6 +794,7 @@ def create_booking(
             "grossAmountSatang": gross_total,
             "paymentStatus": "PAID" if historical_record else "UNAVAILABLE",
             "paymentSource": historical_payment_source if historical_record else None,
+            "bankAccountKey": historical_bank_account_key if historical_record else None,
             "paidAt": historical_paid_at if historical_record else None,
             "createdAt": now,
         }

@@ -99,6 +99,7 @@ class CreateAdminBookingRequest(ApiModel):
     tip_amount_satang: int = Field(default=0, ge=0)
     historical_payment_source: Literal["CASH", "BANK_TRANSFER"] | None = None
     historical_paid_at: datetime | None = None
+    historical_bank_account_key: str | None = Field(default=None, min_length=1, max_length=80)
 
     @model_validator(mode="after")
     def validate_historical_payment(self) -> CreateAdminBookingRequest:
@@ -110,9 +111,16 @@ class CreateAdminBookingRequest(ApiModel):
                 "Historical records require payment source and authoritative paid time"
             )
         if not historical and (
-            self.historical_payment_source is not None or self.historical_paid_at is not None
+            self.historical_payment_source is not None
+            or self.historical_paid_at is not None
+            or self.historical_bank_account_key is not None
         ):
             raise ValueError("Historical payment evidence is only valid for historical records")
+        if historical and self.historical_payment_source == "BANK_TRANSFER":
+            if self.historical_bank_account_key is None:
+                raise ValueError("Bank transfer requires a bank account")
+        elif self.historical_bank_account_key is not None:
+            raise ValueError("Bank account is only valid for bank transfer")
         if (
             self.historical_paid_at is not None
             and (
@@ -683,6 +691,7 @@ async def create_admin_booking(
         tip_amount_satang=request.tip_amount_satang,
         historical_payment_source=request.historical_payment_source,
         historical_paid_at=request.historical_paid_at,
+        historical_bank_account_key=request.historical_bank_account_key,
     )
 
 

@@ -1,8 +1,17 @@
+import json
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+@dataclass(frozen=True, slots=True)
+class BankTransferAccount:
+    key: str
+    bank_account_id: str
+    transfer_bank_account_id: str
 
 
 class Settings(BaseSettings):
@@ -32,6 +41,7 @@ class Settings(BaseSettings):
     bank_accounts_path: str = "/bank-channel/bank-accounts"
     bank_account_id: str | None = None
     transfer_bank_id: str | None = None
+    bank_accounts_json: str = "[]"
     document_url_template: str | None = None
     document_allowed_hosts: str = "flowaccount.com,*.flowaccount.com"
     admin_accounting_url: str | None = None
@@ -73,6 +83,77 @@ class Settings(BaseSettings):
             if value.strip()
         )
 
+    def _bank_transfer_account_config(
+        self,
+    ) -> tuple[tuple[BankTransferAccount, ...], tuple[str, ...]]:
+        try:
+            raw = json.loads(self.bank_accounts_json)
+        except (TypeError, json.JSONDecodeError):
+            return (), ("BANK_ACCOUNTS_JSON_INVALID",)
+        if not isinstance(raw, list):
+            return (), ("BANK_ACCOUNTS_JSON_INVALID",)
+
+        accounts: list[BankTransferAccount] = []
+        keys: set[str] = set()
+        provider_pairs: set[tuple[str, str]] = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                return (), ("BANK_ACCOUNTS_JSON_INVALID",)
+            key = item.get("key")
+            bank_account_id = item.get("bankAccountId")
+            transfer_bank_account_id = item.get("transferBankAccountId")
+            if any(
+                not isinstance(value, str) or not value.strip()
+                for value in (key, bank_account_id, transfer_bank_account_id)
+            ):
+                return (), ("BANK_ACCOUNTS_JSON_INVALID",)
+            normalized_key = str(key).strip()
+            normalized_account_id = str(bank_account_id).strip()
+            normalized_bank_id = str(transfer_bank_account_id).strip()
+            provider_pair = (normalized_account_id, normalized_bank_id)
+            if (
+                not normalized_account_id.isdigit()
+                or int(normalized_account_id) <= 0
+                or not normalized_bank_id.isdigit()
+                or int(normalized_bank_id) <= 0
+                or normalized_key in keys
+                or provider_pair in provider_pairs
+            ):
+                return (), ("BANK_ACCOUNTS_JSON_INVALID",)
+            keys.add(normalized_key)
+            provider_pairs.add(provider_pair)
+            accounts.append(
+                BankTransferAccount(
+                    key=normalized_key,
+                    bank_account_id=normalized_account_id,
+                    transfer_bank_account_id=normalized_bank_id,
+                )
+            )
+
+        if accounts and (self.bank_account_id or self.transfer_bank_id):
+            return (), ("BANK_TRANSFER_CONFIG_CONFLICT",)
+        if not accounts and self.bank_account_id and self.transfer_bank_id:
+            accounts.append(
+                BankTransferAccount(
+                    key="legacy-default",
+                    bank_account_id=self.bank_account_id,
+                    transfer_bank_account_id=self.transfer_bank_id,
+                )
+            )
+        return tuple(accounts), ()
+
+    @property
+    def configured_bank_transfer_accounts(self) -> tuple[BankTransferAccount, ...]:
+        return self._bank_transfer_account_config()[0]
+
+    def bank_transfer_account(self, key: str | None) -> BankTransferAccount | None:
+        if not key:
+            return None
+        return next(
+            (account for account in self.configured_bank_transfer_accounts if account.key == key),
+            None,
+        )
+
     def flowaccount_readiness_errors(self) -> tuple[str, ...]:
         if not self.sync_enabled:
             return ("SYNC_DISABLED",)
@@ -99,6 +180,7 @@ class Settings(BaseSettings):
                 missing.append(code)
         if bool(self.bank_account_id) != bool(self.transfer_bank_id):
             missing.append("BANK_TRANSFER_CONFIG_INCOMPLETE")
+        missing.extend(self._bank_transfer_account_config()[1])
         if not self.api_base_url:
             missing.append("API_BASE_URL_MISSING")
         elif not self.api_base_url.startswith("https://"):

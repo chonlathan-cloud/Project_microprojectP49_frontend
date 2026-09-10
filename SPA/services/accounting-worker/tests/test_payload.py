@@ -17,8 +17,7 @@ def settings() -> Settings:
         client_secret=SecretStr("test-secret"),
         contact_id="1001",
         other_channel_id="2001",
-        bank_account_id="3001",
-        transfer_bank_id="1",
+        bank_accounts_json='[{"key":"bank-a","bankAccountId":"3001","transferBankAccountId":"1"}]',
         project_id="project-test-001",
         sell_chart_of_account_code="41110",
     )
@@ -92,7 +91,14 @@ def test_cash_payload_has_no_beam_channel() -> None:
 
 def test_bank_transfer_payload_uses_configured_receiving_account() -> None:
     payload = build_cash_invoice_payload(
-        export(payment_source="BANK_TRANSFER"), settings()
+        export(
+            payment_source="BANK_TRANSFER",
+            bank_account_key="bank-a",
+            bank_account_id="3001",
+            transfer_bank_account_id="1",
+            bank_account_label="KBank ••••0001",
+        ),
+        settings(),
     )
     assert payload["paymentMethod"] == 5
     assert payload["bankAccountId"] == 3001
@@ -105,17 +111,47 @@ def test_bank_transfer_payload_uses_configured_receiving_account() -> None:
 
 
 def test_bank_transfer_requires_account_without_blocking_other_channels() -> None:
-    without_bank = settings().model_copy(
-        update={"bank_account_id": None, "transfer_bank_id": None}
-    )
+    without_bank = settings().model_copy(update={"bank_accounts_json": "[]"})
     assert without_bank.ready_for_sync
     assert build_cash_invoice_payload(export(payment_source="CASH"), without_bank)[
         "paymentMethod"
     ] == 1
     with pytest.raises(ValueError, match="bank-transfer account"):
         build_cash_invoice_payload(
-            export(payment_source="BANK_TRANSFER"), without_bank
+            export(
+                payment_source="BANK_TRANSFER",
+                bank_account_key="bank-a",
+                bank_account_id="3001",
+                transfer_bank_account_id="1",
+                bank_account_label="KBank ••••0001",
+            ),
+            without_bank,
         )
+
+
+def test_bank_transfer_snapshot_must_match_allowlist() -> None:
+    projection = export(
+        payment_source="BANK_TRANSFER",
+        bank_account_key="bank-a",
+        bank_account_id="9999",
+        transfer_bank_account_id="1",
+        bank_account_label="Unexpected account",
+    )
+    with pytest.raises(ValueError, match="not allowlisted"):
+        build_cash_invoice_payload(projection, settings())
+
+
+def test_duplicate_bank_account_config_is_not_ready() -> None:
+    duplicate = settings().model_copy(
+        update={
+            "bank_accounts_json": (
+                '[{"key":"bank-a","bankAccountId":"3001",'
+                '"transferBankAccountId":"1"},{"key":"bank-b",'
+                '"bankAccountId":"3001","transferBankAccountId":"1"}]'
+            )
+        }
+    )
+    assert "BANK_ACCOUNTS_JSON_INVALID" in duplicate.readiness_errors()
 
 
 def test_mismatched_service_or_gross_total_is_rejected() -> None:

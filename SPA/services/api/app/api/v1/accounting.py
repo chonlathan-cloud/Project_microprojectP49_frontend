@@ -67,6 +67,7 @@ class CreateAccountingRunRequest(ApiModel):
 class RecordHistoricalPaymentRequest(ApiModel):
     payment_source: Literal["CASH", "BANK_TRANSFER"]
     paid_at: datetime
+    bank_account_key: str | None = Field(default=None, min_length=1, max_length=80)
     expected_version: int = Field(ge=1)
     confirmed: bool
 
@@ -74,6 +75,10 @@ class RecordHistoricalPaymentRequest(ApiModel):
     def validate_paid_at(self) -> "RecordHistoricalPaymentRequest":
         if self.paid_at.tzinfo is None or self.paid_at.utcoffset() is None:
             raise ValueError("Historical paid time must include a timezone offset")
+        if self.payment_source == "BANK_TRANSFER" and self.bank_account_key is None:
+            raise ValueError("Bank transfer requires a bank account")
+        if self.payment_source != "BANK_TRANSFER" and self.bank_account_key is not None:
+            raise ValueError("Bank account is only valid for bank transfer")
         return self
 
 
@@ -123,6 +128,25 @@ def _enqueue_run(tasks: AccountingTaskEnqueuer, run_id: str) -> None:
         tasks.enqueue_run(run_id)
     except AccountingTaskUnavailable as error:
         raise DependencyUnavailable("Accounting worker queue is unavailable") from error
+
+
+@router.get("/manual-payment-options")
+def manual_payment_options(
+    response: Response,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+) -> dict[str, object]:
+    _require_sync_permission(actor)
+    response.headers["Cache-Control"] = "no-store, private"
+    return {
+        "bankTransferAccounts": [
+            {
+                "key": account.key,
+                "labelTh": account.label_th,
+                "labelEn": account.label_en,
+            }
+            for account in get_settings().configured_bank_transfer_accounts
+        ]
+    }
 
 
 @router.get("/payments")
@@ -224,6 +248,7 @@ def record_historical_accounting_payment(
         actor_uid=str(actor["uid"]),
         payment_source=PaymentSource(request.payment_source),
         paid_at=request.paid_at,
+        bank_account_key=request.bank_account_key,
         expected_version=request.expected_version,
         idempotency_key=idempotency_key,
     )
