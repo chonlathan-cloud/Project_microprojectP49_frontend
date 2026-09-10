@@ -18,16 +18,20 @@ def _stable_digest(value: str, *, length: int) -> str:
 def build_accounting_export(payment: Payment) -> AccountingExport:
     if payment.status is not PaymentStatus.PAID or payment.paid_at is None:
         raise FinancialInvariantError("Only an authoritative paid customer sale can be exported")
-    if payment.source not in {PaymentSource.BEAM, PaymentSource.CASH}:
+    if payment.source not in {
+        PaymentSource.BEAM,
+        PaymentSource.CASH,
+        PaymentSource.BANK_TRANSFER,
+    }:
         raise FinancialInvariantError("Payment source is required for accounting export")
 
     digest = _stable_digest(payment.payment_id, length=26)
     external_document_id = f"SPAPAY-{digest}"
-    strategy = (
-        FlowAccountPaymentStrategy.BEAM_OTHER_CHANNEL
-        if payment.source is PaymentSource.BEAM
-        else FlowAccountPaymentStrategy.CASH
-    )
+    strategy = {
+        PaymentSource.BEAM: FlowAccountPaymentStrategy.BEAM_OTHER_CHANNEL,
+        PaymentSource.CASH: FlowAccountPaymentStrategy.CASH,
+        PaymentSource.BANK_TRANSFER: FlowAccountPaymentStrategy.BANK_TRANSFER,
+    }[payment.source]
     return AccountingExport(
         export_id=f"fa_{digest.lower()}",
         export_key=f"FLOWACCOUNT:CASH_INVOICE:{payment.payment_id}",

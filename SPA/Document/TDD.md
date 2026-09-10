@@ -4,11 +4,11 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Technical Design (TDD) |
-| Version | 1.7 |
+| Version | 1.8 |
 | Status | Approved technical baseline |
-| Last updated | 2 September 2026 |
-| Business baseline | [Business Logic v2.0](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.7](./HLD.md) |
+| Last updated | 10 September 2026 |
+| Business baseline | [Business Logic v2.1](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.8](./HLD.md) |
 | Initial branch scope | One branch, multi-branch-ready data ownership |
 | Runtime location | `asia-southeast1` |
 
@@ -479,12 +479,14 @@ The creation operation has a pre-transaction validation stage and one Firestore 
 - Verify optional LINE token
 - Verify Guest reCAPTCHA and abuse policy
 - Load static catalogue/configuration needed to build candidate allocations
+- Normalize legacy one-variant input into an ordered 1–3 item participant timeline, reject duplicate variants within one participant, and validate a two-person `PER_BOOKING` package as the identical first item for both participants
+- Derive immutable line items, participant durations, scheduled intervals, subtotal, longest Booking duration, and per-bucket capacity demand from one shared Booking plan
 - Calculate payload digest and inspect idempotency record
 - For Admin Staff-assisted creation, require an active `ADMIN`/`STAFF`, a 15-minute-aligned appointment, booking/privacy acknowledgement, and `VERBAL` or `PAPER` consent capture evidence
 - Accept optional `discountAmountSatang` and `discountReason`; require whole-baht, non-negative input, require `ADMIN` and a non-empty reason when the amount is greater than zero, and require the discount to be less than the service subtotal
 - Keep Coupon lookup/redeem independent. A reason such as `คูปองสมัครครั้งแรก` records why the Booking was discounted but never marks a coupon code redeemed implicitly
 - `STAFF_ASSISTED` accepts the current non-past bucket or a future date and performs operating-hours, closure, duplicate, and capacity validation
-- `HISTORICAL_RECORD` requires a past appointment time, commits `RECORDED`, preserves immutable subtotal/discount/net-service/tip/gross financial snapshots, and skips operating-hours/closure/capacity reservations, automatic payment/accounting creation, and notification outbox writes; non-historical creation rejects any positive tip
+- `HISTORICAL_RECORD` requires ADMIN, a past appointment time, `historicalPaymentSource=CASH|BANK_TRANSFER`, and timezone-aware non-future `historicalPaidAt`; it commits `RECORDED` plus Payment `PAID` and Accounting Export `READY` atomically, preserves immutable subtotal/discount/net-service/tip/gross snapshots, and skips operating-hours/closure/capacity reservations and notification outbox writes; non-historical creation rejects historical payment fields and any positive tip
 - Normalize the optional Admin-entered phone only when provided; never synthesize a placeholder number
 
 For an existing customer Booking, `PUT /api/v1/admin/bookings/{bookingId}/discount` requires `ADMIN`, `expectedVersion`, a whole-THB amount below subtotal, and a non-empty audit reason. It accepts only `COMPLETED` plus Payment `DUE`, and rejects paid/review/correction-hold state or an active/unresolved Beam attempt. One Firestore transaction updates Booking net/gross/due/version, creates or replaces the unpaid Payment snapshot, appends `BOOKING_DISCOUNT_APPLIED|UPDATED|REMOVED`, and marks any existing Settlement `STALE` without changing therapist pay.
@@ -497,13 +499,13 @@ The transaction:
 
 1. Re-reads branch, variant, resource, block, and relevant bucket versions.
 2. Revalidates advance window and service/resource active states.
-3. Confirms the complete allocation for all participants.
+3. Confirms the complete allocation for all participant timelines. Bucket demand may vary over time when participant timelines have different total durations; branch buffer is reserved once after each participant's final item.
 4. Reads and increments the branch-local appointment-date Booking counter.
-5. Creates Customer Web/LIFF Bookings as `PENDING`; creates an authenticated active Admin Booking as `CONFIRMED`, or a historical record as `RECORDED`, with trusted actor timestamps in the same transaction. `RECORDED` permits only the audited correction to `CANCELLED`.
-6. Creates immutable price-bearing Booking line items; a `PER_BOOKING` item is written and charged once. The Booking separately stores subtotal, Admin discount, and net estimated amount.
+5. Creates Customer Web/LIFF Bookings as `PENDING`; creates an authenticated active Admin Booking as `CONFIRMED`, or an ADMIN historical record as paid `RECORDED`, with trusted actor timestamps in the same transaction. A paid `RECORDED` Booking rejects ordinary cancellation and requires an accounting correction workflow.
+6. Creates immutable, ordered, scheduled price-bearing Booking line items; each `PER_PARTICIPANT` selection is a participant line and a two-person `PER_BOOKING` selection is one shared line linked to both participants and charged once. The Booking separately stores subtotal, Admin discount, and net estimated amount.
 7. Creates participant and immutable Booking Health Snapshot documents linked to the appropriate line item.
 8. Resolves or creates the verified/provisional Customer Profile, updates the current Health Profile, and writes versioned consent receipts.
-9. Increments every capacity bucket.
+9. Increments every capacity bucket by the exact demand derived from active participant timelines and stores the same bucket/unit pairs for symmetric terminal-state release.
 10. Creates resource reservation documents.
 11. Creates the Guest status-token digest document.
 12. Creates optional verified LINE link.
@@ -535,7 +537,7 @@ If new capacity is unavailable, no old capacity is released and the Booking rema
 
 ### 15.2 Cancellation and Terminal States
 
-`CANCELLED`, `COMPLETED`, `NO_SHOW`, and `RECORDED` do not consume capacity. Active Booking transitions decrement every active reservation bucket exactly once and mark reservation documents released. `RECORDED → CANCELLED` has no reservation to release and must not read or mutate Capacity. Repeated transitions cannot decrement again.
+`CANCELLED`, `COMPLETED`, `NO_SHOW`, and `RECORDED` do not consume capacity. Active Booking transitions decrement every active reservation bucket exactly once and mark reservation documents released. Legacy unpaid `RECORDED → CANCELLED` has no reservation to release and must not read or mutate Capacity; paid `RECORDED` rejects ordinary cancellation. Repeated transitions cannot decrement again.
 
 `IN_SERVICE` continues consuming capacity until `COMPLETED`.
 
@@ -553,9 +555,9 @@ Reducing resource capacity or adding a block never auto-cancels an existing Book
 | `CONFIRMED` | Cancel | `CANCELLED` | Reason required |
 | `CONFIRMED` | No-show | `NO_SHOW` | Appointment has reached the operational no-show window |
 | `IN_SERVICE` | Complete | `COMPLETED` | Authorized Admin Web user |
-| `RECORDED` | Cancel | `CANCELLED` | Reason required; set `financiallyExcluded=true`; no Capacity or notification write |
+| `RECORDED` | Cancel | `CANCELLED` | Legacy `paymentStatus=UNAVAILABLE` only; reason required; set `financiallyExcluded=true`; no Capacity or notification write |
 
-`COMPLETED`, `CANCELLED`, and `NO_SHOW` cannot be reopened in Phase 1 through ordinary endpoints. `RECORDED` supports only the reason-required correction to `CANCELLED`; no other transition is valid.
+`COMPLETED`, `CANCELLED`, and `NO_SHOW` cannot be reopened in Phase 1 through ordinary endpoints. A legacy unpaid `RECORDED` supports the reason-required correction to `CANCELLED`; paid historical records require a separate accounting correction workflow.
 
 While status remains `IN_SERVICE`, `POST /bookings/{bookingId}/services` may run repeatedly. The command requires an existing participant, an active same-branch therapist, an active `PER_PARTICIPANT` variant, a 15-minute-aligned start at or after the Booking's current `endAt`, operating hours, available capacity, Booking `expectedVersion`, and an idempotent `commandId`. One transaction appends an immutable `ADMIN_ADD_ON` line and its therapist/schedule snapshot, increments the relevant capacity buckets, extends `endAt`, recalculates subtotal/net/gross, applies an optional `ADMIN`-only Booking discount change, and records audit evidence. Completing or cancelling later releases both original and added reservations.
 
@@ -682,6 +684,7 @@ Each event contains a template type and data references, not health detail. The 
 | Dispatch deadline | 30 seconds |
 
 The worker returns `2xx` only after reaching a durable terminal/accepted state. Retryable provider or infrastructure errors return non-`2xx`. Permanent provider errors are recorded as `FAILED` and acknowledged with `2xx` to stop queue retry.
+Before rendering a lifecycle-specific message, the Worker compares the current Booking status with the event's valid status set. An event made obsolete by a later Booking transition is terminally acknowledged as `SENT` with delivery result `SKIPPED_STALE_STATUS`; it must not send a stale confirmation or continue provider retries.
 
 ### 20.3 Claim and Reconciliation
 
@@ -930,7 +933,8 @@ Production LINE sandbox/test channels are used for pre-production integration; C
 
 | Requirement/decision | Technical implementation |
 | --- | --- |
-| `BL-BKG-001`–`008` | Public endpoints, dual identity, transaction, status bearer, abuse policy |
+| `BL-BKG-001`–`003`, `BL-BKG-009`–`010` | Public/Admin ordered multi-service payloads, per-participant timelines, shared Package line/pricing, exact capacity demand, notification projections, and one Booking payment |
+| `BL-BKG-004`–`008` | Transaction, dual identity, status bearer, and abuse policy |
 | `BL-CAP-001`–`003` | 15-minute buckets, deterministic complete allocation, transactional edit/block checks |
 | `BL-ADM-001`–`005` | Firebase roles, permission dependencies, separate verified group command boundary |
 | `BL-LINE-001`–`006` | Channel separation, explicit registered-Admin-Group health projection, masked customer/task/log projections, verified links, outbox/task worker, and LINE-Group-only operational alerts |

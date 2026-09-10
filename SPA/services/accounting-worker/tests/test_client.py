@@ -19,6 +19,8 @@ def settings() -> Settings:
         client_secret=SecretStr("test-secret"),
         contact_id="1001",
         other_channel_id="2001",
+        bank_account_id="3001",
+        transfer_bank_id="1",
         sell_chart_of_account_code="41110",
     )
 
@@ -98,16 +100,25 @@ async def test_configuration_validation_checks_company_contact_and_channel() -> 
                     },
                 },
             )
+        if request.url.path == "/bank-channel/other-channels":
+            return httpx.Response(
+                200,
+                json={
+                    "status": True,
+                    "data": [
+                        {
+                            "otherChannelsId": "2001",
+                            "otherChannelsName": "Beam/UOB Gateway - SPA 49",
+                        }
+                    ],
+                },
+            )
+        assert request.url.path == "/bank-channel/bank-accounts"
         return httpx.Response(
             200,
             json={
                 "status": True,
-                "data": [
-                    {
-                        "otherChannelsId": "2001",
-                        "otherChannelsName": "Beam/UOB Gateway - SPA 49",
-                    }
-                ],
+                "data": [{"bankAccountId": "3001", "bankId": "1"}],
             },
         )
 

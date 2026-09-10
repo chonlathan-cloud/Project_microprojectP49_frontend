@@ -144,6 +144,49 @@ def test_customer_projection_does_not_join_participant_health_detail() -> None:
     assert view.map_url == "https://maps.example/spa49"
 
 
+def test_projection_groups_ordered_service_lines_by_participant() -> None:
+    client = FakeClient()
+    client._collections["booking_participants"] = FakeCollection(
+        [
+            FakeSnapshot("participant-1", {"nickname": "Som", "sequence": 1}),
+            FakeSnapshot("participant-2", {"nickname": "May", "sequence": 2}),
+        ]
+    )
+    client._collections["booking_line_items"] = FakeCollection(
+        [
+            FakeSnapshot(
+                "line-follow-up",
+                {
+                    "participantIds": ["participant-1"],
+                    "participantSequence": 2,
+                    "sequence": 2,
+                    "serviceSnapshot": {"nameTh": "นวดไทย", "durationMinutes": 60},
+                },
+            ),
+            FakeSnapshot(
+                "line-couple",
+                {
+                    "participantIds": ["participant-1", "participant-2"],
+                    "participantSequence": 1,
+                    "sequence": 1,
+                    "serviceSnapshot": {"nameTh": "แพ็กเกจคู่", "durationMinutes": 90},
+                },
+            ),
+        ]
+    )
+    multi_booking = {**booking(), "pax": 2, "estimatedAmountSatang": 149000}
+
+    view = _booking_view(
+        client, booking_doc_id="booking-1", booking=multi_booking, admin=False  # type: ignore[arg-type]
+    )
+
+    assert len(view.participants) == 2
+    assert view.participants[0].service_name == "แพ็กเกจคู่ → นวดไทย"
+    assert view.participants[0].duration_minutes == 150
+    assert view.participants[1].service_name == "แพ็กเกจคู่"
+    assert view.participants[1].duration_minutes == 90
+
+
 def test_admin_projection_does_not_join_detail_without_explicit_render_scope() -> None:
     view = _booking_view(
         FakeClient(), booking_doc_id="booking-1", booking=booking(), admin=True  # type: ignore[arg-type]

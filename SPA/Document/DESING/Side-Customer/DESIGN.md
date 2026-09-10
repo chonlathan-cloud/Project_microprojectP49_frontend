@@ -23,7 +23,8 @@ Derived from Spa 49 logo and menu visual identity:
 ## 4. UI Components & Elements
 - **Pill Banner Headers:** Forest Green background (`#4E6148`), white/gold text, rounded pill ends (`999px`), decorated with lotus icons.
 - **Service Cards:** Warm surface fill (`#FCFAF5`), thin gold border (`1px solid #C3A36C`), soft shadow (`0 4px 12px rgba(78, 97, 72, 0.06)`). Includes Thai/EN names, duration pill selector, bold gold price, and `+ Add to Cart` button.
-- **Floating Cart Bar:** Sticky bottom bar in Forest Green (`#4E6148`), showing selected items count, combined duration (mins), total price (`฿`), and a gold/white "Proceed to Book" button.
+- **Floating Cart Bar:** Sticky bottom bar in Forest Green (`#4E6148`), showing selected treatment count, guest count, longest participant timeline (mins), total price (`฿`), and a gold/white "Proceed to Book" button.
+- **Participant Treatment Plan:** A compact ordered list per guest with sequence numbers, duration, price/included state, and accessible move/remove actions. Each guest can hold 1–3 treatments; Couple Package stays first on both plans and shows a single charge.
 - **Room Schedule Matrix Slots:**
   - **Available:** Clean white card with thin gold outline, clickable to assign a room.
   - **Occupied / In Session:** Forest Green filled card displaying customer name, service duration, and assigned therapist ID.

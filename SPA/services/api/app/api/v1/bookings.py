@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, Header, status
 from fastapi import Query as FastAPIQuery
 from google.cloud import firestore
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.auth import require_admin_user
 from app.core.errors import (
@@ -23,6 +23,7 @@ from app.core.errors import (
 )
 from app.core.settings import get_settings
 from app.core.types import BookingStatus
+from app.domains.bookings.plan import build_booking_plan
 from app.domains.bookings.pricing import validate_fixed_discount
 from app.domains.bookings.service import (
     _bucket_id,
@@ -56,12 +57,23 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(alias_generator=_camel, populate_by_name=True)
 
 
+class ParticipantServiceInput(ApiModel):
+    service_variant_id: str = Field(min_length=1, max_length=160)
+
+
 class ParticipantInput(ApiModel):
     nickname: str = Field(min_length=1, max_length=80)
-    service_variant_id: str = Field(min_length=1)
+    service_variant_id: str | None = Field(default=None, min_length=1, max_length=160)
+    services: list[ParticipantServiceInput] = Field(default_factory=list, max_length=3)
     has_health_information: bool
     health_details: str | None = Field(default=None, max_length=1000)
     health_consent: bool
+
+    @model_validator(mode="after")
+    def validate_service_contract(self) -> ParticipantInput:
+        if bool(self.service_variant_id) == bool(self.services):
+            raise ValueError("Provide either serviceVariantId or services")
+        return self
 
 
 class CreateBookingRequest(ApiModel):
@@ -74,9 +86,7 @@ class CreateBookingRequest(ApiModel):
 
 
 class CreateAdminBookingRequest(ApiModel):
-    booking_mode: Literal["WALK_IN", "STAFF_ASSISTED", "HISTORICAL_RECORD"] = (
-        "STAFF_ASSISTED"
-    )
+    booking_mode: Literal["WALK_IN", "STAFF_ASSISTED", "HISTORICAL_RECORD"] = "STAFF_ASSISTED"
     branch_id: str = "branch_001"
     date: str
     time: str
@@ -87,10 +97,42 @@ class CreateAdminBookingRequest(ApiModel):
     discount_amount_satang: int = Field(default=0, ge=0)
     discount_reason: str | None = Field(default=None, max_length=200)
     tip_amount_satang: int = Field(default=0, ge=0)
+    historical_payment_source: Literal["CASH", "BANK_TRANSFER"] | None = None
+    historical_paid_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_historical_payment(self) -> CreateAdminBookingRequest:
+        historical = self.booking_mode == "HISTORICAL_RECORD"
+        if historical and (
+            self.historical_payment_source is None or self.historical_paid_at is None
+        ):
+            raise ValueError(
+                "Historical records require payment source and authoritative paid time"
+            )
+        if not historical and (
+            self.historical_payment_source is not None or self.historical_paid_at is not None
+        ):
+            raise ValueError("Historical payment evidence is only valid for historical records")
+        if (
+            self.historical_paid_at is not None
+            and (
+                self.historical_paid_at.tzinfo is None
+                or self.historical_paid_at.utcoffset() is None
+            )
+        ):
+            raise ValueError("Historical paid time must include a timezone offset")
+        return self
 
 
 class AdminAvailabilityParticipant(ApiModel):
-    service_variant_id: str = Field(min_length=1)
+    service_variant_id: str | None = Field(default=None, min_length=1, max_length=160)
+    services: list[ParticipantServiceInput] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def validate_service_contract(self) -> AdminAvailabilityParticipant:
+        if bool(self.service_variant_id) == bool(self.services):
+            raise ValueError("Provide either serviceVariantId or services")
+        return self
 
 
 class AdminAvailabilityRequest(ApiModel):
@@ -173,14 +215,10 @@ def _encode_customer_cursor(
     return f"{encoded_payload}.{encoded_signature}"
 
 
-def _decode_customer_cursor(
-    token: str, *, expected_view: str
-) -> tuple[datetime, str, datetime]:
+def _decode_customer_cursor(token: str, *, expected_view: str) -> tuple[datetime, str, datetime]:
     try:
         encoded_payload, encoded_signature = token.split(".", 1)
-        payload = base64.urlsafe_b64decode(
-            encoded_payload + "=" * (-len(encoded_payload) % 4)
-        )
+        payload = base64.urlsafe_b64decode(encoded_payload + "=" * (-len(encoded_payload) % 4))
         signature = base64.urlsafe_b64decode(
             encoded_signature + "=" * (-len(encoded_signature) % 4)
         )
@@ -231,9 +269,7 @@ def _encode_admin_booking_cursor(
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
-    signature = hmac.new(
-        _cursor_secret(), b"admin-bookings:v1:" + payload, hashlib.sha256
-    ).digest()
+    signature = hmac.new(_cursor_secret(), b"admin-bookings:v1:" + payload, hashlib.sha256).digest()
     encoded_payload = base64.urlsafe_b64encode(payload).decode().rstrip("=")
     encoded_signature = base64.urlsafe_b64encode(signature).decode().rstrip("=")
     return f"{encoded_payload}.{encoded_signature}"
@@ -244,9 +280,7 @@ def _decode_admin_booking_cursor(
 ) -> tuple[datetime, str]:
     try:
         encoded_payload, encoded_signature = token.split(".", 1)
-        payload = base64.urlsafe_b64decode(
-            encoded_payload + "=" * (-len(encoded_payload) % 4)
-        )
+        payload = base64.urlsafe_b64decode(encoded_payload + "=" * (-len(encoded_payload) % 4))
         signature = base64.urlsafe_b64decode(
             encoded_signature + "=" * (-len(encoded_signature) % 4)
         )
@@ -530,9 +564,7 @@ async def list_admin_bookings(
     page_token: Annotated[
         str | None, FastAPIQuery(alias="pageToken", min_length=20, max_length=2048)
     ] = None,
-    status_filter: Annotated[
-        BookingStatus | None, FastAPIQuery(alias="status")
-    ] = None,
+    status_filter: Annotated[BookingStatus | None, FastAPIQuery(alias="status")] = None,
     search: Annotated[str | None, FastAPIQuery(max_length=100)] = None,
     limit: Annotated[int | None, FastAPIQuery(ge=1, le=200)] = None,
 ) -> dict[str, object]:
@@ -552,9 +584,9 @@ async def list_admin_bookings(
         base_query = base_query.where("localDate", "==", local_date)
     if status_value:
         base_query = base_query.where("status", "==", status_value)
-    base_query = base_query.order_by(
-        "startAt", direction=firestore.Query.DESCENDING
-    ).order_by("__name__", direction=firestore.Query.DESCENDING)
+    base_query = base_query.order_by("startAt", direction=firestore.Query.DESCENDING).order_by(
+        "__name__", direction=firestore.Query.DESCENDING
+    )
 
     query = base_query
     if page_token:
@@ -625,6 +657,8 @@ async def create_admin_booking(
     if not request.booking_privacy_acknowledged:
         raise ValidationDomainError("Booking privacy acknowledgement is required")
     historical_record = request.booking_mode == "HISTORICAL_RECORD"
+    if historical_record and actor.get("role") != "ADMIN":
+        raise PermissionDenied("Only ADMIN may record paid historical bookings")
     if request.discount_amount_satang > 0 and actor.get("role") != "ADMIN":
         raise PermissionDenied("Only ADMIN may apply a booking discount")
     if request.tip_amount_satang > 0 and not historical_record:
@@ -647,6 +681,8 @@ async def create_admin_booking(
         discount_amount_satang=request.discount_amount_satang,
         discount_reason=request.discount_reason,
         tip_amount_satang=request.tip_amount_satang,
+        historical_payment_source=request.historical_payment_source,
+        historical_paid_at=request.historical_paid_at,
     )
 
 
@@ -656,21 +692,17 @@ async def search_admin_booking_availability(
     _: Annotated[dict[str, object], Depends(require_admin_user)],
     client: Annotated[firestore.Client, Depends(get_firestore_client)],
 ) -> dict[str, object]:
-    variants = [
-        _variant(client, participant.service_variant_id)[1]
-        for participant in request.participants
-    ]
-    if any(item.required_pax == 2 for item in variants) and (
-        len(variants) != 2 or len({item.id for item in variants}) != 1
-    ):
-        raise ValidationDomainError("Invalid participant configuration")
+    plan = build_booking_plan(
+        [participant.model_dump(by_alias=True) for participant in request.participants],
+        lambda variant_id: _variant(client, variant_id),
+        max_services_per_participant=get_settings().max_services_per_participant,
+    )
     return search_capacity_slots(
         client,
         branch_id=request.branch_id,
         date_from=request.date,
         date_to=request.date,
-        duration_minutes=max(item.duration_minutes for item in variants),
-        units=len(variants),
+        participant_duration_minutes=list(plan.participant_duration_minutes),
         mode="ADMIN",
     )
 
@@ -699,7 +731,7 @@ async def get_admin_booking_detail(
         .where("bookingDocId", "==", booking_snapshot.id)
         .stream()
     )
-    service_by_participant: dict[str, dict[str, object]] = {}
+    services_by_participant: dict[str, list[tuple[int, int, dict[str, object]]]] = {}
     participant_by_id = {
         snapshot.id: snapshot.to_dict() or {} for snapshot in participant_snapshots
     }
@@ -710,9 +742,17 @@ async def get_admin_booking_detail(
         if not isinstance(service, dict):
             continue
         participant_ids = [str(value) for value in line.get("participantIds") or []]
+        participant_sequence = int(line.get("participantSequence", line.get("sequence", 999)))
+        line_sequence = int(line.get("sequence", 999))
         for participant_id in participant_ids:
-            service_by_participant.setdefault(participant_id, service)
+            services_by_participant.setdefault(participant_id, []).append(
+                (participant_sequence, line_sequence, service)
+            )
         participant_id = participant_ids[0] if participant_ids else ""
+        participant_names = [
+            str(participant_by_id.get(item, {}).get("nickname") or "Guest")
+            for item in participant_ids
+        ]
         participant = participant_by_id.get(participant_id, {})
         assignment = line.get("assignment")
         assignment_data = assignment if isinstance(assignment, dict) else {}
@@ -729,6 +769,8 @@ async def get_admin_booking_detail(
                 "lineItemId": line_snapshot.id,
                 "participantId": participant_id,
                 "participantName": participant.get("nickname") or "Guest",
+                "participantIds": participant_ids,
+                "participantNames": participant_names,
                 "sequence": int(
                     line.get("sequence", participant.get("sequence", len(service_items) + 1))
                 ),
@@ -742,14 +784,10 @@ async def get_admin_booking_detail(
                 "therapistId": assignment_data.get("therapistId"),
                 "therapistName": assignment_data.get("therapistName"),
                 "scheduledStartAt": (
-                    scheduled_start.isoformat()
-                    if isinstance(scheduled_start, datetime)
-                    else None
+                    scheduled_start.isoformat() if isinstance(scheduled_start, datetime) else None
                 ),
                 "scheduledEndAt": (
-                    scheduled_end.isoformat()
-                    if isinstance(scheduled_end, datetime)
-                    else None
+                    scheduled_end.isoformat() if isinstance(scheduled_end, datetime) else None
                 ),
             }
         )
@@ -765,16 +803,27 @@ async def get_admin_booking_detail(
         for index, therapist_id in enumerate(assigned_ids)
         if index < len(assigned_names)
     }
-    participant_index = {
-        snapshot.id: index for index, snapshot in enumerate(participant_snapshots)
-    }
+    participant_index = {snapshot.id: index for index, snapshot in enumerate(participant_snapshots)}
     for item in service_items:
         if item.get("therapistId"):
             continue
-        index = participant_index.get(str(item.get("participantId")), -1)
-        if 0 <= index < len(assigned_ids):
-            item["therapistId"] = assigned_ids[index]
-            item["therapistName"] = therapist_names.get(assigned_ids[index])
+        item_participant_ids = [str(value) for value in item.get("participantIds") or []]
+        line_therapist_ids = [
+            assigned_ids[index]
+            for participant_id in item_participant_ids
+            if 0 <= (index := participant_index.get(participant_id, -1)) < len(assigned_ids)
+        ]
+        line_therapist_names = [
+            therapist_names[therapist_id]
+            for therapist_id in line_therapist_ids
+            if therapist_id in therapist_names
+        ]
+        if line_therapist_ids:
+            item["therapistId"] = line_therapist_ids[0]
+            item["therapistIds"] = line_therapist_ids
+        if line_therapist_names:
+            item["therapistName"] = " + ".join(line_therapist_names)
+            item["therapistNames"] = line_therapist_names
     participants = []
     for index, participant_snapshot in enumerate(participant_snapshots):
         participant = participant_snapshot.to_dict() or {}
@@ -783,7 +832,10 @@ async def get_admin_booking_detail(
         therapist_id = assignment_data.get("therapistId")
         if not therapist_id and index < len(assigned_ids):
             therapist_id = assigned_ids[index]
-        service = service_by_participant.get(participant_snapshot.id, {})
+        participant_services = [
+            item[2] for item in sorted(services_by_participant.get(participant_snapshot.id, []))
+        ]
+        service = participant_services[0] if participant_services else {}
         participants.append(
             {
                 "participantId": participant_snapshot.id,
@@ -796,6 +848,11 @@ async def get_admin_booking_detail(
                 or booking_data.get("serviceNameEn")
                 or booking_data.get("serviceName"),
                 "durationMinutes": int(service.get("durationMinutes", 0)),
+                "serviceNamesTh": [item.get("nameTh") for item in participant_services],
+                "serviceNamesEn": [item.get("nameEn") for item in participant_services],
+                "totalDurationMinutes": sum(
+                    int(item.get("durationMinutes", 0)) for item in participant_services
+                ),
                 "therapistId": str(therapist_id) if therapist_id else None,
             }
         )
@@ -810,9 +867,7 @@ async def get_admin_booking_detail(
         "participants": participants,
         "serviceItems": service_items,
         "nextServiceStartLocal": (
-            next_service_start.isoformat()
-            if isinstance(next_service_start, datetime)
-            else None
+            next_service_start.isoformat() if isinstance(next_service_start, datetime) else None
         ),
     }
 
@@ -908,17 +963,12 @@ async def add_admin_booking_service(
     ).hexdigest()
 
     matches = list(
-        client.collection("bookings")
-        .where("publicBookingId", "==", booking_id)
-        .limit(1)
-        .stream()
+        client.collection("bookings").where("publicBookingId", "==", booking_id).limit(1).stream()
     )
     if not matches:
         raise NotFoundDomainError("Booking not found")
     booking_ref = matches[0].reference
-    participant_ref = client.collection("booking_participants").document(
-        request.participant_id
-    )
+    participant_ref = client.collection("booking_participants").document(request.participant_id)
     therapist_ref = client.collection("therapists").document(request.therapist_id)
     branch_id = str((matches[0].to_dict() or {}).get("branchId", "branch_001"))
     branch_ref = client.collection("branches").document(branch_id)
@@ -942,9 +992,7 @@ async def add_admin_booking_service(
                 or command.get("action") != "ADD_SERVICE"
                 or command.get("requestDigest") != command_digest
             ):
-                raise ConflictDomainError(
-                    "Command ID was already used with different booking data"
-                )
+                raise ConflictDomainError("Command ID was already used with different booking data")
             response = command.get("response")
             if not isinstance(response, dict):
                 raise ConflictDomainError("Stored command response is unavailable")
@@ -980,18 +1028,12 @@ async def add_admin_booking_service(
             )
         if booking.get("capacityReleased"):
             raise ValidationDomainError("Booking capacity has already been released")
-        if (
-            not participant_snapshot.exists
-            or participant.get("bookingDocId") != booking_ref.id
-        ):
+        if not participant_snapshot.exists or participant.get("bookingDocId") != booking_ref.id:
             raise ValidationDomainError("Booking participant is invalid")
         if (
             not therapist_snapshot.exists
             or not therapist.get("active")
-            or (
-                therapist.get("branchId")
-                and therapist.get("branchId") != branch_id
-            )
+            or (therapist.get("branchId") and therapist.get("branchId") != branch_id)
         ):
             raise ValidationDomainError(
                 "The selected therapist must be active in the Booking branch"
@@ -1016,9 +1058,7 @@ async def add_admin_booking_service(
                 "Additional service must start after the current Booking schedule"
             )
 
-        capacity = int(
-            branch.get("activeCapacityUnits", branch.get("capacityUnits", 0))
-        )
+        capacity = int(branch.get("activeCapacityUnits", branch.get("capacityUnits", 0)))
         if capacity <= 0:
             raise ValidationDomainError("Branch resource configuration is incomplete")
         for snapshot in bucket_snapshots:
@@ -1066,13 +1106,16 @@ async def add_admin_booking_service(
         gross_amount = net_amount + tip_amount
         next_version = request.expected_version + 1
         therapist_name = str(therapist.get("displayName") or request.therapist_id)
-        sequence = max(
-            [
-                int((snapshot.to_dict() or {}).get("sequence", index + 1))
-                for index, snapshot in enumerate(line_snapshots)
-            ],
-            default=0,
-        ) + 1
+        sequence = (
+            max(
+                [
+                    int((snapshot.to_dict() or {}).get("sequence", index + 1))
+                    for index, snapshot in enumerate(line_snapshots)
+                ],
+                default=0,
+            )
+            + 1
+        )
         added_service = {
             "lineItemId": line_ref.id,
             "participantId": participant_ref.id,
@@ -1315,9 +1358,7 @@ async def transition_admin_booking(
                 or command.get("action") != normalized_action
                 or command.get("requestDigest") != command_digest
             ):
-                raise ConflictDomainError(
-                    "Command ID was already used with different booking data"
-                )
+                raise ConflictDomainError("Command ID was already used with different booking data")
             return {
                 "status": str(command.get("status", data.get("status"))),
                 "version": int(command.get("version", data.get("version", 1))),
@@ -1332,17 +1373,11 @@ async def transition_admin_booking(
                     )
                 ),
                 "discountAmountSatang": int(
-                    command.get(
-                        "discountAmountSatang", data.get("discountAmountSatang", 0)
-                    )
+                    command.get("discountAmountSatang", data.get("discountAmountSatang", 0))
                 ),
-                "discountReason": command.get(
-                    "discountReason", data.get("discountReason")
-                ),
+                "discountReason": command.get("discountReason", data.get("discountReason")),
                 "estimatedAmountSatang": int(
-                    command.get(
-                        "estimatedAmountSatang", data.get("estimatedAmountSatang", 0)
-                    )
+                    command.get("estimatedAmountSatang", data.get("estimatedAmountSatang", 0))
                 ),
                 "tipAmountSatang": int(
                     command.get("tipAmountSatang", data.get("tipAmountSatang", 0))
@@ -1370,6 +1405,14 @@ async def transition_admin_booking(
             all_therapists_assigned=data.get("assignmentState") == "ASSIGNED",
             no_show_window_reached=no_show_reached,
         )
+        if (
+            target is BookingStatus.CANCELLED
+            and current is BookingStatus.RECORDED
+            and data.get("paymentStatus") == "PAID"
+        ):
+            raise ConflictDomainError(
+                "Paid historical Booking cannot be cancelled after accounting capture"
+            )
         subtotal_amount_satang = int(
             data.get(
                 "subtotalAmountSatang",
@@ -1400,9 +1443,7 @@ async def transition_admin_booking(
                     discount_amount_satang=discount_amount_satang,
                     reason=request.discount_reason,
                 )
-                discount_reason = (
-                    discount_audit_reason if discount_amount_satang > 0 else None
-                )
+                discount_reason = discount_audit_reason if discount_amount_satang > 0 else None
             elif discount_amount_satang == 0 and requested_reason:
                 raise ValidationDomainError("Discount reason requires a discount amount")
 
@@ -1423,13 +1464,9 @@ async def transition_admin_booking(
                     {
                         "subtotalAmountSatang": subtotal_amount_satang,
                         "discountAmountSatang": discount_amount_satang,
-                        "discountType": (
-                            "ADMIN_FIXED" if discount_amount_satang > 0 else None
-                        ),
+                        "discountType": ("ADMIN_FIXED" if discount_amount_satang > 0 else None),
                         "discountReason": discount_reason,
-                        "discountAppliedBy": (
-                            actor["uid"] if discount_amount_satang > 0 else None
-                        ),
+                        "discountAppliedBy": (actor["uid"] if discount_amount_satang > 0 else None),
                         "discountAppliedAt": now if discount_amount_satang > 0 else None,
                         "estimatedAmountSatang": estimated_amount_satang,
                         "grossAmountSatang": gross_amount_satang,
@@ -1452,9 +1489,23 @@ async def transition_admin_booking(
         } and not data.get("capacityReleased"):
             reservation = data.get("capacityReservation") or {}
             bucket_units: dict[str, int] = {}
-            legacy_units = int(reservation.get("units", data.get("pax", 1)))
-            for bucket_id in reservation.get("bucketIds", []):
-                bucket_units[str(bucket_id)] = bucket_units.get(str(bucket_id), 0) + legacy_units
+            exact_bucket_units = reservation.get("bucketUnits", [])
+            if isinstance(exact_bucket_units, list) and exact_bucket_units:
+                for item in exact_bucket_units:
+                    if not isinstance(item, dict):
+                        continue
+                    bucket_id = str(item.get("bucketId") or "")
+                    if not bucket_id:
+                        continue
+                    bucket_units[bucket_id] = bucket_units.get(bucket_id, 0) + int(
+                        item.get("units", 0)
+                    )
+            else:
+                legacy_units = int(reservation.get("units", data.get("pax", 1)))
+                for bucket_id in reservation.get("bucketIds", []):
+                    bucket_units[str(bucket_id)] = (
+                        bucket_units.get(str(bucket_id), 0) + legacy_units
+                    )
             for addition in reservation.get("additions", []):
                 if not isinstance(addition, dict):
                     continue
@@ -1476,8 +1527,7 @@ async def transition_admin_booking(
                     {
                         "usedUnits": max(
                             0,
-                            int(bucket.get("usedUnits", 0))
-                            - bucket_units[bucket_ref.id],
+                            int(bucket.get("usedUnits", 0)) - bucket_units[bucket_ref.id],
                         ),
                         "updatedAt": now,
                     },

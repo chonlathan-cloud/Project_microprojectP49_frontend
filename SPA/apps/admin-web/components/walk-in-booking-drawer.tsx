@@ -7,12 +7,14 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { adminApi } from "@/lib/admin-api";
 
 type EntryMode = "STAFF_ASSISTED" | "HISTORICAL_RECORD";
-type ParticipantDraft = { nickname: string; variantId: string; hasHealthInformation: boolean | null; healthDetails: string; healthConsent: boolean };
+type HistoricalPaymentSource = "CASH" | "BANK_TRANSFER";
+type ParticipantDraft = { nickname: string; services: string[]; hasHealthInformation: boolean | null; healthDetails: string; healthConsent: boolean };
 type AvailabilitySlot = { localDate: string; localStartTime: string; availableUnits: number };
 type AvailabilityState = "idle" | "loading" | "ready" | "error";
 type AdminRole = "ADMIN" | "STAFF";
 
-const blankParticipant = (variantId = ""): ParticipantDraft => ({ nickname: "", variantId, hasHealthInformation: null, healthDetails: "", healthConsent: false });
+const MAX_SERVICES_PER_PARTICIPANT = 3;
+const blankParticipant = (variantId = ""): ParticipantDraft => ({ nickname: "", services: variantId ? [variantId] : [], hasHealthInformation: null, healthDetails: "", healthConsent: false });
 
 function bangkokDate(date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", timeZone: "Asia/Bangkok" }).format(date);
@@ -23,6 +25,18 @@ function currentBangkokBucket(date = new Date()): string {
   const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
   const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
   return `${String(hour).padStart(2, "0")}:${String(Math.floor(minute / 15) * 15).padStart(2, "0")}`;
+}
+
+function currentBangkokDateTime(date = new Date()): string {
+  const datePart = bangkokDate(date);
+  const timeParts = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" }).formatToParts(date);
+  const hour = timeParts.find((part) => part.type === "hour")?.value ?? "00";
+  const minute = timeParts.find((part) => part.type === "minute")?.value ?? "00";
+  return `${datePart}T${hour}:${minute}`;
+}
+
+function bangkokLocalToIso(value: string): string {
+  return `${value}:00+07:00`;
 }
 
 function previousBucket(value: string): string | undefined {
@@ -40,6 +54,13 @@ function formatLocalDate(value: string, locale: Locale): string {
 
 function formatBaht(amountSatang: number, locale: Locale): string {
   return new Intl.NumberFormat(locale === "th" ? "th-TH" : "en-GB", { style: "currency", currency: "THB", maximumFractionDigits: 0 }).format(amountSatang / 100);
+}
+
+function endTime(startTime: string, durationMinutes: number): string {
+  if (!startTime) return "—";
+  const [hours, minutes] = startTime.split(":").map(Number);
+  const total = hours * 60 + minutes + durationMinutes;
+  return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function findVariant(services: Service[], variantId: string): { service: Service; variant: ServiceVariant } | null {
@@ -75,6 +96,8 @@ export function WalkInBookingDrawer({ user, locale, onClose, onCreated }: {
   const [discountBaht, setDiscountBaht] = useState("");
   const [discountReason, setDiscountReason] = useState("");
   const [tipBaht, setTipBaht] = useState("");
+  const [historicalPaymentSource, setHistoricalPaymentSource] = useState<HistoricalPaymentSource | "">("");
+  const [historicalPaidAt, setHistoricalPaidAt] = useState("");
   const [showValidation, setShowValidation] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -120,10 +143,10 @@ export function WalkInBookingDrawer({ user, locale, onClose, onCreated }: {
     return () => { active = false; };
   }, [user]);
 
-  const selections = useMemo(() => participants.map((participant) => findVariant(services, participant.variantId)), [participants, services]);
-  const variantIds = participants.map((participant) => participant.variantId).join("|");
-  const availabilityParticipants = useMemo(() => variantIds.split("|").filter(Boolean).map((serviceVariantId) => ({ serviceVariantId })), [variantIds]);
-  const allVariantsSelected = participants.length > 0 && selections.every(Boolean);
+  const selections = useMemo(() => participants.map((participant) => participant.services.map((variantId) => findVariant(services, variantId)).filter((item): item is NonNullable<typeof item> => Boolean(item))), [participants, services]);
+  const variantIds = participants.map((participant) => participant.services.join(",")).join("|");
+  const availabilityParticipants = useMemo(() => variantIds.split("|").map((participantVariants) => ({ services: participantVariants.split(",").filter(Boolean).map((serviceVariantId) => ({ serviceVariantId })) })), [variantIds]);
+  const allVariantsSelected = participants.length > 0 && participants.every((participant, index) => participant.services.length > 0 && selections[index].length === participant.services.length);
 
   useEffect(() => {
     if (isHistorical || !allVariantsSelected) {
@@ -151,8 +174,8 @@ export function WalkInBookingDrawer({ user, locale, onClose, onCreated }: {
     return () => { active = false; controller.abort(); };
   }, [allVariantsSelected, availabilityParticipants, availabilityRetry, date, isHistorical, user]);
 
-  const total = selections.reduce((amount, selection, index) => {
-    if (!selection || (selection.variant.pricingMode === "PER_BOOKING" && index > 0)) return amount;
+  const total = selections.flat().reduce((amount, selection, index, allSelections) => {
+    if (selection.variant.pricingMode === "PER_BOOKING" && allSelections.findIndex((item) => item.variant.id === selection.variant.id) !== index) return amount;
     return amount + selection.variant.priceSatang;
   }, 0);
   const normalizedDiscountBaht = discountBaht.trim();
@@ -169,7 +192,12 @@ export function WalkInBookingDrawer({ user, locale, onClose, onCreated }: {
   const recordedGrossTotal = Number.isFinite(tipAmountSatang)
     ? finalTotal + tipAmountSatang
     : finalTotal;
-  const duration = Math.max(0, ...selections.map((selection) => selection?.variant.durationMinutes ?? 0));
+  const participantDurations = selections.map((items) => items.reduce((sum, item) => sum + item.variant.durationMinutes, 0));
+  const duration = Math.max(0, ...participantDurations);
+  const hasSharedPackage = selections[0]?.[0]?.variant.pricingMode === "PER_BOOKING";
+  const suggestedHistoricalPaidAt = date && time ? `${date}T${time}` : "";
+  const effectiveHistoricalPaidAt = historicalPaidAt || suggestedHistoricalPaidAt;
+  const maxHistoricalPaidAt = currentBangkokDateTime();
 
   const validationMessages = useMemo(() => {
     const messages: string[] = [];
@@ -193,26 +221,50 @@ export function WalkInBookingDrawer({ user, locale, onClose, onCreated }: {
       else if (discountAmountSatang > 0 && !discountReason.trim()) messages.push(locale === "th" ? "ระบุเหตุผลหรือชื่อคูปองที่ใช้ลดราคา" : "Enter the discount reason or coupon name");
     }
     if (isHistorical && normalizedTipBaht && (!Number.isFinite(tipAmountSatang) || tipAmountSatang < 0)) messages.push(locale === "th" ? "ทิปต้องเป็นจำนวนเงินบาทเต็มเท่านั้น" : "Tip must be a whole-baht amount");
+    if (isHistorical && !historicalPaymentSource) messages.push(locale === "th" ? "เลือกช่องทางที่ได้รับเงินจริง" : "Choose how the payment was received");
+    if (isHistorical && !effectiveHistoricalPaidAt) messages.push(locale === "th" ? "ระบุวันและเวลาที่ได้รับเงิน" : "Enter when the payment was received");
+    if (isHistorical && effectiveHistoricalPaidAt > maxHistoricalPaidAt) messages.push(locale === "th" ? "วันและเวลาที่ได้รับเงินต้องไม่เป็นอนาคต" : "Payment received time cannot be in the future");
     return messages;
-  }, [adminRole, allVariantsSelected, contactMode, currentBucket, date, discountAmountSatang, discountReason, isHistorical, locale, normalizedDiscountBaht, normalizedTipBaht, participants, phone, privacyAcknowledged, time, tipAmountSatang, today, total]);
+  }, [adminRole, allVariantsSelected, contactMode, currentBucket, date, discountAmountSatang, discountReason, effectiveHistoricalPaidAt, historicalPaymentSource, isHistorical, locale, maxHistoricalPaidAt, normalizedDiscountBaht, normalizedTipBaht, participants, phone, privacyAcknowledged, time, tipAmountSatang, today, total]);
 
   function resetSchedule() {
     setSlots([]); setAvailabilityState("idle"); setTime(""); setShowValidation(false); setSubmitError(""); idempotencyKey.current = crypto.randomUUID();
   }
-  function changeMode(mode: EntryMode) { setEntryMode(mode); setDate(today); setTipBaht(""); resetSchedule(); }
+  function changeMode(mode: EntryMode) { setEntryMode(mode); setDate(today); setTipBaht(""); setHistoricalPaymentSource(""); setHistoricalPaidAt(""); resetSchedule(); }
   function updateParticipant(index: number, update: Partial<ParticipantDraft>) {
     setParticipants((current) => current.map((participant, itemIndex) => itemIndex === index ? { ...participant, ...update } : participant));
     setShowValidation(false);
   }
   function setPax(pax: 1 | 2) {
-    if (findVariant(services, participants[0].variantId)?.variant.requiredPax === 2) return;
+    if (hasSharedPackage && pax === 1) return;
     setParticipants((current) => pax === 1 ? [current[0]] : [current[0], current[1] ?? blankParticipant()]);
     resetSchedule();
   }
-  function selectVariant(index: number, variantId: string) {
+  function addParticipantService(index: number, variantId: string) {
+    if (!variantId) return;
     const selection = findVariant(services, variantId);
-    if (index === 0 && selection?.variant.requiredPax === 2) setParticipants((current) => [{ ...(current[0] ?? blankParticipant()), variantId }, { ...(current[1] ?? blankParticipant()), variantId }]);
-    else updateParticipant(index, { variantId });
+    if (index === 0 && selection?.variant.requiredPax === 2) {
+      setParticipants((current) => [current[0] ?? blankParticipant(), current[1] ?? blankParticipant()].map((participant) => ({ ...participant, services: [variantId, ...participant.services.filter((item) => findVariant(services, item)?.variant.pricingMode !== "PER_BOOKING")].slice(0, MAX_SERVICES_PER_PARTICIPANT) })));
+    } else {
+      setParticipants((current) => current.map((participant, participantIndex) => participantIndex !== index || participant.services.includes(variantId) || participant.services.length >= MAX_SERVICES_PER_PARTICIPANT ? participant : { ...participant, services: [...participant.services, variantId] }));
+    }
+    resetSchedule();
+  }
+  function removeParticipantService(index: number, variantId: string) {
+    const shared = findVariant(services, variantId)?.variant.pricingMode === "PER_BOOKING";
+    setParticipants((current) => current.map((participant, participantIndex) => shared || participantIndex === index ? { ...participant, services: participant.services.filter((item) => item !== variantId) } : participant));
+    resetSchedule();
+  }
+  function moveParticipantService(index: number, serviceIndex: number, direction: -1 | 1) {
+    setParticipants((current) => current.map((participant, participantIndex) => {
+      if (participantIndex !== index) return participant;
+      const target = serviceIndex + direction;
+      const minimum = hasSharedPackage ? 1 : 0;
+      if (target < minimum || target >= participant.services.length) return participant;
+      const next = [...participant.services];
+      [next[serviceIndex], next[target]] = [next[target], next[serviceIndex]];
+      return { ...participant, services: next };
+    }));
     resetSchedule();
   }
 
@@ -231,7 +283,9 @@ export function WalkInBookingDrawer({ user, locale, onClose, onCreated }: {
           discountAmountSatang: adminRole === "ADMIN" ? discountAmountSatang : 0,
           discountReason: adminRole === "ADMIN" && discountAmountSatang > 0 ? discountReason.trim() : null,
           tipAmountSatang: isHistorical ? tipAmountSatang : 0,
-          participants: participants.map((participant) => ({ nickname: participant.nickname.trim(), serviceVariantId: participant.variantId, hasHealthInformation: Boolean(participant.hasHealthInformation), healthDetails: participant.healthDetails.trim() || null, healthConsent: participant.healthConsent })),
+          historicalPaymentSource: isHistorical ? historicalPaymentSource : null,
+          historicalPaidAt: isHistorical ? bangkokLocalToIso(effectiveHistoricalPaidAt) : null,
+          participants: participants.map((participant) => ({ nickname: participant.nickname.trim(), services: participant.services.map((serviceVariantId) => ({ serviceVariantId })), hasHealthInformation: Boolean(participant.hasHealthInformation), healthDetails: participant.healthDetails.trim() || null, healthConsent: participant.healthConsent })),
         }),
       });
       onCreated(payload.bookingId, payload.status);
@@ -252,9 +306,9 @@ export function WalkInBookingDrawer({ user, locale, onClose, onCreated }: {
         <div className="walk-in-scroll">
           <div className="walk-in-mode" role="group" aria-label={locale === "th" ? "ประเภทการบันทึก" : "Booking type"}>
             <button type="button" aria-pressed={!isHistorical} onClick={() => changeMode("STAFF_ASSISTED")}><strong>{locale === "th" ? "จองวันนี้ / ล่วงหน้า" : "Today / future"}</strong><span>{locale === "th" ? "ตรวจ Slot และ Capacity จริง" : "Uses live slot and capacity"}</span></button>
-            <button type="button" aria-pressed={isHistorical} onClick={() => changeMode("HISTORICAL_RECORD")}><strong>{locale === "th" ? "บันทึกย้อนหลัง" : "Historical record"}</strong><span>{locale === "th" ? "เก็บบริการและยอดเงินจริง" : "Records service and financial totals"}</span></button>
+            {adminRole === "ADMIN" && <button type="button" aria-pressed={isHistorical} onClick={() => changeMode("HISTORICAL_RECORD")}><strong>{locale === "th" ? "บันทึกย้อนหลัง" : "Historical record"}</strong><span>{locale === "th" ? "เก็บบริการ การรับเงิน และส่งเข้าบัญชี" : "Records service, payment, and accounting"}</span></button>}
           </div>
-          {isHistorical && <div className="walk-in-notice historical" role="status"><strong>{locale === "th" ? "บันทึกยอดของบริการที่ดำเนินการแล้ว" : "Record totals for a completed past service"}</strong><span>{locale === "th" ? "ระบบจะเก็บราคาปกติ ส่วนลด ค่าบริการสุทธิ ทิป และยอดรับรวม แต่ไม่จอง Capacity ไม่สร้างรายการรับชำระอัตโนมัติ และไม่ส่งข้อความยืนยันให้ลูกค้า" : "The regular price, discount, net service amount, tip, and gross total are saved. Capacity, automatic payment collection, and customer confirmation are skipped."}</span></div>}
+          {isHistorical && <div className="walk-in-notice historical" role="status"><strong>{locale === "th" ? "บันทึกบริการที่เกิดขึ้นและรับเงินแล้ว" : "Record a completed and paid past service"}</strong><span>{locale === "th" ? "ระบบจะสร้างรายการรับชำระและคิวส่ง FlowAccount จากยอดจริง โดยไม่จอง Capacity และไม่ส่งข้อความยืนยันให้ลูกค้า" : "The system creates a paid transaction and a FlowAccount export queue from the actual total. Capacity and customer confirmation are skipped."}</span></div>}
           {showValidation && validationMessages.length > 0 && <div ref={errorRef} tabIndex={-1} className="walk-in-errors" role="alert"><strong>{locale === "th" ? "กรุณาตรวจสอบข้อมูล" : "Check the booking details"}</strong><ul>{validationMessages.map((message) => <li key={message}>{message}</li>)}</ul></div>}
           {catalogState === "preview" && <div className="walk-in-notice warning" role="status">{locale === "th" ? "กำลังใช้รายการบริการสำรอง ระบบจะตรวจสอบข้อมูลจริงอีกครั้งเมื่อบันทึก" : "Using the fallback catalog. Live data will be checked again on save."}</div>}
 
@@ -262,8 +316,9 @@ export function WalkInBookingDrawer({ user, locale, onClose, onCreated }: {
             <div className="walk-in-section-title"><span>1</span><div><h3 id="walk-in-service-heading">{locale === "th" ? "วัน เวลา และบริการ" : "Date, time, and service"}</h3><p>{isHistorical ? (locale === "th" ? "เลือกวันและเวลาที่ให้บริการไปแล้ว" : "Choose when the service actually took place.") : (locale === "th" ? "เลือกวันนี้หรือวันล่วงหน้า ระบบตรวจ Capacity แบบ Real-time" : "Choose today or a future date. Capacity is checked live.")}</p></div></div>
             <div className="walk-in-schedule-grid"><label className="walk-in-field"><span>{locale === "th" ? "วันที่" : "Date"}</span><input type="date" value={date} min={isHistorical ? undefined : today} max={isHistorical ? today : undefined} onChange={(event) => { setDate(event.target.value); resetSchedule(); }} aria-invalid={showValidation && (!date || (!isHistorical && date < today) || (isHistorical && date > today))} /></label>{isHistorical && <label className="walk-in-field"><span>{locale === "th" ? "เวลาที่ให้บริการ" : "Actual service time"}</span><input type="time" step="900" value={time} max={historicalTimeMax} onChange={(event) => { setTime(event.target.value); setShowValidation(false); }} aria-invalid={showValidation && !time} /></label>}</div>
             {date && <p className="walk-in-selected-date">{formatLocalDate(date, locale)}</p>}
-            <div className="walk-in-pax" role="group" aria-label={locale === "th" ? "จำนวนผู้รับบริการ" : "Number of guests"}>{([1, 2] as const).map((pax) => <button type="button" key={pax} aria-pressed={participants.length === pax} disabled={findVariant(services, participants[0].variantId)?.variant.requiredPax === 2 && pax === 1} onClick={() => setPax(pax)}>{pax} {locale === "th" ? "ท่าน" : pax === 1 ? "guest" : "guests"}</button>)}</div>
-            {participants.map((participant, index) => <label className="walk-in-field" key={`service-${index}`}><span>{locale === "th" ? `บริการผู้รับบริการ ${index + 1}` : `Service for guest ${index + 1}`}</span><select value={participant.variantId} disabled={catalogState === "loading" || (index === 1 && findVariant(services, participants[0].variantId)?.variant.requiredPax === 2)} onChange={(event) => selectVariant(index, event.target.value)} aria-invalid={showValidation && !participant.variantId}><option value="">— {catalogState === "loading" ? (locale === "th" ? "กำลังโหลดบริการ" : "Loading services") : (locale === "th" ? "เลือกบริการ" : "Choose a service")} —</option>{services.filter((service) => index === 0 || service.variants.every((variant) => variant.requiredPax === 1)).flatMap((service) => service.variants.map((variant) => <option key={variant.id} value={variant.id}>{optionLabel(service, variant)}</option>))}</select></label>)}
+            <div className="walk-in-pax" role="group" aria-label={locale === "th" ? "จำนวนผู้รับบริการ" : "Number of guests"}>{([1, 2] as const).map((pax) => <button type="button" key={pax} aria-pressed={participants.length === pax} disabled={hasSharedPackage && pax === 1} onClick={() => setPax(pax)}>{pax} {locale === "th" ? "ท่าน" : pax === 1 ? "guest" : "guests"}</button>)}</div>
+            <div className="walk-in-service-plans">{participants.map((participant, index) => <article className="walk-in-service-plan" key={`service-${index}`}><header><strong>{locale === "th" ? `ผู้รับบริการ ${index + 1}` : `Guest ${index + 1}`}</strong><small>{participant.services.length}/{MAX_SERVICES_PER_PARTICIPANT} · {participantDurations[index]} {locale === "th" ? "นาที" : "min"}</small></header><ol>{selections[index].map((selection, serviceIndex) => { const shared = selection.variant.pricingMode === "PER_BOOKING"; return <li key={selection.variant.id}><span>{serviceIndex + 1}</span><div><strong>{locale === "th" ? selection.service.nameTh : selection.service.nameEn}</strong><small>{selection.variant.durationMinutes} min · {shared && index > 0 ? (locale === "th" ? "รวมในแพ็กเกจ" : "Included") : formatBaht(selection.variant.priceSatang, locale)}</small></div><div className="walk-in-service-actions"><button type="button" onClick={() => moveParticipantService(index, serviceIndex, -1)} disabled={shared || serviceIndex <= (hasSharedPackage ? 1 : 0)} aria-label={locale === "th" ? "เลื่อนขึ้น" : "Move up"}>↑</button><button type="button" onClick={() => moveParticipantService(index, serviceIndex, 1)} disabled={shared || serviceIndex === participant.services.length - 1} aria-label={locale === "th" ? "เลื่อนลง" : "Move down"}>↓</button><button type="button" onClick={() => removeParticipantService(index, selection.variant.id)} aria-label={locale === "th" ? "ลบบริการ" : "Remove service"}>×</button></div></li>; })}</ol>{participant.services.length < MAX_SERVICES_PER_PARTICIPANT && <label className="walk-in-field"><span>{locale === "th" ? "+ เพิ่มบริการ" : "+ Add service"}</span><select value="" disabled={catalogState === "loading"} onChange={(event) => addParticipantService(index, event.target.value)} aria-invalid={showValidation && participant.services.length === 0}><option value="">— {catalogState === "loading" ? (locale === "th" ? "กำลังโหลดบริการ" : "Loading services") : (locale === "th" ? "เลือกบริการและระยะเวลา" : "Choose service and duration")} —</option>{services.flatMap((service) => service.variants.filter((variant) => (index === 0 || variant.requiredPax === 1) && !participant.services.includes(variant.id)).map((variant) => <option key={variant.id} value={variant.id}>{optionLabel(service, variant)}</option>))}</select></label>}</article>)}</div>
+            {hasSharedPackage && <div className="walk-in-notice">{locale === "th" ? "แพ็กเกจคู่เป็นรายการแรกของทั้งสองท่านและคิดราคาเพียงครั้งเดียว" : "The couple package is first for both guests and charged once."}</div>}
             {!isHistorical && <><div className="walk-in-availability" role="status" aria-live="polite">{availabilityState === "idle" && (locale === "th" ? "เลือกวันที่และบริการเพื่อดูเวลาว่าง" : "Choose a date and services to see available times")}{availabilityState === "loading" && (locale === "th" ? "กำลังตรวจ Capacity…" : "Checking capacity…")}{availabilityState === "ready" && `${locale === "th" ? "พบ" : "Found"} ${slots.length} ${locale === "th" ? "ช่วงเวลาว่าง" : "available times"}`}{availabilityState === "error" && <><span>{locale === "th" ? "โหลดเวลาว่างไม่สำเร็จ" : "Availability could not be loaded"}</span><button type="button" onClick={() => setAvailabilityRetry((value) => value + 1)}>{locale === "th" ? "ลองใหม่" : "Retry"}</button></>}</div>{slots.length > 0 && <div className="walk-in-time-grid" role="group" aria-label={locale === "th" ? "เวลาเริ่ม" : "Start time"}>{slots.map((slot) => <button type="button" key={slot.localStartTime} aria-pressed={time === slot.localStartTime} onClick={() => { setTime(slot.localStartTime); setShowValidation(false); }}>{slot.localStartTime}</button>)}</div>}</>}
           </section>
 
@@ -275,14 +330,22 @@ export function WalkInBookingDrawer({ user, locale, onClose, onCreated }: {
             <div className="walk-in-section-title"><span>4</span><div><h3 id="walk-in-pricing-heading">{isHistorical ? (locale === "th" ? "ราคา ส่วนลด และทิป" : "Price, discount, and tip") : (locale === "th" ? "ราคาและส่วนลด" : "Price and discount")}</h3><p>{isHistorical ? (locale === "th" ? "บันทึกค่าบริการและทิปแยกกัน เพื่อให้ยอดย้อนหลังตรวจสอบได้" : "Record service and tip separately so the historical total remains auditable.") : (locale === "th" ? "ส่วนลดเป็นสิทธิ์ ADMIN และจะถูกบันทึกใน Audit Log" : "Discounts require ADMIN authority and are recorded in the audit log.")}</p></div></div>
             <div className="walk-in-price-grid"><div className="walk-in-price-subtotal"><span>{locale === "th" ? "ราคาปกติ รวม VAT" : "Regular price, VAT included"}</span><strong>{formatBaht(total, locale)}</strong></div>{adminRole === "ADMIN" && <label className="walk-in-field walk-in-discount-field" htmlFor="booking-discount"><span>{locale === "th" ? "ส่วนลด (ไม่บังคับ)" : "Discount (optional)"}</span><div className="walk-in-money-input"><input id="booking-discount" type="number" min="0" max={Math.max(0, total / 100 - 1)} step="1" inputMode="numeric" value={discountBaht} onChange={(event) => { setDiscountBaht(event.target.value); setShowValidation(false); setSubmitError(""); idempotencyKey.current = crypto.randomUUID(); }} aria-invalid={showValidation && normalizedDiscountBaht !== "" && (!Number.isFinite(discountAmountSatang) || discountAmountSatang < 0 || discountAmountSatang >= total)} aria-describedby="booking-discount-help" /><span>{locale === "th" ? "บาท" : "THB"}</span></div><small id="booking-discount-help">{locale === "th" ? "กรอกจำนวนเต็ม เช่น 20 หรือ 50 บาท" : "Enter a whole amount, such as 20 or 50 THB."}</small></label>}</div>
             {discountAmountSatang > 0 && Number.isFinite(discountAmountSatang) && <label className="walk-in-field" htmlFor="booking-discount-reason"><span>{locale === "th" ? "เหตุผลหรือชื่อคูปอง" : "Reason or coupon name"}</span><input id="booking-discount-reason" list="booking-discount-reasons" maxLength={200} value={discountReason} onChange={(event) => { setDiscountReason(event.target.value); setShowValidation(false); setSubmitError(""); idempotencyKey.current = crypto.randomUUID(); }} placeholder={locale === "th" ? "เช่น คูปองสมัครครั้งแรก" : "e.g. First-time signup coupon"} aria-invalid={showValidation && !discountReason.trim()} required /><datalist id="booking-discount-reasons"><option value={locale === "th" ? "คูปองสมัครครั้งแรก" : "First-time signup coupon"} /><option value={locale === "th" ? "โปรโมชั่นหน้าร้าน" : "In-store promotion"} /><option value={locale === "th" ? "ลูกค้าประจำ" : "Loyal customer"} /><option value={locale === "th" ? "ชดเชยบริการ" : "Service recovery"} /></datalist></label>}
-            {isHistorical && <label className="walk-in-field walk-in-tip-field" htmlFor="historical-booking-tip"><span>{locale === "th" ? "ทิปที่ได้รับ (ไม่บังคับ)" : "Tip received (optional)"}</span><div className="walk-in-money-input"><input id="historical-booking-tip" type="number" min="0" step="1" inputMode="numeric" value={tipBaht} onChange={(event) => { setTipBaht(event.target.value); setShowValidation(false); setSubmitError(""); idempotencyKey.current = crypto.randomUUID(); }} aria-invalid={showValidation && normalizedTipBaht !== "" && (!Number.isFinite(tipAmountSatang) || tipAmountSatang < 0)} aria-describedby="historical-booking-tip-help" /><span>{locale === "th" ? "บาท" : "THB"}</span></div><small id="historical-booking-tip-help">{locale === "th" ? "เก็บแยกจากค่าบริการ เช่น 20 หรือ 100 บาท" : "Stored separately from service revenue, such as 20 or 100 THB."}</small></label>}
+            {isHistorical && <>
+              <label className="walk-in-field walk-in-tip-field" htmlFor="historical-booking-tip"><span>{locale === "th" ? "ทิปที่ได้รับ (ไม่บังคับ)" : "Tip received (optional)"}</span><div className="walk-in-money-input"><input id="historical-booking-tip" type="number" min="0" step="1" inputMode="numeric" value={tipBaht} onChange={(event) => { setTipBaht(event.target.value); setShowValidation(false); setSubmitError(""); idempotencyKey.current = crypto.randomUUID(); }} aria-invalid={showValidation && normalizedTipBaht !== "" && (!Number.isFinite(tipAmountSatang) || tipAmountSatang < 0)} aria-describedby="historical-booking-tip-help" /><span>{locale === "th" ? "บาท" : "THB"}</span></div><small id="historical-booking-tip-help">{locale === "th" ? "เก็บแยกจากค่าบริการ เช่น 20 หรือ 100 บาท" : "Stored separately from service revenue, such as 20 or 100 THB."}</small></label>
+              <fieldset className="walk-in-choice historical-payment-choice">
+                <legend>{locale === "th" ? "ช่องทางที่ได้รับเงินจริง" : "Payment received via"}</legend>
+                <label><input type="radio" name="historical-payment-source" checked={historicalPaymentSource === "CASH"} onChange={() => { setHistoricalPaymentSource("CASH"); setShowValidation(false); idempotencyKey.current = crypto.randomUUID(); }} /> {locale === "th" ? "เงินสด" : "Cash"}</label>
+                <label><input type="radio" name="historical-payment-source" checked={historicalPaymentSource === "BANK_TRANSFER"} onChange={() => { setHistoricalPaymentSource("BANK_TRANSFER"); setShowValidation(false); idempotencyKey.current = crypto.randomUUID(); }} /> {locale === "th" ? "โอนธนาคาร" : "Bank transfer"}</label>
+              </fieldset>
+              <label className="walk-in-field historical-paid-at" htmlFor="historical-paid-at"><span>{locale === "th" ? "วันที่และเวลาที่ได้รับเงิน" : "Payment received at"}</span><input id="historical-paid-at" type="datetime-local" max={maxHistoricalPaidAt} value={effectiveHistoricalPaidAt} onChange={(event) => { setHistoricalPaidAt(event.target.value); setShowValidation(false); idempotencyKey.current = crypto.randomUUID(); }} aria-invalid={showValidation && (!effectiveHistoricalPaidAt || effectiveHistoricalPaidAt > maxHistoricalPaidAt)} /><small>{locale === "th" ? "ค่าเริ่มต้นอ้างอิงเวลาที่ให้บริการ แก้ไขได้ตามหลักฐานจริง" : "Defaults to the service time; adjust it to match the actual evidence."}</small></label>
+            </>}
             <div className="walk-in-net-total" aria-live="polite"><span>{isHistorical ? (locale === "th" ? "ยอดรับรวม" : "Gross recorded total") : (locale === "th" ? "ยอดสุทธิ" : "Net total")}</span><strong>{formatBaht(isHistorical ? recordedGrossTotal : finalTotal, locale)}</strong>{isHistorical ? <small>{locale === "th" ? `ค่าบริการสุทธิ ${formatBaht(finalTotal, locale)} + ทิป ${formatBaht(Number.isFinite(tipAmountSatang) ? tipAmountSatang : 0, locale)}` : `Net service ${formatBaht(finalTotal, locale)} + tip ${formatBaht(Number.isFinite(tipAmountSatang) ? tipAmountSatang : 0, locale)}`}</small> : discountAmountSatang > 0 && Number.isFinite(discountAmountSatang) && <small>{locale === "th" ? `ลด ${formatBaht(discountAmountSatang, locale)}` : `${formatBaht(discountAmountSatang, locale)} discount`}</small>}</div>
           </section>}
 
-          <section className="walk-in-review" aria-labelledby="walk-in-review-heading"><div><p className="eyebrow">FINAL REVIEW</p><h3 id="walk-in-review-heading">{isHistorical ? (locale === "th" ? "ตรวจสอบก่อนบันทึกย้อนหลัง" : "Review historical record") : (locale === "th" ? "ตรวจสอบก่อนสร้างและยืนยัน" : "Review before creating and confirming")}</h3></div><dl><div><dt>{locale === "th" ? "วันและเวลา" : "Date and time"}</dt><dd>{date || "—"} · {time || "—"}</dd></div><div><dt>{locale === "th" ? "ผู้รับบริการ" : "Guests"}</dt><dd>{participants.length} · {duration} {locale === "th" ? "นาที" : "min"}</dd></div><div><dt>{locale === "th" ? "ช่องทางติดต่อ" : "Contact"}</dt><dd>{contactMode === "PHONE" ? (phone || "—") : (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</dd></div>{discountAmountSatang > 0 && Number.isFinite(discountAmountSatang) && <div><dt>{locale === "th" ? "ส่วนลด" : "Discount"}</dt><dd>−{formatBaht(discountAmountSatang, locale)}<small>{discountReason.trim()}</small></dd></div>}{isHistorical && <div><dt>{locale === "th" ? "ทิป" : "Tip"}</dt><dd>{formatBaht(Number.isFinite(tipAmountSatang) ? tipAmountSatang : 0, locale)}</dd></div>}<div><dt>{locale === "th" ? "สถานะหลังบันทึก" : "Status after save"}</dt><dd><span className={`status ${isHistorical ? "status-recorded" : "status-confirmed"}`}>{isHistorical ? (locale === "th" ? "บันทึกย้อนหลัง" : "Recorded") : (locale === "th" ? "ยืนยันแล้ว" : "Confirmed")}</span></dd></div></dl><div className="walk-in-total" aria-live="polite"><span>{isHistorical ? (locale === "th" ? "ยอดรับรวมที่บันทึก รวม VAT" : "Recorded gross total, VAT included") : (locale === "th" ? "ยอดสุทธิ รวม VAT" : "Net total, VAT included")}</span><strong>{formatBaht(isHistorical ? recordedGrossTotal : finalTotal, locale)}</strong>{isHistorical && <small>{locale === "th" ? `ค่าบริการสุทธิ ${formatBaht(finalTotal, locale)} + ทิป ${formatBaht(Number.isFinite(tipAmountSatang) ? tipAmountSatang : 0, locale)}` : `Net service ${formatBaht(finalTotal, locale)} + tip ${formatBaht(Number.isFinite(tipAmountSatang) ? tipAmountSatang : 0, locale)}`}</small>}</div></section>
+          <section className="walk-in-review" aria-labelledby="walk-in-review-heading"><div><p className="eyebrow">FINAL REVIEW</p><h3 id="walk-in-review-heading">{isHistorical ? (locale === "th" ? "ตรวจสอบก่อนบันทึกย้อนหลัง" : "Review historical record") : (locale === "th" ? "ตรวจสอบก่อนสร้างและยืนยัน" : "Review before creating and confirming")}</h3></div><dl><div><dt>{locale === "th" ? "วันและเวลา" : "Date and time"}</dt><dd>{date || "—"} · {time || "—"}–{endTime(time, duration)}</dd></div><div><dt>{locale === "th" ? "ผู้รับบริการ" : "Guests"}</dt><dd>{participants.length} · {duration} {locale === "th" ? "นาที" : "min"}</dd></div>{selections.map((items, index) => <div key={`review-services-${index}`}><dt>{participants[index].nickname || (locale === "th" ? `ผู้รับบริการ ${index + 1}` : `Guest ${index + 1}`)}</dt><dd>{items.map((item) => locale === "th" ? item.service.nameTh : item.service.nameEn).join(" → ") || "—"}<small>{time || "—"}–{endTime(time, participantDurations[index])} · {participantDurations[index]} {locale === "th" ? "นาที" : "min"}</small></dd></div>)}<div><dt>{locale === "th" ? "ช่องทางติดต่อ" : "Contact"}</dt><dd>{contactMode === "PHONE" ? (phone || "—") : (locale === "th" ? "ไม่มีเบอร์ติดต่อ" : "No contact phone")}</dd></div>{discountAmountSatang > 0 && Number.isFinite(discountAmountSatang) && <div><dt>{locale === "th" ? "ส่วนลด" : "Discount"}</dt><dd>−{formatBaht(discountAmountSatang, locale)}<small>{discountReason.trim()}</small></dd></div>}{isHistorical && <><div><dt>{locale === "th" ? "ทิป" : "Tip"}</dt><dd>{formatBaht(Number.isFinite(tipAmountSatang) ? tipAmountSatang : 0, locale)}</dd></div><div><dt>{locale === "th" ? "รับชำระ" : "Payment"}</dt><dd>{historicalPaymentSource === "CASH" ? (locale === "th" ? "เงินสด" : "Cash") : historicalPaymentSource === "BANK_TRANSFER" ? (locale === "th" ? "โอนธนาคาร" : "Bank transfer") : "—"}<small>{effectiveHistoricalPaidAt ? effectiveHistoricalPaidAt.replace("T", " · ") : "—"}</small></dd></div></>}<div><dt>{locale === "th" ? "สถานะหลังบันทึก" : "Status after save"}</dt><dd><span className={`status ${isHistorical ? "status-recorded" : "status-confirmed"}`}>{isHistorical ? (locale === "th" ? "ชำระแล้ว · รอส่งบัญชี" : "Paid · queued for accounting") : (locale === "th" ? "ยืนยันแล้ว" : "Confirmed")}</span></dd></div></dl><div className="walk-in-total" aria-live="polite"><span>{isHistorical ? (locale === "th" ? "ยอดรับรวมที่บันทึก รวม VAT" : "Recorded gross total, VAT included") : (locale === "th" ? "ยอดสุทธิ รวม VAT" : "Net total, VAT included")}</span><strong>{formatBaht(isHistorical ? recordedGrossTotal : finalTotal, locale)}</strong>{isHistorical && <small>{locale === "th" ? `ค่าบริการสุทธิ ${formatBaht(finalTotal, locale)} + ทิป ${formatBaht(Number.isFinite(tipAmountSatang) ? tipAmountSatang : 0, locale)}` : `Net service ${formatBaht(finalTotal, locale)} + tip ${formatBaht(Number.isFinite(tipAmountSatang) ? tipAmountSatang : 0, locale)}`}</small>}</div></section>
           {submitError && <div className="walk-in-errors submit" role="alert"><strong>{locale === "th" ? "สร้าง Booking ไม่สำเร็จ" : "Booking failed"}</strong><p>{submitError}</p></div>}
         </div>
-        <div className="walk-in-actions"><button type="button" onClick={onClose}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button className="confirm-button" type="submit" disabled={submitting}>{submitting ? (isHistorical ? (locale === "th" ? "กำลังบันทึกประวัติ…" : "Saving record…") : (locale === "th" ? "กำลังตรวจ Capacity และบันทึก…" : "Checking capacity and saving…")) : (isHistorical ? (locale === "th" ? "บันทึกย้อนหลัง" : "Save historical record") : (locale === "th" ? "สร้างและยืนยัน Booking" : "Create and confirm booking"))}</button></div>
+        <div className="walk-in-actions"><button type="button" onClick={onClose}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button className="confirm-button" type="submit" disabled={submitting}>{submitting ? (isHistorical ? (locale === "th" ? "กำลังบันทึกและลงบัญชี…" : "Saving and queuing accounting…") : (locale === "th" ? "กำลังตรวจ Capacity และบันทึก…" : "Checking capacity and saving…")) : (isHistorical ? (locale === "th" ? "บันทึกย้อนหลังและลงบัญชี" : "Save historical record and account") : (locale === "th" ? "สร้างและยืนยัน Booking" : "Create and confirm booking"))}</button></div>
       </form>
     </section>
   </div>;

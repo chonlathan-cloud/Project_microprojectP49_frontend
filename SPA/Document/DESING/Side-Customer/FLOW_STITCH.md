@@ -4,7 +4,7 @@
 - **Top Bar:** 
   - Left: "Spa 49" Lotus Logo & Branch Title ("Spa 49 - Sukhumvit").
   - Right: View Toggle ("Menu View" vs "Room Matrix View"), Language Switcher (`TH/EN`), and My Bookings Icon with active badge count.
-- **Sticky Bottom Cart Bar:** Appears automatically when 1 or more services/add-ons are selected. Displays total duration (e.g., "110 mins"), total item count, total price (e.g., `฿780`), and "Proceed to Book" CTA button.
+- **Sticky Bottom Cart Bar:** Appears automatically when 1 or more services/add-ons are selected. Displays the selected treatment count, guest count, Booking duration (the longest participant timeline), total price, and "Proceed to Book" CTA button.
 
 ## 2. Screen 1: Digital Menu & Complete Item Catalog (Landing)
 - **Hero Banner:** Spa 49 Logo with tagline "Relax • Renew • Revive" and subtle botanical corner illustrations.
@@ -50,17 +50,18 @@
 Triggered by clicking "Proceed to Book" from the Floating Cart Bar.
 
 - **Step 1: Review Selected Items & Guest Count (Pax)**
-  - Itemized list of selected main massages and add-ons with remove buttons.
-  - Total calculated duration and price display.
+  - Each guest has an ordered treatment timeline of 1–3 items with add, remove, and reorder controls. Treatments run sequentially for each guest while guest timelines run in parallel.
+  - Total calculated duration uses the longest guest timeline; price includes every per-participant item once per guest.
   - Guest Count Selector: [1 Person] / [2 Persons (Couple)].
+  - Couple Package is fixed as the first item for both guests, rendered on both timelines, and charged only once. Additional treatments remain guest-specific and are charged per guest.
 - **Step 2: Date & Time Slot Picker**
   - Interactive full-month calendar.
-  - Available Time Slot Grid (e.g., 10:00, 11:30, 13:00, 14:30...). Auto-filters slots based on total cart duration.
+  - Available Time Slot Grid (e.g., 10:00, 11:30, 13:00, 14:30...). Auto-filters slots using exact per-guest timelines and shows each guest's expected end time.
 - **Step 3: Customer Info & Auto Queue Notice**
   - Form Fields: Full Name, Phone Number, Email, Special Requests / Health Conditions.
   - Information Banner: "Therapist and private massage room will be automatically allocated upon arrival."
 - **Step 4: Reservation Summary & Confirmation**
-  - Itemized summary card, date/time confirmation, VAT notice.
+  - Ordered treatment timeline per guest with treatment start/end times, charge-once Package labeling, Booking date/time, total, and VAT notice.
   - Primary CTA Button: "Confirm Spa Reservation".
 
 ## 4. Screen 3: Daily Room Schedule Matrix View

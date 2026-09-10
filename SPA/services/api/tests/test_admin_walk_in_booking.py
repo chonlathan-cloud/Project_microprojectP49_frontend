@@ -121,9 +121,7 @@ class WalkInFirestore:
         return Transaction(self)
 
 
-def _override_dependencies(
-    database: object, *, role: str = "STAFF"
-) -> tuple[object, object]:
+def _override_dependencies(database: object, *, role: str = "STAFF") -> tuple[object, object]:
     previous_auth = app.dependency_overrides.get(require_admin_user)
     previous_firestore = app.dependency_overrides.get(get_firestore_client)
     app.dependency_overrides[require_admin_user] = lambda: {
@@ -258,9 +256,7 @@ def test_admin_discount_is_forwarded_with_trusted_role(
         return {"bookingId": "BK-20260905-001", "status": "CONFIRMED"}
 
     monkeypatch.setattr(booking_routes, "create_booking", fake_create_booking)
-    previous_auth, previous_firestore = _override_dependencies(
-        WalkInFirestore(), role="ADMIN"
-    )
+    previous_auth, previous_firestore = _override_dependencies(WalkInFirestore(), role="ADMIN")
     try:
         response = client.post(
             "/api/v1/admin/bookings",
@@ -346,9 +342,7 @@ def test_walk_in_transaction_uses_no_fake_phone_and_commits_confirmed(
     assert result["status"] == "CONFIRMED"
     assert "statusToken" not in result
     bookings = [
-        value
-        for (collection, _), value in database.documents.items()
-        if collection == "bookings"
+        value for (collection, _), value in database.documents.items() if collection == "bookings"
     ]
     assert len(bookings) == 1
     booking = bookings[0]
@@ -377,6 +371,82 @@ def test_walk_in_transaction_uses_no_fake_phone_and_commits_confirmed(
     ]
     assert audits[-1]["actorType"] == "ADMIN_USER"
     assert audits[-1]["toStatus"] == "CONFIRMED"
+
+
+def test_multi_service_transaction_writes_shared_package_timeline_and_exact_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    monkeypatch.setattr(booking_service.firestore, "transactional", lambda function: function)
+    monkeypatch.setattr(booking_service, "_validate_walk_in_window", lambda *args, **kwargs: None)
+
+    result = booking_service.create_booking(
+        database,  # type: ignore[arg-type]
+        branch_id="branch_001",
+        date="2026-08-31",
+        time="14:00",
+        phone=None,
+        participants=[
+            {
+                "nickname": "Som",
+                "services": [
+                    {"serviceVariantId": "couple-relaxation-90"},
+                    {"serviceVariantId": "traditional-thai-60"},
+                ],
+                "hasHealthInformation": False,
+                "healthDetails": None,
+                "healthConsent": True,
+            },
+            {
+                "nickname": "May",
+                "services": [
+                    {"serviceVariantId": "couple-relaxation-90"},
+                    {"serviceVariantId": "hot-compress-neck-shoulder-back-20"},
+                ],
+                "hasHealthInformation": False,
+                "healthDetails": None,
+                "healthConsent": True,
+            },
+        ],
+        idempotency_key="multi-service-transaction-001",
+        source="ADMIN_WEB",
+        initial_status="CONFIRMED",
+        actor_id="staff-001",
+        admin_booking_mode="WALK_IN",
+        consent_capture_method="VERBAL",
+        booking_privacy_acknowledged=True,
+    )
+
+    booking = next(
+        value for (collection, _), value in database.documents.items() if collection == "bookings"
+    )
+    lines = [
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "booking_line_items"
+    ]
+    lines.sort(key=lambda item: int(item["sequence"]))
+    reservation = booking["capacityReservation"]
+    assert isinstance(reservation, dict)
+
+    assert result["subtotalAmountSatang"] == sum(int(item["lineTotalSatang"]) for item in lines)
+    assert len(lines) == 3
+    assert len(lines[0]["participantIds"]) == 2
+    assert lines[0]["lineTotalSatang"] == 119_000
+    assert [line["participantSequence"] for line in lines] == [1, 1, 2]
+    assert int((booking["endAt"] - booking["startAt"]).total_seconds() // 60) == 150
+    assert [item["units"] for item in reservation["bucketUnits"]] == [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        1,
+        1,
+    ]
 
 
 def test_admin_discount_persists_subtotal_net_amount_and_audit(
@@ -419,9 +489,7 @@ def test_admin_discount_persists_subtotal_net_amount_and_audit(
     assert result["discountAmountSatang"] == 2_000
     assert result["estimatedAmountSatang"] == 28_000
     booking = next(
-        value
-        for (collection, _), value in database.documents.items()
-        if collection == "bookings"
+        value for (collection, _), value in database.documents.items() if collection == "bookings"
     )
     assert booking["subtotalAmountSatang"] == 30_000
     assert booking["discountAmountSatang"] == 2_000
@@ -431,8 +499,7 @@ def test_admin_discount_persists_subtotal_net_amount_and_audit(
     discount_audit = next(
         value
         for (collection, _), value in database.documents.items()
-        if collection == "audit_events"
-        and value.get("eventType") == "BOOKING_DISCOUNT_APPLIED"
+        if collection == "audit_events" and value.get("eventType") == "BOOKING_DISCOUNT_APPLIED"
     )
     assert discount_audit["finalAmountSatang"] == 28_000
     assert discount_audit["actorRole"] == "ADMIN"
@@ -528,14 +595,21 @@ def test_admin_tip_rejects_non_historical_or_fractional_amount(
             ],
             idempotency_key=f"tip-invalid-{tip_amount_satang}-{booking_mode}",
             source="ADMIN_WEB",
-            initial_status=(
-                "RECORDED" if booking_mode == "HISTORICAL_RECORD" else "CONFIRMED"
-            ),
+            initial_status=("RECORDED" if booking_mode == "HISTORICAL_RECORD" else "CONFIRMED"),
             actor_id="staff-001",
+            actor_role="ADMIN",
             admin_booking_mode=booking_mode,
             consent_capture_method="VERBAL",
             booking_privacy_acknowledged=True,
             tip_amount_satang=tip_amount_satang,
+            historical_payment_source=(
+                "CASH" if booking_mode == "HISTORICAL_RECORD" else None
+            ),
+            historical_paid_at=(
+                datetime.fromisoformat("2026-08-20T15:00:00+07:00")
+                if booking_mode == "HISTORICAL_RECORD"
+                else None
+            ),
         )
 
 
@@ -581,11 +655,14 @@ def test_historical_record_is_financial_history_and_skips_capacity_and_outbox(
         idempotency_key="historical-record-001",
         source="ADMIN_WEB",
         initial_status="RECORDED",
-        actor_id="staff-001",
+        actor_id="admin-001",
+        actor_role="ADMIN",
         admin_booking_mode="HISTORICAL_RECORD",
         consent_capture_method="VERBAL",
         booking_privacy_acknowledged=True,
         tip_amount_satang=5_000,
+        historical_payment_source="CASH",
+        historical_paid_at=datetime.fromisoformat("2026-08-20T15:00:00+07:00"),
     )
 
     assert result["status"] == "RECORDED"
@@ -595,9 +672,7 @@ def test_historical_record_is_financial_history_and_skips_capacity_and_outbox(
     assert result["tipAmountSatang"] == 5_000
     assert result["grossAmountSatang"] == 35_000
     booking = next(
-        value
-        for (collection, _), value in database.documents.items()
-        if collection == "bookings"
+        value for (collection, _), value in database.documents.items() if collection == "bookings"
     )
     assert booking["customerListBucket"] == "HISTORY"
     assert booking["financiallyExcluded"] is False
@@ -606,16 +681,29 @@ def test_historical_record_is_financial_history_and_skips_capacity_and_outbox(
     assert booking["estimatedAmountSatang"] == 30_000
     assert booking["tipAmountSatang"] == 5_000
     assert booking["grossAmountSatang"] == 35_000
-    assert booking["paymentStatus"] == "UNAVAILABLE"
+    assert booking["paymentStatus"] == "PAID"
+    assert booking["paidAmountSatang"] == 35_000
+    assert booking["amountDueSatang"] == 0
     assert booking["capacityReleased"] is True
     assert "capacityReservation" not in booking
-    assert booking["recordedBy"] == "staff-001"
-    assert not any(
-        collection == "capacity_buckets" for collection, _ in database.documents
+    assert booking["recordedBy"] == "admin-001"
+    assert not any(collection == "capacity_buckets" for collection, _ in database.documents)
+    assert not any(collection == "notification_outbox" for collection, _ in database.documents)
+    payment = next(
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "payments"
     )
-    assert not any(
-        collection == "notification_outbox" for collection, _ in database.documents
+    assert payment["status"] == "PAID"
+    assert payment["paymentMethod"] == "CASH"
+    assert payment["grossAmountSatang"] == 35_000
+    accounting_export = next(
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "accounting_exports"
     )
+    assert accounting_export["status"] == "READY"
+    assert accounting_export["paymentSource"] == "CASH"
     line_item = next(
         value
         for (collection, _), value in database.documents.items()
@@ -627,6 +715,7 @@ def test_historical_record_is_financial_history_and_skips_capacity_and_outbox(
         value
         for (collection, _), value in database.documents.items()
         if collection == "audit_events"
+        and value.get("eventType") == "BOOKING_HISTORY_RECORDED"
     )
     assert audit["eventType"] == "BOOKING_HISTORY_RECORDED"
     assert audit["subtotalAmountSatang"] == 30_000
@@ -634,6 +723,13 @@ def test_historical_record_is_financial_history_and_skips_capacity_and_outbox(
     assert audit["estimatedAmountSatang"] == 30_000
     assert audit["tipAmountSatang"] == 5_000
     assert audit["grossAmountSatang"] == 35_000
+    payment_audit = next(
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "audit_events"
+        and value.get("eventType") == "HISTORICAL_PAYMENT_RECORDED"
+    )
+    assert payment_audit["paymentSource"] == "CASH"
 
 
 def test_historical_record_accepts_admin_discount_and_preserves_net_amount(
@@ -672,15 +768,15 @@ def test_historical_record_accepts_admin_discount_and_preserves_net_amount(
         booking_privacy_acknowledged=True,
         discount_amount_satang=2_000,
         discount_reason="คูปองสมัครครั้งแรก",
+        historical_payment_source="BANK_TRANSFER",
+        historical_paid_at=datetime.fromisoformat("2026-08-20T15:00:00+07:00"),
     )
 
     assert result["subtotalAmountSatang"] == 30_000
     assert result["discountAmountSatang"] == 2_000
     assert result["estimatedAmountSatang"] == 28_000
     booking = next(
-        value
-        for (collection, _), value in database.documents.items()
-        if collection == "bookings"
+        value for (collection, _), value in database.documents.items() if collection == "bookings"
     )
     assert booking["discountReason"] == "คูปองสมัครครั้งแรก"
     assert booking["estimatedAmountSatang"] == 28_000
@@ -688,8 +784,7 @@ def test_historical_record_accepts_admin_discount_and_preserves_net_amount(
     discount_audit = next(
         value
         for (collection, _), value in database.documents.items()
-        if collection == "audit_events"
-        and value.get("eventType") == "BOOKING_DISCOUNT_APPLIED"
+        if collection == "audit_events" and value.get("eventType") == "BOOKING_DISCOUNT_APPLIED"
     )
     assert discount_audit["finalAmountSatang"] == 28_000
 
@@ -739,17 +834,12 @@ def test_historical_record_can_be_cancelled_without_capacity_or_notification(
     assert booking["tipAmountSatang"] == 5_000
     assert booking["grossAmountSatang"] == 33_000
     assert booking["cancellation"]["reason"] == "บันทึกผิดรายการ"  # type: ignore[index]
-    assert not any(
-        collection == "capacity_buckets" for collection, _ in database.documents
-    )
-    assert not any(
-        collection == "notification_outbox" for collection, _ in database.documents
-    )
+    assert not any(collection == "capacity_buckets" for collection, _ in database.documents)
+    assert not any(collection == "notification_outbox" for collection, _ in database.documents)
     status_audit = next(
         value
         for (collection, _), value in database.documents.items()
-        if collection == "audit_events"
-        and value.get("eventType") == "BOOKING_STATUS_CHANGED"
+        if collection == "audit_events" and value.get("eventType") == "BOOKING_STATUS_CHANGED"
     )
     assert status_audit["fromStatus"] == "RECORDED"
     assert status_audit["toStatus"] == "CANCELLED"
@@ -953,12 +1043,8 @@ def test_admin_adds_service_and_updates_discount_atomically(
         "discountReason": "เพิ่มบริการพร้อมส่วนลด",
     }
     try:
-        response = client.post(
-            "/api/v1/admin/bookings/BK-20260903-001/services", json=request
-        )
-        replay = client.post(
-            "/api/v1/admin/bookings/BK-20260903-001/services", json=request
-        )
+        response = client.post("/api/v1/admin/bookings/BK-20260903-001/services", json=request)
+        replay = client.post("/api/v1/admin/bookings/BK-20260903-001/services", json=request)
     finally:
         _restore_dependencies(previous_auth, previous_firestore)
 
@@ -1102,12 +1188,8 @@ def test_completing_booking_releases_original_and_added_service_capacity(
 
     assert response.status_code == 200, response.text
     assert database.documents[("bookings", "booking-active-001")]["capacityReleased"]
-    assert database.documents[
-        ("capacity_buckets", "branch_001_20260903_1000")
-    ]["usedUnits"] == 0
-    assert database.documents[
-        ("capacity_buckets", "branch_001_20260903_1100")
-    ]["usedUnits"] == 0
+    assert database.documents[("capacity_buckets", "branch_001_20260903_1000")]["usedUnits"] == 0
+    assert database.documents[("capacity_buckets", "branch_001_20260903_1100")]["usedUnits"] == 0
 
 
 def test_staff_cannot_change_discount_when_starting_service() -> None:
@@ -1139,7 +1221,7 @@ def test_admin_historical_endpoint_maps_to_recorded_status(
         return {"bookingId": "BK-20260820-001", "status": "RECORDED"}
 
     monkeypatch.setattr(booking_routes, "create_booking", fake_create_booking)
-    previous_auth, previous_firestore = _override_dependencies(object())
+    previous_auth, previous_firestore = _override_dependencies(object(), role="ADMIN")
     try:
         response = client.post(
             "/api/v1/admin/bookings",
@@ -1152,6 +1234,8 @@ def test_admin_historical_endpoint_maps_to_recorded_status(
                 "bookingPrivacyAcknowledged": True,
                 "consentCaptureMethod": "PAPER",
                 "tipAmountSatang": 5_000,
+                "historicalPaymentSource": "BANK_TRANSFER",
+                "historicalPaidAt": "2026-08-20T15:00:00+07:00",
                 "participants": [
                     {
                         "nickname": "Som",
@@ -1170,6 +1254,10 @@ def test_admin_historical_endpoint_maps_to_recorded_status(
     assert captured["initial_status"] == "RECORDED"
     assert captured["admin_booking_mode"] == "HISTORICAL_RECORD"
     assert captured["tip_amount_satang"] == 5_000
+    assert captured["historical_payment_source"] == "BANK_TRANSFER"
+    assert captured["historical_paid_at"] == datetime.fromisoformat(
+        "2026-08-20T15:00:00+07:00"
+    )
 
 
 def test_admin_endpoint_rejects_tip_for_non_historical_booking() -> None:

@@ -81,6 +81,7 @@ class PaymentAttemptStatus(StrEnum):
 class PaymentSource(StrEnum):
     BEAM = "BEAM"
     CASH = "CASH"
+    BANK_TRANSFER = "BANK_TRANSFER"
 
 
 class PaymentPurpose(StrEnum):
@@ -144,3 +145,4 @@ class AccountingExportStatus(StrEnum):
 class FlowAccountPaymentStrategy(StrEnum):
     BEAM_OTHER_CHANNEL = "BEAM_OTHER_CHANNEL"
     CASH = "CASH"
+    BANK_TRANSFER = "BANK_TRANSFER"

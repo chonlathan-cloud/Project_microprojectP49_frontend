@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     cash_invoice_list_path: str = "/cash-invoices"
     company_info_path: str = "/company/info"
     other_channels_path: str = "/bank-channel/other-channels"
+    bank_accounts_path: str = "/bank-channel/bank-accounts"
+    bank_account_id: str | None = None
+    transfer_bank_id: str | None = None
     document_url_template: str | None = None
     document_allowed_hosts: str = "flowaccount.com,*.flowaccount.com"
     admin_accounting_url: str | None = None
@@ -89,9 +92,13 @@ class Settings(BaseSettings):
         for code, value in (
             ("CONTACT_ID_INVALID", self.contact_id),
             ("OTHER_CHANNEL_ID_INVALID", self.other_channel_id),
+            ("BANK_ACCOUNT_ID_INVALID", self.bank_account_id),
+            ("TRANSFER_BANK_ID_INVALID", self.transfer_bank_id),
         ):
             if value and (not value.isdigit() or int(value) <= 0):
                 missing.append(code)
+        if bool(self.bank_account_id) != bool(self.transfer_bank_id):
+            missing.append("BANK_TRANSFER_CONFIG_INCOMPLETE")
         if not self.api_base_url:
             missing.append("API_BASE_URL_MISSING")
         elif not self.api_base_url.startswith("https://"):

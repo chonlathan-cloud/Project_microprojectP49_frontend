@@ -19,10 +19,10 @@ Recommended implementation:
 5. Use Beam Charges API as the preferred path when direct supported banking-app redirect and a downloadable PromptPay QR are hard requirements. Use Beam Payment Links as the lower-complexity fallback if the merchant contract or enabled capabilities do not permit the required Charges API methods.
 6. Treat Beam webhooks and subsequent server-side provider lookup as the authoritative payment result. A browser redirect is never proof of payment.
 7. Write a durable accounting-export record when payment succeeds. Do not call FlowAccount synchronously from the payment webhook.
-8. Support Admin-recorded cash payment, but keep the customer's cash settlement separate from the later movement of branch cash into the merchant bank account.
+8. Support idempotent Admin-recorded cash and bank-transfer payment. Keep customer cash receipt separate from the later movement of branch cash into the merchant bank account.
 9. Add an Admin **นำเงินสดเข้าบัญชี / Deposit cash via QR** workflow: enter or confirm the amount, upload cash-photo evidence to a private GCS bucket, create a Beam PromptPay QR, and wait for server-verified success or failure.
 10. A cash-deposit QR is a treasury/reconciliation operation, not a second customer sale. It must never create another Booking payment, tip, receipt, or FlowAccount sales export.
-11. A `HISTORICAL_RECORD` preserves subtotal, authorized discount, and net financial history but does not infer a payment method or create a paid transaction automatically. Payment/accounting records require separate authoritative payment evidence to avoid duplicate or misclassified revenue.
+11. A new `HISTORICAL_RECORD` requires ADMIN to select `CASH` or `BANK_TRANSFER` and a timezone-aware past payment time; creation atomically records the paid transaction and accounting export. Existing historical records are classified only when Payment/export are both absent, using version and idempotency guards so already-synced revenue is never duplicated.
 
 This design deliberately does not add `PAID` to `BookingStatus`.
 
@@ -458,6 +458,8 @@ Store provider identifiers and normalized state, never the API key, raw webhook,
 ```
 
 For an Admin-recorded cash payment, `paymentMethod = CASH` and `cashSettlementStatus = UNSETTLED | DEPOSIT_PENDING | SETTLED | REVIEW`. This field tracks treasury settlement only; the customer-facing payment remains `PAID` after authorized cash receipt.
+
+For an Admin-recorded transfer, `paymentMethod = BANK_TRANSFER`, `manualReceivedBy` captures the authorized Admin actor, and `cashSettlementStatus = NOT_APPLICABLE`. The client must supply a timezone-aware non-future `paidAt`; browser state is not allowed to mark an existing Payment paid twice.
 
 ### 8.3 `cash_deposits/{cashDepositId}`
 

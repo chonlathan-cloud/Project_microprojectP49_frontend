@@ -198,31 +198,46 @@ def _booking_view(
             ),
         )
 
-    def line_sequence(snapshot: object) -> int:
-        data = snapshot.to_dict() or {}  # type: ignore[attr-defined]
-        participant_ids = data.get("participantIds")
-        participant_ids = participant_ids if isinstance(participant_ids, list) else []
-        participant = participant_data.get(str(participant_ids[0]), {}) if participant_ids else {}
-        return int(participant.get("sequence", 999))
-
     participants: list[NotificationParticipantView] = []
-    line_snapshots.sort(key=line_sequence)
+    services_by_participant: dict[str, list[tuple[int, int, str, int]]] = {
+        participant_id: [] for participant_id in participant_data
+    }
     for line in line_snapshots:
         data = line.to_dict() or {}
         service = data.get("serviceSnapshot")
         service = service if isinstance(service, dict) else {}
         participant_ids = data.get("participantIds")
         participant_ids = participant_ids if isinstance(participant_ids, list) else []
-        participant_id = str(participant_ids[0]) if participant_ids else ""
+        service_name = str(
+            service.get("nameTh")
+            or service.get("nameEn")
+            or booking.get("serviceName", "บริการสปา")
+        )
+        duration_minutes = int(service.get("durationMinutes", 60))
+        participant_sequence = int(data.get("participantSequence", data.get("sequence", 999)))
+        line_sequence = int(data.get("sequence", 999))
+        for participant_id in participant_ids:
+            services_by_participant.setdefault(str(participant_id), []).append(
+                (participant_sequence, line_sequence, service_name, duration_minutes)
+            )
+
+    ordered_participants = sorted(
+        participant_data,
+        key=lambda participant_id: int(participant_data[participant_id].get("sequence", 999)),
+    )
+    for participant_id in ordered_participants:
+        services = sorted(services_by_participant.get(participant_id, []))
+        if services:
+            service_name = " → ".join(item[2] for item in services)
+            duration_minutes = sum(item[3] for item in services)
+        else:
+            service_name = str(booking.get("serviceName", "บริการสปา"))
+            duration_minutes = 60
         participants.append(
             participant_view(
                 participant_id=participant_id,
-                service_name=str(
-                    service.get("nameTh")
-                    or service.get("nameEn")
-                    or booking.get("serviceName", "บริการสปา")
-                ),
-                duration_minutes=int(service.get("durationMinutes", 60)),
+                service_name=service_name,
+                duration_minutes=duration_minutes,
             )
         )
     if not participants:
@@ -322,9 +337,27 @@ async def dispatch_notification(
         if not booking_snapshot.exists:
             raise HTTPException(status_code=404, detail="Booking not found")
     now = datetime.now(UTC)
+    booking = booking_snapshot.to_dict() or {} if booking_snapshot else {}
+    expected_statuses = {
+        "BOOKING_CREATED": {"PENDING", "CONFIRMED"},
+        "BOOKING_PENDING_ACKNOWLEDGEMENT": {"PENDING"},
+        "BOOKING_CONFIRMED": {"CONFIRMED"},
+    }
+    allowed_statuses = expected_statuses.get(event_type)
+    if allowed_statuses is not None and str(booking.get("status")) not in allowed_statuses:
+        event_ref.set(
+            {
+                "state": "SENT",
+                "sentAt": now,
+                "delivery": {"system": "SKIPPED_STALE_STATUS"},
+                "attemptCount": firestore.Increment(1),
+                "updatedAt": now,
+            },
+            merge=True,
+        )
+        return {"status": "skipped-stale"}
     event_ref.set({"state": "PROCESSING", "updatedAt": now}, merge=True)
     try:
-        booking = booking_snapshot.to_dict() or {} if booking_snapshot else {}
         delivery: dict[str, object] = {}
         if event_type == "ACCOUNTING_OPERATIONAL_ALERT":
             token = os.getenv("LINE_ADMIN_ACCESS_TOKEN", "")

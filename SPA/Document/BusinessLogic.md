@@ -4,9 +4,9 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Business Logic |
-| Version | 2.0 |
+| Version | 2.1 |
 | Status | Approved business baseline |
-| Last updated | 2 กันยายน 2026 |
+| Last updated | 10 กันยายน 2026 |
 | Initial branch scope | 1 สาขา |
 | Timezone / Currency | Asia/Bangkok / THB |
 
@@ -93,12 +93,12 @@ Google Stitch ที่อนุญาตให้ใช้อ้างอิง
 
 - สร้าง Booking แบบ Staff-assisted จาก Admin Web สำหรับลูกค้า Walk-in วันนี้ ลูกค้าที่ติดต่อผ่าน LINE เพื่อจองล่วงหน้า และการบันทึกประวัติย้อนหลังที่พนักงานลืมลงระบบ
 - Booking วันนี้หรืออนาคตต้องตรวจ Operating Hours, Slot Block และ Capacity แบบ Transaction และเริ่มต้นเป็น `CONFIRMED`
-- วันที่/เวลาที่ผ่านไปแล้วสร้างได้เฉพาะโหมด `HISTORICAL_RECORD` เป็นสถานะปลายทาง `RECORDED`; ต้องเก็บ Price Snapshot, ราคาปกติ, ส่วนลด, ค่าบริการสุทธิ, ทิป และยอดรับรวมเป็นข้อมูลทางการเงินย้อนหลัง แต่ไม่กัน Capacity, ไม่สร้างธุรกรรมรับชำระหรือ Accounting Export อัตโนมัติ และไม่ส่ง Booking notification
+- วันที่/เวลาที่ผ่านไปแล้วสร้างได้เฉพาะโหมด `HISTORICAL_RECORD` โดย Role `ADMIN` และเป็นสถานะปลายทาง `RECORDED`; ต้องเลือกช่องทางรับเงินจริง `CASH` หรือ `BANK_TRANSFER` พร้อมเวลารับเงิน เก็บ Price Snapshot/ส่วนลด/ค่าบริการสุทธิ/ทิป/ยอดรับรวม และสร้าง Payment `PAID` กับ Accounting Export `READY` แบบ Atomic แต่ไม่กัน Capacity และไม่ส่ง Booking notification
 - Staff-assisted Booking ใช้ชื่อเล่นเป็นข้อมูลขั้นต่ำ เบอร์โทรศัพท์เป็นข้อมูลทางเลือก และห้ามใช้เบอร์ร้านหรือเบอร์ปลอมแทนลูกค้าที่ไม่มีช่องทางติดต่อ
 - เมื่อไม่มีเบอร์โทร ระบบไม่สร้าง Phone Guard, Phone Duplicate Key, Customer LINE Link หรือ Secure Status Link และต้องแสดงว่า `ไม่มีเบอร์ติดต่อ` ใน Admin Web
 - Booking วันนี้หรืออนาคตที่สร้างโดย `ADMIN`/`STAFF` เริ่มต้นเป็น `CONFIRMED` ได้ เพราะผู้สร้างเป็นผู้ตรวจสอบและยืนยันรายการใน interaction เดียวกัน โดยต้องบันทึก Actor และ Audit Trail
 - เฉพาะ Role `ADMIN` สามารถระบุส่วนลดจำนวนเงินบาทแบบไม่บังคับขณะสร้าง Booking วันนี้ อนาคต หรือย้อนหลังได้, ตรวจ/เพิ่ม/แก้/ยกเลิกส่วนลดพร้อมกับการยืนยันเริ่มให้บริการ และแก้ไขอีกครั้งบน Booking `COMPLETED` ก่อนชำระเงินเป็น Recovery path ได้ ต้องระบุเหตุผลหรือชื่อคูปองเมื่อมีการเปลี่ยนส่วนลด และระบบต้องแสดงราคาปกติ ส่วนลด และยอดสุทธิก่อนยืนยัน
-- `ADMIN`/`STAFF` ระบุทิปจำนวนเงินบาทเต็มแบบไม่บังคับได้เฉพาะ `HISTORICAL_RECORD`; ระบบต้องเก็บทิปแยกจากค่าบริการและแสดงยอดรับรวม `ค่าบริการสุทธิ + ทิป` ก่อนบันทึก
+- `ADMIN` ระบุทิปจำนวนเงินบาทเต็มแบบไม่บังคับได้เฉพาะ `HISTORICAL_RECORD`; ระบบต้องเก็บทิปแยกจากค่าบริการและแสดงยอดรับรวม `ค่าบริการสุทธิ + ทิป` ก่อนบันทึก
 - พนักงานต้องอ่าน Privacy Notice/Booking Terms และข้อความขอความยินยอมด้านข้อมูลสุขภาพให้ลูกค้ารับทราบ แล้วบันทึกวิธีรับหลักฐานเป็น `VERBAL` หรือ `PAPER`; ห้ามพนักงานให้ความยินยอมแทนลูกค้า
 - ดู Booking แบบปฏิทิน รายการ และตารางเวลา
 - ค้นหาด้วย Booking ID, ชื่อลูกค้า หรือเบอร์โทรศัพท์
@@ -151,11 +151,12 @@ Loyalty, birthday automation, formula-driven payroll และ CRM campaign ไ�
 ## 7. Service และ Pax Rules
 
 1. หนึ่ง Booking มีลูกค้าได้อย่างน้อย 1 คนและสูงสุด 2 คน
-2. ลูกค้าแต่ละคนต้องมีหนึ่ง Service และหนึ่ง Duration Variant ยกเว้น Package ที่กำหนด `Required Pax = 2` ซึ่งการเลือกครั้งเดียวครอบคลุมผู้รับบริการสองคน
-3. ลูกค้าทุกคนใน Booking ต้องมีเวลาเริ่มเดียวกัน
-4. ระยะเวลาสิ้นสุดและการคืน Capacity คำนวณแยกตาม Service ของลูกค้าแต่ละคน
-5. Package ที่ประกอบด้วยกิจกรรมหลายรายการสามารถขายเป็นหนึ่ง Service ได้ หาก Admin กำหนด duration รวมไว้แล้ว
-6. ระหว่าง `IN_SERVICE` `ADMIN`/`STAFF` เพิ่ม Service แบบ `PER_PARTICIPANT` ที่ Active ให้ผู้รับบริการเดิมได้หลายครั้ง โดยแต่ละรายการมี Price Snapshot, หมอนวด, เวลาเริ่ม/สิ้นสุด และ Capacity reservation ของตนเอง
+2. ลูกค้าแต่ละคนเลือก Service/Duration Variant ได้ 1–3 รายการต่อ Booking โดยเรียงลำดับการให้บริการภายในผู้รับบริการคนนั้น
+3. ผู้รับบริการแต่ละคนเริ่มรายการแรกพร้อมกัน และรับบริการของตนเองต่อเนื่องตามลำดับ; ระยะเวลารวมของ Booking เท่ากับ Timeline ที่ยาวที่สุด
+4. Package ที่กำหนด `Required Pax = 2` ต้องอยู่เป็นรายการแรกของผู้รับบริการทั้งสองคน ใช้ Variant เดียวกัน และคิดราคาเพียงครั้งเดียว; หลัง Package แต่ละคนเพิ่มบริการแบบ `PER_PARTICIPANT` ได้
+5. ระยะเวลาสิ้นสุดและการคืน Capacity คำนวณจาก Timeline ของลูกค้าแต่ละคน โดยใช้ Buffer หนึ่งครั้งหลังรายการสุดท้ายของแต่ละคน
+6. Package ที่ประกอบด้วยกิจกรรมหลายรายการสามารถขายเป็นหนึ่ง Service ได้ หาก Admin กำหนด duration รวมไว้แล้ว
+11. ระหว่าง `IN_SERVICE` `ADMIN`/`STAFF` เพิ่ม Service แบบ `PER_PARTICIPANT` ที่ Active ให้ผู้รับบริการเดิมได้หลายครั้ง โดยแต่ละรายการมี Price Snapshot, หมอนวด, เวลาเริ่ม/สิ้นสุด และ Capacity reservation ของตนเอง
 7. Service ที่เป็น `INACTIVE` ต้องไม่แสดงในการจองใหม่ แต่ไม่เปลี่ยนข้อมูลย้อนหลังของ Booking เดิม
 8. ราคาและระยะเวลาที่ลูกค้าเห็นต้องมาจาก Initial Service Catalog ที่ยืนยันแล้วหรือค่าที่ Admin แก้ไขและเปิดใช้งานภายหลัง
 9. Service ทั่วไปคิดราคาแบบ `PER_PARTICIPANT`; Package สำหรับสองคนคิดราคาแบบ `PER_BOOKING` ครั้งเดียวและต้องกัน Resource ให้ครบสองคนตลอดระยะเวลา
@@ -290,7 +291,7 @@ RECORDED ───────→ CANCELLED
 | `CONFIRMED` | ร้านรับรองวัน เวลา Service และ Capacity แล้ว | ใช้ | LINE Group Approver, `ADMIN` หรือ `STAFF` |
 | `IN_SERVICE` | ลูกค้าเริ่มรับบริการ | ใช้ | `ADMIN`/`STAFF` |
 | `COMPLETED` | ให้บริการเสร็จแล้ว | ไม่ใช้ | `ADMIN`/`STAFF` |
-| `RECORDED` | ประวัติบริการย้อนหลังพร้อมยอดทางการเงิน | ไม่ใช้ | `ADMIN`/`STAFF` สร้างหรือยกเลิกเมื่อบันทึกผิด |
+| `RECORDED` | ประวัติบริการย้อนหลังพร้อมยอดทางการเงินและ Payment ที่ยืนยันแล้ว | ไม่ใช้ | `ADMIN` สร้าง; หลังบันทึกรับเงินแล้วต้องใช้ Accounting correction flow แทนการยกเลิก Booking ปกติ |
 | `CANCELLED` | ร้านหรือลูกค้าติดต่อให้ยกเลิก โดยผู้ใช้ Admin Web บันทึกเหตุผล | ไม่ใช้ | `ADMIN`/`STAFF` |
 | `NO_SHOW` | Booking ที่ Confirm แล้วแต่ลูกค้าไม่มาตามนัด | ไม่ใช้ | `ADMIN`/`STAFF` |
 
@@ -298,7 +299,7 @@ RECORDED ───────→ CANCELLED
 
 - Booking ใหม่จาก Customer Web หรือ LIFF เริ่มต้นเป็น `PENDING` เสมอ
 - Staff-assisted Booking วันนี้หรืออนาคตที่สร้างโดย `ADMIN`/`STAFF` ผ่าน Admin Web เริ่มต้นเป็น `CONFIRMED` และ Audit ต้องระบุ `source=ADMIN_WEB`, ผู้สร้าง และการยืนยันใน interaction เดียวกัน
-- Historical record เริ่มต้นที่ `RECORDED`; ต้องระบุ `financiallyExcluded=false`, `historicalFinancialRecord=true`, ผู้บันทึก ราคาปกติ ส่วนลด ค่าบริการสุทธิ ทิป ยอดรับรวม และเวลาที่บันทึกใน Audit
+- Historical record เริ่มต้นที่ `RECORDED`; ต้องระบุ `financiallyExcluded=false`, `historicalFinancialRecord=true`, ผู้บันทึก ราคาปกติ ส่วนลด ค่าบริการสุทธิ ทิป ยอดรับรวม ช่องทาง/เวลารับเงินจริง และสร้าง Payment/Accounting Export กับ Audit ใน Transaction เดียว
 - `PENDING → CONFIRMED` ทำได้ครั้งเดียว
 - `PENDING → CANCELLED` ทำได้โดย `ADMIN`/`STAFF` พร้อมเหตุผล
 - `CONFIRMED → IN_SERVICE` ต้องมีหมอนวดถูกมอบหมายแล้ว
@@ -307,7 +308,7 @@ RECORDED ───────→ CANCELLED
 - `CONFIRMED → CANCELLED` ต้องมีเหตุผล
 - `CONFIRMED → NO_SHOW` ใช้เมื่อลูกค้าไม่มาตามนัดเท่านั้น
 - `IN_SERVICE → COMPLETED` ใช้เมื่อจบการให้บริการ หลังผู้ปฏิบัติงานตรวจรายการบริการทั้งหมดและยอดรอชำระแล้ว; Booking ชำระเงินครั้งเดียวจากยอดรวมสุดท้าย
-- `RECORDED → CANCELLED` ทำได้โดย `ADMIN`/`STAFF` เฉพาะเพื่อแก้รายการย้อนหลังที่บันทึกผิด ต้องมีเหตุผล ตั้ง `financiallyExcluded=true`, ไม่เปลี่ยน Capacity และไม่สร้าง Notification Outbox
+- `RECORDED → CANCELLED` ใช้ได้กับ legacy record ที่ยังไม่มี Payment เท่านั้น; record ที่มี Payment `PAID` ต้องถูกปฏิเสธและแก้ผ่าน Accounting correction flow เพื่อไม่ให้ Booking กับ FlowAccount ขัดแย้งกัน
 - `COMPLETED`, `CANCELLED` และ `NO_SHOW` เป็นสถานะปลายทาง การเปิด Booking กลับมาใหม่ต้องเป็นการดำเนินการที่มี Audit Trail
 - คำสั่งซ้ำหรือคำสั่งที่ขัดกับสถานะปัจจุบันต้องไม่เปลี่ยนข้อมูลซ้ำ
 
@@ -487,7 +488,8 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 - จุดหลักในการกำหนดส่วนลดคือก่อนเริ่มบริการ โดยคำสั่ง `CONFIRMED → IN_SERVICE` ต้องบันทึกส่วนลดและสถานะอย่าง Atomic; การแก้หรือยกเลิกส่วนลดหลังจบบริการเป็น Recovery path และทำได้เฉพาะ `COMPLETED` ที่ Payment ยังเป็น `DUE`, ไม่มี Beam attempt ที่ Active/ต้อง Reconcile และไม่มี Correction Hold; หลัง `PAID` ต้องใช้ Refund/Correction flow แยก
 - การแก้ส่วนลดก่อนชำระต้องอัปเดต Booking และ Payment snapshot ใน Transaction เดียวด้วย optimistic Booking version; หากมี Settlement เดิมต้องทำเป็น `STALE` และไม่นำมารวม Dashboard/Insight จน Admin ตรวจและบันทึกใหม่
 - Booking Status และ Payment Status เป็นคนละ state machine; ห้ามเปลี่ยน Booking เป็น `PAID`
-- ยอดรับเงินจริงเกิดจาก Beam ที่ตรวจสอบกับ Provider แล้ว หรือการบันทึกรับเงินสดแบบ idempotent โดย Admin
+- ยอดรับเงินจริงเกิดจาก Beam ที่ตรวจสอบกับ Provider แล้ว หรือการบันทึกรับเงินสด/โอนธนาคารแบบ idempotent โดย Admin; รายการย้อนหลังต้องเลือกหนึ่งในสองช่องทาง manual นี้เสมอ
+- รายการย้อนหลังเดิมที่มี Payment/Accounting Export อยู่แล้วต้องนำมาแสดงตาม projection เดิมและห้าม backfill ซ้ำ ส่วนรายการ `RECORDED` ที่ยังเป็น `paymentStatus=UNAVAILABLE` ให้แสดงในคิว Admin เพื่อเลือกช่องทาง/เวลารับเงินก่อนสร้าง Payment และ Accounting Export แบบ version-checked transaction
 - ทิปต้องเก็บแยกจากค่าบริการ และ Payment ที่เปลี่ยนทิปต้องสะท้อนยอด Tip/Gross ล่าสุดกลับไปที่ Booking เพื่อใช้ตรวจ Settlement
 - นโยบาย VAT และข้อความทางภาษีต้องได้รับการยืนยันก่อน Production ไม่ใช้ข้อความตัวอย่างใน Stitch เป็นข้อสรุป
 
@@ -521,8 +523,10 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 | ID | Business Acceptance Rule |
 | --- | --- |
 | BL-BKG-001 | ลูกค้าจองจาก LINE Rich Menu/LIFF หรือ Public Website ตามลำดับ Service → Pax → Date/Time → Customer Data → Confirmation ได้ |
-| BL-BKG-002 | หนึ่ง Booking รองรับ 1–2 คน และแต่ละคนมีหนึ่ง Service/Duration |
+| BL-BKG-002 | หนึ่ง Booking รองรับ 1–2 คน และแต่ละคนเลือก Service/Duration ได้ 1–3 รายการ โดยให้บริการเรียงลำดับต่อเนื่องภายในแต่ละคนและทำงานขนานกันระหว่างคน |
 | BL-BKG-003 | ลูกค้าเลือกหมอนวดไม่ได้ |
+| BL-BKG-009 | Package แบบ `PER_BOOKING`/สองคนต้องถูกเลือกเป็นรายการแรกของทั้งสองคนและคิดราคาเพียงครั้งเดียว; บริการเพิ่มเติมคิดต่อผู้รับบริการ |
+| BL-BKG-010 | Availability, เวลาสิ้นสุด, Capacity, Booking Line Item, Notification และยอดชำระหนึ่งครั้งต่อ Booking ต้องคำนวณจาก Service Timeline เดียวกัน |
 | BL-BKG-004 | Booking ใหม่ต้องเป็น `PENDING` และกัน Capacity ทันที |
 | BL-BKG-005 | `PENDING` ไม่มี Auto-expiration และคงอยู่จนถูก Confirm/Cancel |
 | BL-BKG-006 | Website Guest จองได้ด้วยชื่อเล่น เบอร์โทรศัพท์ และ Health Declaration โดยไม่ต้อง LINE Login, สมัครสมาชิก หรือ OTP |
@@ -545,7 +549,7 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 | BL-OPS-001 | Booking Confirm ได้ก่อนมอบหมายหมอนวด แต่เริ่มบริการไม่ได้จนกว่าจะมอบหมายครบ |
 | BL-OPS-002 | ลูกค้าเปลี่ยนหรือยกเลิกด้วยตนเองไม่ได้ใน Phase 1 และต้องติดต่อร้าน |
 | BL-OPS-003 | Booking สองคนต้องมอบหมายหมอนวดที่ Active คนละคนต่อผู้รับบริการ และบันทึกจาก Booking Detail ได้โดยไม่ต้องออกจากคิวรายการจอง |
-| BL-PAY-001 | สถานะการให้บริการและสถานะการชำระเงินต้องแยกจากกัน โดยยอดรับเงินจริงยืนยันจาก Beam หรือการบันทึกรับเงินสดโดย Admin เท่านั้น |
+| BL-PAY-001 | สถานะการให้บริการและสถานะการชำระเงินต้องแยกจากกัน โดยยอดรับเงินจริงยืนยันจาก Beam หรือการบันทึกรับเงินสด/โอนธนาคารโดย Admin เท่านั้น |
 | BL-FIN-001 | เฉพาะ `ADMIN` บันทึกหรือแก้ไขการแบ่งค่าหมอและทิปได้ และทุกครั้งต้องมี Audit Trail |
 | BL-FIN-002 | ค่าหมอกำหนดเป็นจำนวนเงินบาทต่อผู้รับบริการและต่อหมอนวดได้อย่างอิสระ ส่วนลดเป็น Promotion ของร้านและไม่ลดฐานค่าหมออัตโนมัติ |
 | BL-FIN-003 | ทิปแบ่งให้หมอนวดหลายคนได้ ยอดที่เหลือเป็นของร้าน และผลรวมส่วนแบ่งหมอนวดต้องไม่เกินทิปที่รับจริง |
@@ -578,7 +582,7 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 - ส่วนลดลดเฉพาะรายได้สุทธิของร้าน ไม่เปลี่ยนค่าหมอที่ Admin กรอก ระบบแสดงคำเตือนเมื่อค่าหมอรวมสูงกว่ารายได้ค่าบริการสุทธิ แต่อนุญาตให้บันทึกพร้อม Audit ได้
 - ทิปที่รับจริงแบ่งให้หมอนวดแต่ละคนได้ ยอดคงเหลือเป็นของร้านโดยอัตโนมัติ ผลรวมส่วนแบ่งหมอนวดต้องไม่เกินยอดทิป
 - เมื่อยอดทิปจาก Payment เปลี่ยนหลังเคยแบ่ง ระบบทำเครื่องหมายให้จัดสรรทิปใหม่ และไม่นำ Settlement เก่าที่ไม่ตรงยอดมาสรุป
-- `RECORDED` ใช้กฎเดียวกัน แม้ไม่มี Therapist Assignment เดิม Admin สามารถเลือกหมอนวดภายหลังได้ การยกเลิกย้อนหลังต้องตัดออกจาก Dashboard
+- `RECORDED` ใช้กฎเดียวกัน แม้ไม่มี Therapist Assignment เดิม Admin สามารถเลือกหมอนวดภายหลังได้; legacy record ที่ยังไม่ลงบัญชีและถูกยกเลิกต้องตัดออกจาก Dashboard
 - Dashboard เรียงข้อมูลตามช่วงวันที่และแยกยอดบริการ, ทิป, เงินรับจริงที่ตรวจสอบแล้ว, ยอดค้างชำระ, ค่าหมอ, ส่วนทิปหมอ และส่วนของร้านอย่างชัดเจน
 - ชั่วโมงยอดนิยมแสดงทั้งเวลานัดและเวลาเริ่มบริการจริง โดยข้อมูลเก่าที่ไม่เคยเก็บเวลาเริ่มจริงต้องไม่ถูกสมมติขึ้น
 - หน้า `หมอนวด` แยกเป็น `วันนี้`, `รายการค่ามือ` และ `เงื่อนไขค่าประกัน`; ข้อมูลการเงินและการบันทึกจ่ายเปิดให้เฉพาะ `ADMIN`

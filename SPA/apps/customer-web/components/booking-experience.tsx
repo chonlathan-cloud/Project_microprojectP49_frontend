@@ -7,7 +7,7 @@ import { loadLiff } from "@/lib/line-liff";
 import { ServiceArtwork } from "@/components/service-artwork";
 
 type Step = "SERVICE" | "PARTICIPANTS" | "SCHEDULE" | "DETAILS" | "REVIEW";
-type ParticipantDraft = { nickname: string; variantId: string; hasHealthInformation: boolean | null; healthDetails: string; healthConsent: boolean };
+type ParticipantDraft = { nickname: string; services: string[]; hasHealthInformation: boolean | null; healthDetails: string; healthConsent: boolean };
 type AvailabilitySlot = { localDate: string; localStartTime: string; availableUnits: number };
 type BookingWindow = { minDays: number; maxDays: number };
 
@@ -29,7 +29,8 @@ const categoryNames = {
   STANDALONE: { th: "บริการจองเดี่ยว", en: "Standalone" }
 } as const;
 
-const defaultParticipant = (variantId = ""): ParticipantDraft => ({ nickname: "", variantId, hasHealthInformation: null, healthDetails: "", healthConsent: false });
+const MAX_SERVICES_PER_PARTICIPANT = 3;
+const defaultParticipant = (variantId = ""): ParticipantDraft => ({ nickname: "", services: variantId ? [variantId] : [], hasHealthInformation: null, healthDetails: "", healthConsent: false });
 
 function formatBaht(amountSatang: number, locale: Locale) {
   return new Intl.NumberFormat(locale === "th" ? "th-TH" : "en-TH", { style: "currency", currency: "THB", currencyDisplay: "narrowSymbol", maximumFractionDigits: 0 }).format(amountSatang / 100);
@@ -45,6 +46,13 @@ function variantById(id: string, catalog: Service[]) {
     if (variant) return { service, variant };
   }
   return undefined;
+}
+
+function endTime(startTime: string, durationMinutes: number) {
+  if (!startTime) return "";
+  const [hours, minutes] = startTime.split(":").map(Number);
+  const total = hours * 60 + minutes + durationMinutes;
+  return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function bangkokToday() {
@@ -188,9 +196,9 @@ export function BookingExperience() {
     const saved = window.sessionStorage.getItem("spa49-booking-preview");
     if (!saved) { queueMicrotask(() => setDraftRestored(true)); return; }
     try {
-      const draft = JSON.parse(saved) as { participants?: ParticipantDraft[]; date?: string; time?: string; phone?: string };
+      const draft = JSON.parse(saved) as { participants?: Array<ParticipantDraft & { variantId?: string }>; date?: string; time?: string; phone?: string };
       queueMicrotask(() => {
-        if (draft.participants?.length) setParticipants(draft.participants.slice(0, 2));
+        if (draft.participants?.length) setParticipants(draft.participants.slice(0, 2).map((person) => ({ ...person, services: person.services?.slice(0, MAX_SERVICES_PER_PARTICIPANT) ?? (person.variantId ? [person.variantId] : []) })));
         if (draft.date) setDate(draft.date);
         if (draft.time) setTime(draft.time);
         if (draft.phone) setPhone(draft.phone);
@@ -214,7 +222,7 @@ export function BookingExperience() {
     fetch("/api/spa/api/v1/public/availability/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ branchId: "branch_001", dateFrom: date, dateTo: date, participants: participants.map((person) => ({ serviceVariantId: person.variantId })) })
+      body: JSON.stringify({ branchId: "branch_001", dateFrom: date, dateTo: date, participants: participants.map((person) => ({ services: person.services.map((serviceVariantId) => ({ serviceVariantId })) })) })
     }).then(async (response) => {
       if (!response.ok) throw new Error("Availability unavailable");
       const payload = await response.json() as { slots?: AvailabilitySlot[] };
@@ -223,20 +231,20 @@ export function BookingExperience() {
     return () => { active = false; };
   }, [availabilityRetry, date, participants, step]);
 
-  const chosen = participants.map((participant) => variantById(participant.variantId, services));
-  const selectedCount = chosen.filter(Boolean).length;
+  const chosen = participants.map((participant) => participant.services.map((variantId) => variantById(variantId, services)).filter((item): item is NonNullable<typeof item> => Boolean(item)));
+  const selectedCount = chosen.reduce((count, items, participantIndex) => count + items.filter((item) => item.variant.pricingMode !== "PER_BOOKING" || participantIndex === 0).length, 0);
   const total = useMemo(() => {
     const seenPerBooking = new Set<string>();
-    return chosen.reduce((sum, item) => {
-      if (!item) return sum;
-      if (item.variant.pricingMode === "PER_BOOKING") {
-        if (seenPerBooking.has(item.variant.id)) return sum;
-        seenPerBooking.add(item.variant.id);
-      }
-      return sum + item.variant.priceSatang;
-    }, 0);
+    return chosen.flat().reduce((sum, item) => {
+        if (item.variant.pricingMode === "PER_BOOKING") {
+          if (seenPerBooking.has(item.variant.id)) return sum;
+          seenPerBooking.add(item.variant.id);
+        }
+        return sum + item.variant.priceSatang;
+      }, 0);
   }, [chosen]);
-  const totalDuration = Math.max(0, ...chosen.map((item) => item?.variant.durationMinutes ?? 0));
+  const participantDurations = chosen.map((items) => items.reduce((sum, item) => sum + item.variant.durationMinutes, 0));
+  const totalDuration = Math.max(0, ...participantDurations);
   const activeIndex = steps.indexOf(step);
   const firstBookableDate = addLocalDays(bangkokToday(), bookingWindow.minDays);
   const lastBookableDate = addLocalDays(bangkokToday(), bookingWindow.maxDays);
@@ -245,11 +253,12 @@ export function BookingExperience() {
     { id: "afternoon", th: "ช่วงบ่าย", en: "Afternoon", slots: availableSlots.filter((slot) => { const hour = Number(slot.localStartTime.slice(0, 2)); return hour >= 12 && hour < 17; }) },
     { id: "evening", th: "ช่วงเย็น", en: "Evening", slots: availableSlots.filter((slot) => Number(slot.localStartTime.slice(0, 2)) >= 17) }
   ].filter((group) => group.slots.length > 0);
-  const selectedFirst = chosen[0];
+  const selectedFirst = chosen[0]?.[0];
+  const hasSharedPackage = selectedFirst?.variant.pricingMode === "PER_BOOKING";
 
   const validationMessages = useMemo(() => {
     if (step === "SERVICE" && selectedCount === 0) return [locale === "th" ? "กรุณาเลือกบริการและระยะเวลา" : "Choose a service and duration"];
-    if (step === "PARTICIPANTS" && participants.some((person) => !person.variantId)) return [locale === "th" ? "กรุณาเลือกบริการให้ผู้รับบริการทุกท่าน" : "Choose a service for every guest"];
+    if (step === "PARTICIPANTS" && participants.some((person) => person.services.length === 0)) return [locale === "th" ? "กรุณาเลือกบริการให้ผู้รับบริการทุกท่าน" : "Choose a service for every guest"];
     if (step === "SCHEDULE") {
       if (!date) return [locale === "th" ? "กรุณาเลือกวันที่" : "Choose a date"];
       if (!time) return [locale === "th" ? "กรุณาเลือกเวลาเริ่ม" : "Choose a start time"];
@@ -285,12 +294,46 @@ export function BookingExperience() {
     setShowValidation(false);
   }
   function selectVariant(variant: ServiceVariant) {
-    setParticipants(variant.requiredPax === 2 ? [defaultParticipant(variant.id), defaultParticipant(variant.id)] : (current) => [{ ...current[0], variantId: variant.id }]);
+    setParticipants((current) => {
+      if (variant.requiredPax === 2) {
+        const selected = current[0]?.services[0] === variant.id;
+        if (selected) return current.map((person) => ({ ...person, services: person.services.filter((item) => item !== variant.id) }));
+        const first = current[0] ?? defaultParticipant();
+        const second = current[1] ?? defaultParticipant();
+        return [first, second].map((person) => ({ ...person, services: [variant.id, ...person.services.filter((item) => variantById(item, services)?.variant.pricingMode !== "PER_BOOKING")].slice(0, MAX_SERVICES_PER_PARTICIPANT) }));
+      }
+      const first = current[0] ?? defaultParticipant();
+      const exists = first.services.includes(variant.id);
+      const nextServices = exists ? first.services.filter((item) => item !== variant.id) : [...first.services, variant.id].slice(0, MAX_SERVICES_PER_PARTICIPANT);
+      return [{ ...first, services: nextServices }, ...current.slice(1)];
+    });
     resetSchedule(); setShowValidation(false);
   }
   function updateParticipant(index: number, update: Partial<ParticipantDraft>) { setParticipants((current) => current.map((person, i) => i === index ? { ...person, ...update } : person)); }
+  function addParticipantService(index: number, variantId: string) {
+    if (!variantId) return;
+    setParticipants((current) => current.map((person, personIndex) => personIndex !== index || person.services.includes(variantId) || person.services.length >= MAX_SERVICES_PER_PARTICIPANT ? person : { ...person, services: [...person.services, variantId] }));
+    resetSchedule(); setShowValidation(false);
+  }
+  function removeParticipantService(index: number, variantId: string) {
+    const shared = variantById(variantId, services)?.variant.pricingMode === "PER_BOOKING";
+    setParticipants((current) => current.map((person, personIndex) => shared || personIndex === index ? { ...person, services: person.services.filter((item) => item !== variantId) } : person));
+    resetSchedule();
+  }
+  function moveParticipantService(index: number, serviceIndex: number, direction: -1 | 1) {
+    setParticipants((current) => current.map((person, personIndex) => {
+      if (personIndex !== index) return person;
+      const target = serviceIndex + direction;
+      const minimum = hasSharedPackage ? 1 : 0;
+      if (target < minimum || target >= person.services.length) return person;
+      const reordered = [...person.services];
+      [reordered[serviceIndex], reordered[target]] = [reordered[target], reordered[serviceIndex]];
+      return { ...person, services: reordered };
+    }));
+    resetSchedule();
+  }
   function setPax(pax: 1 | 2) {
-    if (selectedFirst?.variant.requiredPax === 2) return;
+    if (hasSharedPackage && pax === 1) return;
     setParticipants((current) => pax === 1 ? [current[0]] : [current[0], current[1] ?? defaultParticipant()]);
     setSecondPersonAuthorized(false); resetSchedule();
   }
@@ -308,7 +351,7 @@ export function BookingExperience() {
       const response = await fetch("/api/spa/api/v1/public/bookings", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey.current },
-        body: JSON.stringify({ branchId: "branch_001", date, time, phone, lineIdToken, participants: participants.map((person) => ({ nickname: person.nickname, serviceVariantId: person.variantId, hasHealthInformation: Boolean(person.hasHealthInformation), healthDetails: person.healthDetails || null, healthConsent: person.healthConsent })) })
+        body: JSON.stringify({ branchId: "branch_001", date, time, phone, lineIdToken, participants: participants.map((person) => ({ nickname: person.nickname, services: person.services.map((serviceVariantId) => ({ serviceVariantId })), hasHealthInformation: Boolean(person.hasHealthInformation), healthDetails: person.healthDetails || null, healthConsent: person.healthConsent })) })
       });
       const payload = await response.json() as { bookingId?: string; statusToken?: string; code?: string; detail?: string };
       if (response.status === 409 && payload.code === "CAPACITY_UNAVAILABLE") {
@@ -342,6 +385,7 @@ export function BookingExperience() {
         <div className="result-summary">
           <div><span>{locale === "th" ? "วันและเวลา" : "Date and time"}</span><strong>{formatDate(date, locale, { weekday: "long" })} · {time}</strong></div>
           <div><span>{locale === "th" ? "ผู้รับบริการ" : "Guests"}</span><strong>{participants.length} {t.person}</strong></div>
+          {chosen.map((items, participantIndex) => <div className="result-service-timeline" key={participantIndex}><span>{participants[participantIndex].nickname || (locale === "th" ? `ผู้รับบริการ ${participantIndex + 1}` : `Guest ${participantIndex + 1}`)}</span><strong>{items.map((item) => locale === "th" ? item.service.nameTh : item.service.nameEn).join(" → ")}</strong><small>{time}–{endTime(time, participantDurations[participantIndex])} · {participantDurations[participantIndex]} {locale === "th" ? "นาที" : "min"}</small></div>)}
           <div><span>{t.total}</span><strong>{formatBaht(total, locale)}</strong></div>
         </div>
         <div className="next-steps" aria-labelledby="next-steps-title"><h2 id="next-steps-title">{locale === "th" ? "ขั้นตอนถัดไป" : "What happens next"}</h2><ol><li>{locale === "th" ? "ร้านตรวจสอบห้องและเวลาว่าง" : "The spa checks room and time availability"}</li><li>{locale === "th" ? "คุณได้รับผลยืนยันผ่าน LINE หากเชื่อมบัญชีไว้" : "You receive confirmation through LINE if connected"}</li><li>{locale === "th" ? "ชำระค่าบริการที่ร้าน" : "Payment is collected at the spa"}</li></ol></div>
@@ -359,24 +403,23 @@ export function BookingExperience() {
     {showValidation && validationMessages.length > 0 && <div className="validation-summary" ref={errorSummaryRef} tabIndex={-1} role="alert"><strong>{locale === "th" ? "กรุณาตรวจสอบข้อมูลต่อไปนี้" : "Check the following details"}</strong><ul>{validationMessages.map((message) => <li key={message}>{message}</li>)}</ul></div>}
 
     {step === "SERVICE" && <section className="content-section service-section" aria-labelledby="services-title">
-      <div className="section-heading"><div><p className="eyebrow">TREATMENT MENU</p><h2 id="services-title">{locale === "th" ? "เลือกบริการ" : "Choose a treatment"}</h2></div><p>{locale === "th" ? "เลือกหนึ่งบริการและหนึ่งระยะเวลาต่อท่าน" : "One treatment and duration per guest"}</p></div>
+      <div className="section-heading"><div><p className="eyebrow">TREATMENT MENU</p><h2 id="services-title">{locale === "th" ? "เลือกบริการ" : "Choose treatments"}</h2></div><p>{locale === "th" ? `เพิ่มได้สูงสุด ${MAX_SERVICES_PER_PARTICIPANT} บริการต่อท่าน จัดลำดับในขั้นตอนถัดไป` : `Add up to ${MAX_SERVICES_PER_PARTICIPANT} treatments per guest and arrange them next`}</p></div>
       <div className="category-tabs" role="tablist" aria-label={locale === "th" ? "ประเภทบริการ" : "Service category"}>{(Object.keys(categoryNames) as Service["category"][]).map((key) => <button id={`category-${key}`} role="tab" aria-controls="service-category-panel" aria-selected={category === key} onClick={() => setCategory(key)} key={key}>{categoryNames[key][locale]}</button>)}</div>
       <div className="service-grid" id="service-category-panel" role="tabpanel" aria-labelledby={`category-${category}`}>{services.filter((service) => service.category === category).map((service) => <article className="service-card" key={service.id}>
         <ServiceArtwork serviceId={service.id} imageVersion={service.imageVersion} />
         <div className="service-card-body"><header><div><p className="service-th">{service.nameTh}</p><h3>{service.nameEn}</h3></div>{service.variants[0]?.requiredPax === 2 && <span className="service-badge">{locale === "th" ? "สำหรับ 2 ท่าน" : "For two"}</span>}</header>
           {(locale === "th" ? service.descriptionTh : service.descriptionEn) && <p className="service-description">{locale === "th" ? service.descriptionTh : service.descriptionEn}</p>}
-          <div className="variant-list">{service.variants.map((variant) => { const isSelected = participants.some((person) => person.variantId === variant.id); return <button className={isSelected ? "variant selected" : "variant"} onClick={() => selectVariant(variant)} key={variant.id} aria-pressed={isSelected}><span className="variant-duration"><strong>{variant.durationMinutes}</strong> {locale === "th" ? "นาที" : "min"}</span><strong className="variant-price">{formatBaht(variant.priceSatang, locale)}</strong><span className="variant-indicator" aria-hidden="true">{isSelected && "✓"}</span></button>; })}</div>
+          <div className="variant-list">{service.variants.map((variant) => { const isSelected = participants.some((person) => person.services.includes(variant.id)); const atLimit = !isSelected && variant.requiredPax === 1 && participants[0].services.length >= MAX_SERVICES_PER_PARTICIPANT; return <button className={isSelected ? "variant selected" : "variant"} onClick={() => selectVariant(variant)} key={variant.id} aria-pressed={isSelected} disabled={atLimit}><span className="variant-duration"><strong>{variant.durationMinutes}</strong> {locale === "th" ? "นาที" : "min"}</span><strong className="variant-price">{formatBaht(variant.priceSatang, locale)}</strong><span className="variant-action">{isSelected ? (locale === "th" ? "เพิ่มแล้ว" : "Added") : (locale === "th" ? "+ เพิ่ม" : "+ Add")}</span><span className="variant-indicator" aria-hidden="true">{isSelected && "✓"}</span></button>; })}</div>
           {service.variants[0]?.requiredPax === 2 && <p className="service-note">{locale === "th" ? "ราคาเดียวสำหรับผู้รับบริการสองท่าน" : "One price for two guests"}</p>}
         </div>
       </article>)}</div>
     </section>}
 
     {step === "PARTICIPANTS" && selectedFirst && <section className="content-section narrow" aria-labelledby="pax-title">
-      <div className="screen-heading"><p className="eyebrow">GUESTS</p><h1 id="pax-title">{t.pax}</h1><p>{locale === "th" ? "ทุกท่านเริ่มรับบริการในเวลาเดียวกัน" : "All guests start their treatments at the same time."}</p></div>
-      <div className="pax-control" role="group" aria-label={t.pax}>{[1, 2].map((pax) => <button key={pax} aria-pressed={participants.length === pax} onClick={() => setPax(pax as 1 | 2)} disabled={selectedFirst.variant.requiredPax === 2 && pax === 1}><strong>{pax}</strong> {t.person}</button>)}</div>
-      <article className="selection-summary"><div><span>{locale === "th" ? "ผู้รับบริการ 1" : "Guest 1"}</span><strong>{locale === "th" ? selectedFirst.service.nameTh : selectedFirst.service.nameEn}</strong><small>{selectedFirst.variant.durationMinutes} {locale === "th" ? "นาที" : "min"} · {formatBaht(selectedFirst.variant.priceSatang, locale)}</small></div><button onClick={() => goToStep("SERVICE")}>{t.change}</button></article>
-      {participants.length === 2 && selectedFirst.variant.requiredPax !== 2 && <div className="participant-service"><h2>{locale === "th" ? "บริการสำหรับผู้รับบริการ 2" : "Treatment for guest 2"}</h2><label>{locale === "th" ? "บริการและระยะเวลา" : "Treatment and duration"}<select value={participants[1].variantId} aria-invalid={showValidation && !participants[1].variantId} onChange={(event) => { updateParticipant(1, { variantId: event.target.value }); resetSchedule(); }}><option value="">— {locale === "th" ? "เลือกบริการ" : "Choose a treatment"} —</option>{services.filter((service) => service.variants[0]?.requiredPax === 1).flatMap((service) => service.variants.map((variant) => <option value={variant.id} key={variant.id}>{locale === "th" ? service.nameTh : service.nameEn} · {variant.durationMinutes} min · {formatBaht(variant.priceSatang, locale)}</option>))}</select></label></div>}
-      {selectedFirst.variant.requiredPax === 2 && <div className="notice">{locale === "th" ? "แพ็กเกจนี้รองรับ 2 ท่านและคิดราคาเพียงครั้งเดียว" : "This package is for two guests and is charged once."}</div>}
+      <div className="screen-heading"><p className="eyebrow">GUESTS &amp; TREATMENTS</p><h1 id="pax-title">{t.pax}</h1><p>{locale === "th" ? "บริการของแต่ละท่านทำต่อเนื่องตามลำดับ และทุกท่านเริ่มพร้อมกัน" : "Treatments run in order for each guest, and all guests start together."}</p></div>
+      <div className="pax-control" role="group" aria-label={t.pax}>{[1, 2].map((pax) => <button key={pax} aria-pressed={participants.length === pax} onClick={() => setPax(pax as 1 | 2)} disabled={hasSharedPackage && pax === 1}><strong>{pax}</strong> {locale === "en" && pax === 2 ? "guests" : t.person}</button>)}</div>
+      <div className="participant-plans">{participants.map((participant, participantIndex) => <article className="participant-plan" key={participantIndex} aria-labelledby={`participant-plan-${participantIndex}`}><header><div><span>{locale === "th" ? `ผู้รับบริการ ${participantIndex + 1}` : `Guest ${participantIndex + 1}`}</span><strong id={`participant-plan-${participantIndex}`}>{participantDurations[participantIndex]} {locale === "th" ? "นาที" : "min"}</strong></div><small>{participant.services.length}/{MAX_SERVICES_PER_PARTICIPANT} {locale === "th" ? "บริการ" : "treatments"}</small></header><ol className="service-sequence">{chosen[participantIndex].map((item, serviceIndex) => { const shared = item.variant.pricingMode === "PER_BOOKING"; return <li key={item.variant.id}><span className="sequence-number">{serviceIndex + 1}</span><div><strong>{locale === "th" ? item.service.nameTh : item.service.nameEn}</strong><small>{item.variant.durationMinutes} {locale === "th" ? "นาที" : "min"} · {shared && participantIndex > 0 ? (locale === "th" ? "รวมในแพ็กเกจ" : "Included in package") : formatBaht(item.variant.priceSatang, locale)}</small></div><div className="sequence-actions"><button type="button" onClick={() => moveParticipantService(participantIndex, serviceIndex, -1)} disabled={shared || serviceIndex <= (hasSharedPackage ? 1 : 0)} aria-label={locale === "th" ? `เลื่อน ${item.service.nameTh} ขึ้น` : `Move ${item.service.nameEn} up`}>↑</button><button type="button" onClick={() => moveParticipantService(participantIndex, serviceIndex, 1)} disabled={shared || serviceIndex === participant.services.length - 1} aria-label={locale === "th" ? `เลื่อน ${item.service.nameTh} ลง` : `Move ${item.service.nameEn} down`}>↓</button><button type="button" onClick={() => removeParticipantService(participantIndex, item.variant.id)} aria-label={locale === "th" ? `ลบ ${item.service.nameTh}` : `Remove ${item.service.nameEn}`}>×</button></div></li>; })}</ol>{participant.services.length < MAX_SERVICES_PER_PARTICIPANT && <label className="add-service-select"><span>{locale === "th" ? "+ เพิ่มบริการ" : "+ Add treatment"}</span><select value="" aria-invalid={showValidation && participant.services.length === 0} onChange={(event) => addParticipantService(participantIndex, event.target.value)}><option value="">— {locale === "th" ? "เลือกบริการและระยะเวลา" : "Choose treatment and duration"} —</option>{services.flatMap((service) => service.variants.filter((variant) => variant.requiredPax === 1 && !participant.services.includes(variant.id)).map((variant) => <option value={variant.id} key={variant.id}>{locale === "th" ? service.nameTh : service.nameEn} · {variant.durationMinutes} min · {formatBaht(variant.priceSatang, locale)}</option>))}</select></label>}</article>)}</div>
+      {hasSharedPackage && <div className="notice">{locale === "th" ? "แพ็กเกจคู่เป็นรายการแรกของทั้งสองท่านและคิดราคาเพียงครั้งเดียว บริการที่เพิ่มภายหลังคิดแยกต่อท่าน" : "The couple package is first for both guests and charged once. Follow-up treatments are charged per guest."}</div>}
     </section>}
 
     {step === "SCHEDULE" && <section className="content-section narrow" aria-labelledby="schedule-title">
@@ -386,7 +429,7 @@ export function BookingExperience() {
       <p className="helper booking-window-copy">{locale === "th" ? `จองล่วงหน้าได้ ${bookingWindow.minDays}–${bookingWindow.maxDays} วัน` : `Book ${bookingWindow.minDays}–${bookingWindow.maxDays} days in advance`}</p>
       <div className={`availability-message state-${availabilityState}`} role="status" aria-live="polite">{availabilityState === "idle" && (locale === "th" ? "เลือกวันที่เพื่อดูเวลาว่าง" : "Choose a date to see available times")}{availabilityState === "loading" && (locale === "th" ? "กำลังตรวจสอบเวลาว่าง…" : "Checking available times…")}{availabilityState === "ready" && availableSlots.length > 0 && (locale === "th" ? `พบ ${availableSlots.length} ช่วงเวลา` : `${availableSlots.length} times available`)}{availabilityState === "ready" && availableSlots.length === 0 && (locale === "th" ? "วันนี้ไม่มีเวลาว่าง กรุณาเลือกวันอื่น" : "No times are available on this date. Choose another day.")}{availabilityState === "error" && <><span>{locale === "th" ? "ตรวจสอบเวลาว่างไม่สำเร็จ" : "Available times could not be loaded"}</span><button onClick={() => setAvailabilityRetry((value) => value + 1)}>{locale === "th" ? "ลองอีกครั้ง" : "Retry"}</button></>}</div>
       {availableSlots.length > 0 && <div className="time-picker"><h2 className="field-heading">{locale === "th" ? "เลือกเวลาเริ่ม" : "Choose a start time"}</h2>{timeGroups.map((group) => <section className="time-group" aria-labelledby={`time-group-${group.id}`} key={group.id}><h3 id={`time-group-${group.id}`}>{locale === "th" ? group.th : group.en}</h3><div className="time-grid">{group.slots.map((slot) => { const selected = time === slot.localStartTime; return <button className={selected ? "time-option selected" : "time-option"} aria-pressed={selected} onClick={() => { setTime(slot.localStartTime); setShowValidation(false); }} key={slot.localStartTime}><span>{slot.localStartTime}</span><span className="time-option-indicator" aria-hidden="true">{selected && "✓"}</span></button>; })}</div></section>)}</div>}
-      {time && <div className="selected-time-summary" role="status"><span>{locale === "th" ? "เวลาที่เลือก" : "Selected time"}</span><strong>{formatDate(date, locale)} · {time}</strong></div>}
+      {time && <div className="selected-time-summary" role="status"><span>{locale === "th" ? "เวลาที่เลือก" : "Selected time"}</span><strong>{formatDate(date, locale)} · {time}</strong><div className="participant-end-times">{participantDurations.map((duration, index) => <small key={index}>{participants[index].nickname || (locale === "th" ? `ผู้รับบริการ ${index + 1}` : `Guest ${index + 1}`)} · {time}–{endTime(time, duration)}</small>)}</div><small>{locale === "th" ? `การจองสิ้นสุดประมาณ ${endTime(time, totalDuration)}` : `Booking ends around ${endTime(time, totalDuration)}`}</small></div>}
       <p className="helper">{locale === "th" ? "เวลาประเทศไทย · เวลาจะถูกตรวจสอบอีกครั้งเมื่อส่งคำขอ" : "Bangkok time · Availability is checked again when you submit"}</p>
       <dialog className="calendar-dialog" ref={calendarDialogRef} onCancel={(event) => { event.preventDefault(); setCalendarOpen(false); }} onClose={() => setCalendarOpen(false)} onClick={(event) => { if (event.target === event.currentTarget) setCalendarOpen(false); }} aria-labelledby="calendar-title"><div className="dialog-surface"><header><div><p className="eyebrow">APPOINTMENT DATE</p><h2 id="calendar-title">{locale === "th" ? "เลือกวันที่" : "Choose a date"}</h2></div><button className="dialog-close" type="button" onClick={() => setCalendarOpen(false)} aria-label={locale === "th" ? "ปิดปฏิทิน" : "Close calendar"}>×</button></header><div className="calendar-month-nav"><button type="button" onClick={() => setCalendarMonth(addMonths(calendarMonth, -1))} disabled={calendarMonth <= monthStart(firstBookableDate)} aria-label={locale === "th" ? "เดือนก่อนหน้า" : "Previous month"}>‹</button><strong>{formatMonth(calendarMonth, locale)}</strong><button type="button" onClick={() => setCalendarMonth(addMonths(calendarMonth, 1))} disabled={calendarMonth >= monthStart(lastBookableDate)} aria-label={locale === "th" ? "เดือนถัดไป" : "Next month"}>›</button></div><div className="calendar-weekdays" aria-hidden="true">{(locale === "th" ? ["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"] : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]).map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{calendarDays(calendarMonth).map((day, index) => day ? <button type="button" key={day} className={calendarDraftDate === day ? "selected" : ""} disabled={day < firstBookableDate || day > lastBookableDate} aria-pressed={calendarDraftDate === day} aria-label={formatDate(day, locale, { weekday: "long", year: "numeric" })} onClick={() => setCalendarDraftDate(day)}>{Number(day.slice(-2))}</button> : <span key={`empty-${index}`} />)}</div><footer><button className="calendar-cancel" type="button" onClick={() => setCalendarOpen(false)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button className="primary-button" type="button" onClick={confirmCalendarDate} disabled={!calendarDraftDate}>{locale === "th" ? "ใช้วันที่นี้" : "Use this date"}</button></footer></div></dialog>
       <dialog className="conflict-dialog" ref={conflictDialogRef} onCancel={(event) => { event.preventDefault(); setScheduleConflict(false); }} onClose={() => setScheduleConflict(false)} aria-labelledby="conflict-title"><div className="dialog-surface"><span className="conflict-icon" aria-hidden="true">!</span><h2 id="conflict-title">{locale === "th" ? "ช่วงเวลานี้เพิ่งถูกจอง" : "This time was just booked"}</h2><p>{locale === "th" ? "มีลูกค้าท่านอื่นยืนยันช่วงเวลานี้ก่อน ระบบได้ตรวจสอบเวลาว่างล่าสุดให้แล้ว กรุณาเลือกเวลาใหม่" : "Another customer secured this time first. We refreshed the latest availability; please choose another time."}</p><button className="primary-button" type="button" onClick={() => setScheduleConflict(false)}>{locale === "th" ? "เลือกเวลาใหม่" : "Choose another time"}</button></div></dialog>
@@ -401,13 +444,13 @@ export function BookingExperience() {
 
     {step === "REVIEW" && <section className="content-section narrow" aria-labelledby="review-title">
       <div className="screen-heading"><p className="eyebrow">FINAL REVIEW</p><h1 id="review-title">{t.review}</h1><p>{locale === "th" ? "ตรวจสอบข้อมูลก่อนส่งคำขอให้ร้านยืนยัน" : "Check the details before sending your request to the spa."}</p></div>
-      <div className="review-card">{chosen.map((item, index) => item && <div className="review-row" key={`${item.variant.id}-${index}`}><span><b>{participants[index].nickname || `${t.person} ${index + 1}`}</b><small>{locale === "th" ? item.service.nameTh : item.service.nameEn} · {item.variant.durationMinutes} min</small></span><strong>{item.variant.pricingMode === "PER_BOOKING" && index > 0 ? "—" : formatBaht(item.variant.priceSatang, locale)}</strong></div>)}<div className="review-row"><span>{locale === "th" ? "วันและเวลา" : "Date and time"}</span><strong>{formatDate(date, locale)} · {time}</strong></div><div className="review-total"><span>{t.total}</span><strong>{formatBaht(total, locale)}</strong></div></div>
+      <div className="review-card"><div className="review-timelines">{chosen.map((items, participantIndex) => { let offset = 0; return <section className="review-participant" key={participantIndex}><header><b>{participants[participantIndex].nickname || `${t.person} ${participantIndex + 1}`}</b><small>{time}–{endTime(time, participantDurations[participantIndex])}</small></header>{items.map((item) => { const startsAt = endTime(time, offset); offset += item.variant.durationMinutes; const included = item.variant.pricingMode === "PER_BOOKING" && participantIndex > 0; return <div className="review-row" key={item.variant.id}><span><b>{locale === "th" ? item.service.nameTh : item.service.nameEn}</b><small>{startsAt}–{endTime(time, offset)} · {item.variant.durationMinutes} min</small></span><strong>{included ? (locale === "th" ? "รวมแล้ว" : "Included") : formatBaht(item.variant.priceSatang, locale)}</strong></div>; })}</section>; })}</div><div className="review-row"><span>{locale === "th" ? "วันและเวลา" : "Date and time"}</span><strong>{formatDate(date, locale)} · {time}–{endTime(time, totalDuration)}</strong></div><div className="review-total"><span>{t.total}</span><strong>{formatBaht(total, locale)}</strong></div></div>
       <label className="consent consent-panel"><input type="checkbox" checked={privacyAccepted} onChange={(event) => setPrivacyAccepted(event.target.checked)} /><span>{locale === "th" ? "ฉันยืนยันว่าข้อมูลการจองและข้อมูลติดต่อถูกต้อง และรับทราบ" : "I confirm the booking and contact details are correct and acknowledge the "}<a href="/privacy" target="_blank">{locale === "th" ? "นโยบายความเป็นส่วนตัว" : "Privacy Notice"}</a>{locale === "th" ? " และ" : " and "}<a href="/terms" target="_blank">{locale === "th" ? "เงื่อนไขการจอง" : "Booking Terms"}</a></span></label>
       <div className="payment-note"><strong>{locale === "th" ? "ชำระเงินที่ร้าน" : "Pay at the spa"}</strong><span>{locale === "th" ? "คำขอยังไม่ยืนยันจนกว่าร้านจะตรวจสอบ" : "Your request remains pending until the spa confirms it."}</span></div>
       {lineState === "linked" && <p className="helper centered" role="status">{locale === "th" ? "เชื่อมกับ LINE แล้ว คุณจะได้รับข้อความเมื่อร้านยืนยัน" : "LINE is connected. You will receive confirmation updates."}</p>}{lineState === "loading" && <p className="helper centered" role="status">{locale === "th" ? "กำลังตรวจสอบการเชื่อมต่อ LINE…" : "Checking LINE connection…"}</p>}{(lineState === "guest" || lineState === "error") && <p className="helper centered">{locale === "th" ? "คุณจองแบบ Guest ได้ และเชื่อม LINE ภายหลังจากหน้าสถานะ" : "You can book as a guest and connect LINE later from the status page."}</p>}
       <button className="primary-button submit-button" disabled={!privacyAccepted || isSubmitting} onClick={submitBooking}>{isSubmitting ? (locale === "th" ? "กำลังส่งคำขอ…" : "Sending request…") : t.submit}</button>{submitError && <div className="notice notice-warning submit-error" role="alert"><span>{submitError}</span><button onClick={submitBooking}>{locale === "th" ? "ลองอีกครั้ง" : "Retry"}</button></div>}
     </section>}
 
-    {selectedCount > 0 && <div className="mobile-action-bar" aria-live="polite"><div className="booking-total"><small>{participants.length} {t.person} · {totalDuration} {locale === "th" ? "นาที" : "min"}</small><strong>{formatBaht(total, locale)}</strong></div><div className="bar-actions">{activeIndex > 0 && <button className="back-button" onClick={goBack}>{t.back}</button>}{step !== "REVIEW" && <button className="primary-button" onClick={continueBooking}>{t.continue}</button>}</div></div>}
+    {selectedCount > 0 && <div className="mobile-action-bar" aria-live="polite"><div className="booking-total"><small>{selectedCount} {locale === "th" ? "บริการ" : "treatments"} · {participants.length} {t.person} · {totalDuration} {locale === "th" ? "นาที" : "min"}</small><strong>{formatBaht(total, locale)}</strong></div><div className="bar-actions">{activeIndex > 0 && <button className="back-button" onClick={goBack}>{t.back}</button>}{step !== "REVIEW" && <button className="primary-button" onClick={continueBooking}>{t.continue}</button>}</div></div>}
   </main>;
 }

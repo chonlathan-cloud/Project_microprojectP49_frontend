@@ -13,6 +13,7 @@ from app.main import app
 class AccountingRepository:
     def __init__(self) -> None:
         self.created: list[dict[str, Any]] = []
+        self.historical_records: list[dict[str, Any]] = []
 
     def list_payments(self, **_: Any) -> dict[str, Any]:
         return {
@@ -23,9 +24,31 @@ class AccountingRepository:
                 "paidGrossSatang": 0,
                 "beamGrossSatang": 0,
                 "cashGrossSatang": 0,
+                "bankTransferGrossSatang": 0,
                 "syncedCount": 0,
                 "attentionCount": 0,
             },
+        }
+
+    def list_pending_historical(self, *, branch_id: str) -> dict[str, Any]:
+        assert branch_id == "branch_001"
+        return {
+            "items": [
+                {
+                    "bookingId": "BK-20260820-001",
+                    "grossAmountSatang": 35_000,
+                    "version": 1,
+                }
+            ],
+            "total": 1,
+        }
+
+    def record_historical_payment(self, **values: Any) -> dict[str, Any]:
+        self.historical_records.append(values)
+        return {
+            "bookingId": values["booking_public_id"],
+            "paymentStatus": "PAID",
+            "paymentSource": values["payment_source"],
         }
 
     def detail(self, payment_id: str, *, branch_ids: tuple[str, ...]) -> dict[str, Any]:
@@ -101,6 +124,46 @@ def test_staff_cannot_create_accounting_run() -> None:
         )
     assert response.status_code == 403
     assert response.json()["code"] == "PERMISSION_DENIED"
+
+
+def test_admin_can_classify_pending_historical_payment() -> None:
+    with accounting_client() as (client, repository, _):
+        queue = client.get(
+            "/api/v1/admin/historical-accounting-candidates?branchId=branch_001"
+        )
+        response = client.post(
+            "/api/v1/admin/historical-accounting-candidates/BK-20260820-001:record",
+            headers={"Idempotency-Key": str(uuid4())},
+            json={
+                "paymentSource": "BANK_TRANSFER",
+                "paidAt": "2026-08-20T15:00:00+07:00",
+                "expectedVersion": 1,
+                "confirmed": True,
+            },
+        )
+    assert queue.status_code == 200
+    assert queue.json()["total"] == 1
+    assert response.status_code == 200, response.text
+    assert response.json()["paymentSource"] == "BANK_TRANSFER"
+    assert repository.historical_records[0]["booking_public_id"] == "BK-20260820-001"
+    assert repository.historical_records[0]["payment_source"] == "BANK_TRANSFER"
+
+
+def test_staff_cannot_classify_historical_payment() -> None:
+    with accounting_client("STAFF") as (client, _, __):
+        queue = client.get("/api/v1/admin/historical-accounting-candidates")
+        response = client.post(
+            "/api/v1/admin/historical-accounting-candidates/BK-20260820-001:record",
+            headers={"Idempotency-Key": str(uuid4())},
+            json={
+                "paymentSource": "CASH",
+                "paidAt": "2026-08-20T15:00:00+07:00",
+                "expectedVersion": 1,
+                "confirmed": True,
+            },
+        )
+    assert queue.status_code == 403
+    assert response.status_code == 403
 
 
 def test_admin_selected_run_is_async_and_idempotent() -> None:

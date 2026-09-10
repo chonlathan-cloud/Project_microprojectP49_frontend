@@ -21,9 +21,13 @@ from app.core.errors import (
     ValidationDomainError,
 )
 from app.core.settings import get_settings
-from app.domains.capacity.buckets import required_bucket_starts
+from app.core.types import PaymentSource
+from app.domains.accounting.factory import build_accounting_export
+from app.domains.bookings.plan import build_booking_plan, capacity_bucket_demands
 from app.domains.catalog.seed import load_catalog_manifest
 from app.domains.customers.phone import mask_phone, normalize_thai_phone
+from app.domains.payments.models import MoneyBreakdown, Payment, ServiceLineSnapshot
+from app.infrastructure.firestore_payments import _export_data, _payment_data, _payment_id
 from app.integrations.line_identity import line_identity_hash
 
 BRANCH_TIMEZONE = ZoneInfo("Asia/Bangkok")
@@ -103,9 +107,7 @@ def _validate_historical_record_window(
         microsecond=0,
     )
     if start_at >= current_bucket:
-        raise AdvanceWindowViolation(
-            "Historical records require an appointment time in the past"
-        )
+        raise AdvanceWindowViolation("Historical records require an appointment time in the past")
 
 
 def _validate_operating_hours(
@@ -189,6 +191,8 @@ def create_booking(
     discount_amount_satang: int = 0,
     discount_reason: str | None = None,
     tip_amount_satang: int = 0,
+    historical_payment_source: str | None = None,
+    historical_paid_at: datetime | None = None,
 ) -> dict[str, object]:
     settings = get_settings()
     if not idempotency_key or not 8 <= len(idempotency_key) <= 128:
@@ -229,6 +233,8 @@ def create_booking(
                 bucket_minutes=settings.capacity_bucket_minutes,
             )
         elif historical_record:
+            if actor_role != "ADMIN":
+                raise PermissionDenied("Only ADMIN may record paid historical bookings")
             _validate_historical_record_window(
                 start_at,
                 bucket_minutes=settings.capacity_bucket_minutes,
@@ -245,22 +251,17 @@ def create_booking(
     e164 = normalize_thai_phone(normalized_phone) if normalized_phone else None
     if source != "ADMIN_WEB" and not e164:
         raise ValidationDomainError("A valid Thai phone number is required")
-    selections = []
     for participant in participants:
         if not participant.get("healthConsent"):
             raise ValidationDomainError("Explicit health consent is required for every participant")
-        service, variant = _variant(client, str(participant.get("serviceVariantId", "")))
-        selections.append((participant, service, variant))
-    required_two = [variant.id for _, _, variant in selections if variant.required_pax == 2]
-    if required_two and (len(selections) != 2 or len(set(required_two)) != 1):
-        raise ValidationDomainError("A two-person package must be selected for both participants")
-
-    max_duration = max(variant.duration_minutes for _, _, variant in selections)
-    subtotal = sum(
-        variant.price_satang
-        for index, (_, _, variant) in enumerate(selections)
-        if variant.pricing_mode == "PER_PARTICIPANT" or index == 0
+    plan = build_booking_plan(
+        participants,
+        lambda variant_id: _variant(client, variant_id),
+        max_services_per_participant=settings.max_services_per_participant,
     )
+    first_selection = plan.participant_selections[0][0]
+    max_duration = plan.duration_minutes
+    subtotal = plan.subtotal_satang
     normalized_discount_reason = (discount_reason or "").strip() or None
     if isinstance(discount_amount_satang, bool) or not isinstance(discount_amount_satang, int):
         raise ValidationDomainError("Discount amount must be integer satang")
@@ -283,6 +284,25 @@ def create_booking(
         raise ValidationDomainError("Tip must be a non-negative whole-baht amount")
     if tip_amount_satang and not historical_record:
         raise ValidationDomainError("Tips may only be recorded for historical records")
+    if historical_record:
+        if historical_payment_source not in {"CASH", "BANK_TRANSFER"}:
+            raise ValidationDomainError(
+                "Historical records require cash or bank-transfer payment evidence"
+            )
+        if (
+            historical_paid_at is None
+            or historical_paid_at.tzinfo is None
+            or historical_paid_at.utcoffset() is None
+        ):
+            raise ValidationDomainError(
+                "Historical records require a timezone-aware paid time"
+            )
+        if historical_paid_at.astimezone(UTC) > datetime.now(UTC):
+            raise ValidationDomainError("Historical paid time cannot be in the future")
+    elif historical_payment_source is not None or historical_paid_at is not None:
+        raise ValidationDomainError(
+            "Historical payment evidence is only valid for historical records"
+        )
     total = subtotal - discount_amount_satang
     gross_total = total + tip_amount_satang
 
@@ -300,6 +320,10 @@ def create_booking(
         "discountAmountSatang": discount_amount_satang,
         "discountReason": normalized_discount_reason,
         "tipAmountSatang": tip_amount_satang,
+        "historicalPaymentSource": historical_payment_source,
+        "historicalPaidAt": (
+            historical_paid_at.isoformat() if historical_paid_at is not None else None
+        ),
         "lineUserIdHash": (
             hashlib.sha256(str(line_identity["sub"]).encode()).hexdigest()
             if line_identity and line_identity.get("sub")
@@ -317,13 +341,6 @@ def create_booking(
     booking_ref = client.collection("bookings").document()
     public_id = f"BK-{date.replace('-', '')}-{uuid4().hex[:6].upper()}"
     now = datetime.now(UTC)
-    bucket_starts = (
-        [] if historical_record else required_bucket_starts(start_at, max_duration, 0)
-    )
-    bucket_refs = [
-        client.collection("capacity_buckets").document(_bucket_id(branch_id, item))
-        for item in bucket_starts
-    ]
     status_token = token_urlsafe(32) if source != "ADMIN_WEB" else None
     status_token_hash = hashlib.sha256(status_token.encode()).hexdigest() if status_token else None
     transaction = client.transaction()
@@ -380,6 +397,10 @@ def create_booking(
         else:
             _validate_advance_window(start_at, branch)
         capacity = 0
+        bucket_demands: dict[datetime, int] = {}
+        bucket_starts: list[datetime] = []
+        bucket_refs: list[firestore.DocumentReference] = []
+        bucket_snapshots: list[firestore.DocumentSnapshot] = []
         if not historical_record:
             _validate_operating_hours(start_at, max_duration, branch)
             capacity = int(branch.get("activeCapacityUnits", branch.get("capacityUnits", 0)))
@@ -393,6 +414,16 @@ def create_booking(
             )
             if closure_refs:
                 raise CapacityUnavailable("The branch is closed on the selected date")
+            bucket_demands = capacity_bucket_demands(
+                start_at,
+                plan.participant_duration_minutes,
+                int(branch.get("bufferMinutes", 0)),
+            )
+            bucket_starts = list(bucket_demands)
+            bucket_refs = [
+                client.collection("capacity_buckets").document(_bucket_id(branch_id, item))
+                for item in bucket_starts
+            ]
 
         if e164 and source == "ADMIN_WEB":
             same_slot = list(
@@ -423,10 +454,9 @@ def create_booking(
                 raise ActivePendingLimit("This phone already has two active pending bookings")
 
         bucket_snapshots = [ref.get(transaction=tx) for ref in bucket_refs]
-        units = len(selections)
-        for snapshot in bucket_snapshots:
+        for bucket_start, snapshot in zip(bucket_starts, bucket_snapshots, strict=True):
             used = int((snapshot.to_dict() or {}).get("usedUnits", 0)) if snapshot.exists else 0
-            if used + units > capacity:
+            if used + bucket_demands[bucket_start] > capacity:
                 raise CapacityUnavailable(
                     "No capacity is available for the complete service duration"
                 )
@@ -457,29 +487,29 @@ def create_booking(
             "customerListBucket": customer_list_bucket(initial_status),
             "contact": contact,
             "adminEntryMode": admin_booking_mode,
-            "customerName": str(selections[0][0].get("nickname", "Guest")),
-            "serviceName": selections[0][1].name_en,
-            "serviceId": selections[0][1].id,
-            "serviceNameTh": selections[0][1].name_th,
-            "serviceNameEn": selections[0][1].name_en,
-            "serviceNamesTh": [service.name_th for _, service, _ in selections],
-            "serviceNamesEn": [service.name_en for _, service, _ in selections],
+            "customerName": str(first_selection.participant.get("nickname", "Guest")),
+            "serviceName": first_selection.service.name_en,
+            "serviceId": first_selection.service.id,
+            "serviceNameTh": first_selection.service.name_th,
+            "serviceNameEn": first_selection.service.name_en,
+            "serviceNamesTh": [item.selection.service.name_th for item in plan.line_items],
+            "serviceNamesEn": [item.selection.service.name_en for item in plan.line_items],
             "startAt": start_at,
             "endAt": start_at + timedelta(minutes=max_duration),
             "localDate": date,
             "localStartTime": time,
             "timezone": "Asia/Bangkok",
-            "pax": len(selections),
+            "pax": len(participants),
             "subtotalAmountSatang": subtotal,
             "discountAmountSatang": discount_amount_satang,
             "estimatedAmountSatang": total,
             "tipAmountSatang": tip_amount_satang,
             "grossAmountSatang": gross_total,
             "priceIncludesVat": True,
-            "paymentStatus": "UNAVAILABLE",
+            "paymentStatus": "PAID" if historical_record else "UNAVAILABLE",
             "financiallyExcluded": False,
             "historicalFinancialRecord": historical_record,
-            "healthAlert": any(bool(p.get("hasHealthInformation")) for p, _, _ in selections),
+            "healthAlert": any(bool(p.get("hasHealthInformation")) for p in participants),
             "assignmentState": "NOT_REQUIRED" if historical_record else "UNASSIGNED",
             "capacityReleased": historical_record,
             "version": 1,
@@ -499,10 +529,15 @@ def create_booking(
         if historical_record:
             booking_data["recordedAt"] = now
             booking_data["recordedBy"] = actor_id
+            booking_data["paidAmountSatang"] = gross_total
+            booking_data["amountDueSatang"] = 0
+            booking_data["paymentUpdatedAt"] = historical_paid_at
         else:
             booking_data["capacityReservation"] = {
-                "bucketIds": [ref.id for ref in bucket_refs],
-                "units": units,
+                "bucketUnits": [
+                    {"bucketId": ref.id, "units": bucket_demands[bucket_start]}
+                    for ref, bucket_start in zip(bucket_refs, bucket_starts, strict=True)
+                ],
             }
         if line_identity:
             booking_data["lineIdentityHash"] = line_identity_hash(
@@ -540,51 +575,27 @@ def create_booking(
             bucket_refs, bucket_snapshots, bucket_starts, strict=True
         ):
             used = int((snapshot.to_dict() or {}).get("usedUnits", 0)) if snapshot.exists else 0
+            demand = bucket_demands[bucket_start]
             tx.set(
                 ref,
                 {
                     "branchId": branch_id,
                     "bucketStart": bucket_start,
-                    "usedUnits": used + units,
+                    "usedUnits": used + demand,
                     "capacityUnits": capacity,
                     "updatedAt": now,
                 },
                 merge=True,
             )
 
-        participant_ids: list[str] = []
-        for index, (participant, service, variant) in enumerate(selections, start=1):
-            participant_ref = client.collection("booking_participants").document()
-            participant_ids.append(participant_ref.id)
-            line_ref = client.collection("booking_line_items").document()
+        participant_refs = [
+            client.collection("booking_participants").document() for _ in participants
+        ]
+        for index, (participant, participant_ref) in enumerate(
+            zip(participants, participant_refs, strict=True), start=1
+        ):
             health_ref = client.collection("health_profiles").document()
             consent_ref = client.collection("consent_evidence").document()
-            tx.set(
-                line_ref,
-                {
-                    "bookingDocId": booking_ref.id,
-                    "branchId": branch_id,
-                    "serviceSnapshot": {
-                        "serviceId": service.id,
-                        "variantId": variant.id,
-                        "nameTh": service.name_th,
-                        "nameEn": service.name_en,
-                        "durationMinutes": variant.duration_minutes,
-                        "pricingMode": variant.pricing_mode,
-                        "requiredPax": variant.required_pax,
-                        "unitPriceSatang": variant.price_satang,
-                    },
-                    "quantity": 1,
-                    "lineTotalSatang": (
-                        variant.price_satang
-                        if variant.pricing_mode == "PER_PARTICIPANT" or index == 1
-                        else 0
-                    ),
-                    "financiallyExcluded": False,
-                    "participantIds": [participant_ref.id],
-                    "createdAt": now,
-                },
-            )
             tx.set(
                 participant_ref,
                 {
@@ -594,6 +605,10 @@ def create_booking(
                     "nickname": str(participant.get("nickname", "")),
                     "healthAlert": bool(participant.get("hasHealthInformation")),
                     "healthProfileId": health_ref.id,
+                    "durationMinutes": plan.participant_duration_minutes[index - 1],
+                    "scheduledStartAt": start_at,
+                    "scheduledEndAt": start_at
+                    + timedelta(minutes=plan.participant_duration_minutes[index - 1]),
                     "createdAt": now,
                 },
             )
@@ -624,6 +639,105 @@ def create_booking(
                 },
             )
 
+        for sequence, line in enumerate(plan.line_items, start=1):
+            line_ref = client.collection("booking_line_items").document()
+            selection = line.selection
+            service = selection.service
+            variant = selection.variant
+            tx.set(
+                line_ref,
+                {
+                    "bookingDocId": booking_ref.id,
+                    "branchId": branch_id,
+                    "sequence": sequence,
+                    "participantSequence": selection.participant_index + 1,
+                    "source": "ORIGINAL",
+                    "serviceSnapshot": {
+                        "serviceId": service.id,
+                        "variantId": variant.id,
+                        "nameTh": service.name_th,
+                        "nameEn": service.name_en,
+                        "durationMinutes": variant.duration_minutes,
+                        "pricingMode": variant.pricing_mode,
+                        "requiredPax": variant.required_pax,
+                        "unitPriceSatang": variant.price_satang,
+                    },
+                    "quantity": 1,
+                    "lineTotalSatang": line.line_total_satang,
+                    "financiallyExcluded": False,
+                    "participantIds": [
+                        participant_refs[index].id for index in line.participant_indexes
+                    ],
+                    "scheduledStartAt": start_at + timedelta(minutes=line.start_offset_minutes),
+                    "scheduledEndAt": start_at + timedelta(minutes=line.end_offset_minutes),
+                    "createdAt": now,
+                },
+            )
+
+        if historical_record:
+            payment_source = PaymentSource(str(historical_payment_source))
+            payment_lines = tuple(
+                ServiceLineSnapshot(
+                    sku=item.selection.variant.id,
+                    name=item.selection.service.name_th
+                    or item.selection.service.name_en,
+                    quantity=1,
+                    unit_price_satang=item.line_total_satang,
+                )
+                for item in plan.line_items
+                if item.line_total_satang > 0
+            )
+            payment = Payment(
+                payment_id=_payment_id(booking_ref.id),
+                booking_doc_id=booking_ref.id,
+                booking_public_id=public_id,
+                branch_id=branch_id,
+                amounts=MoneyBreakdown(total, tip_amount_satang, gross_total),
+                service_lines=payment_lines,
+                subtotal_amount_satang=subtotal,
+                discount_amount_satang=discount_amount_satang,
+                discount_reason=(
+                    normalized_discount_reason if discount_amount_satang else None
+                ),
+            ).mark_paid(
+                source=payment_source,
+                paid_at=historical_paid_at,
+                cash_received_by=actor_id if payment_source is PaymentSource.CASH else None,
+                manual_received_by=(
+                    actor_id
+                    if payment_source is PaymentSource.BANK_TRANSFER
+                    else None
+                ),
+            )
+            accounting_export = build_accounting_export(payment)
+            tx.set(
+                client.collection("payments").document(payment.payment_id),
+                {**_payment_data(payment, now), "createdAt": now},
+            )
+            tx.set(
+                client.collection("accounting_exports").document(
+                    accounting_export.export_id
+                ),
+                _export_data(accounting_export, now),
+            )
+            tx.set(
+                client.collection("audit_events").document(),
+                {
+                    "eventType": "HISTORICAL_PAYMENT_RECORDED",
+                    "actorType": "ADMIN_USER",
+                    "actorId": actor_id,
+                    "branchId": branch_id,
+                    "bookingDocId": booking_ref.id,
+                    "publicBookingId": public_id,
+                    "paymentId": payment.payment_id,
+                    "paymentSource": payment_source.value,
+                    "paidAt": historical_paid_at,
+                    "grossAmountSatang": gross_total,
+                    "occurredAt": now,
+                    "createdAt": now,
+                },
+            )
+
         if booking_privacy_acknowledged:
             privacy_consent_ref = client.collection("consent_evidence").document()
             tx.set(
@@ -642,14 +756,12 @@ def create_booking(
 
         audit_ref = client.collection("audit_events").document()
         audit_data: dict[str, object] = {
-            "eventType": (
-                "BOOKING_HISTORY_RECORDED" if historical_record else "BOOKING_CREATED"
-            ),
+            "eventType": ("BOOKING_HISTORY_RECORDED" if historical_record else "BOOKING_CREATED"),
             "bookingDocId": booking_ref.id,
             "publicBookingId": public_id,
-            "actorType": "ADMIN_USER" if source == "ADMIN_WEB" else (
-                "LINE_CUSTOMER" if line_identity else "GUEST"
-            ),
+            "actorType": "ADMIN_USER"
+            if source == "ADMIN_WEB"
+            else ("LINE_CUSTOMER" if line_identity else "GUEST"),
             "source": source,
             "toStatus": initial_status,
             "financiallyExcluded": False,
@@ -659,6 +771,9 @@ def create_booking(
             "estimatedAmountSatang": total,
             "tipAmountSatang": tip_amount_satang,
             "grossAmountSatang": gross_total,
+            "paymentStatus": "PAID" if historical_record else "UNAVAILABLE",
+            "paymentSource": historical_payment_source if historical_record else None,
+            "paidAt": historical_paid_at if historical_record else None,
             "createdAt": now,
         }
         if actor_id:

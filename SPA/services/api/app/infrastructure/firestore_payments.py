@@ -185,6 +185,7 @@ def _payment_from_data(payment_id: str, data: dict[str, Any]) -> Payment:
             paid_at=data.get("paidAt"),
             provider_resource_id=data.get("providerResourceId"),
             cash_received_by=data.get("cashReceivedBy"),
+            manual_received_by=data.get("manualReceivedBy"),
             cash_settlement_status=CashSettlementStatus(
                 data.get("cashSettlementStatus", CashSettlementStatus.NOT_APPLICABLE)
             ),
@@ -214,6 +215,7 @@ def _payment_data(payment: Payment, now: datetime) -> dict[str, Any]:
         "paymentMethod": payment.source,
         "providerResourceId": payment.provider_resource_id,
         "cashReceivedBy": payment.cash_received_by,
+        "manualReceivedBy": payment.manual_received_by,
         "cashSettlementStatus": payment.cash_settlement_status,
         "paidAt": payment.paid_at,
         "serviceLines": [
@@ -289,6 +291,7 @@ def _with_tip(payment: Payment, tip_amount_satang: int) -> Payment:
         paid_at=payment.paid_at,
         provider_resource_id=payment.provider_resource_id,
         cash_received_by=payment.cash_received_by,
+        manual_received_by=payment.manual_received_by,
         cash_settlement_status=payment.cash_settlement_status,
         version=payment.version + 1,
     )
@@ -325,6 +328,7 @@ def _with_discount(
         paid_at=payment.paid_at,
         provider_resource_id=payment.provider_resource_id,
         cash_received_by=payment.cash_received_by,
+        manual_received_by=payment.manual_received_by,
         cash_settlement_status=payment.cash_settlement_status,
         version=payment.version + 1,
     )

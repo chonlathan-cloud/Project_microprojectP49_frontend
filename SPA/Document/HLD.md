@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | High-Level Design (HLD) |
-| Version | 1.7 |
+| Version | 1.8 |
 | Status | Approved architecture baseline |
-| Last updated | 2 September 2026 |
+| Last updated | 10 September 2026 |
 | Initial branch scope | One branch |
 | Timezone / currency | Asia/Bangkok / THB |
-| Business baseline | [Business Logic v2.0](./BusinessLogic.md) |
+| Business baseline | [Business Logic v2.1](./BusinessLogic.md) |
 
 ## 1. Purpose
 
@@ -35,7 +35,7 @@ This HLD intentionally does not define exact API payloads, Firestore document sc
 - Mobile-first customer booking through LINE Rich Menu/LIFF and a Public Website
 - Website Guest booking without membership or OTP
 - One or two participants per Booking
-- Service and duration selection per participant with a shared start time
+- An ordered 1–3 service timeline per participant with a shared Booking start time
 - Availability based on rooms, beds, service areas, blocked periods, and configured capacity
 - `PENDING` capacity reservation with no automatic expiration
 - Admin Web operations with `ADMIN` and `STAFF` roles
@@ -43,7 +43,7 @@ This HLD intentionally does not define exact API payloads, Firestore document sc
 - Approval from a registered LINE Admin Group
 - Customer LINE acknowledgements and status messages when LINE is linked
 - Secure status tracking for Website Guests
-- Post-service Beam or Admin-recorded cash payment with a separate Payment lifecycle
+- Post-service Beam or Admin-recorded cash/bank-transfer payment with a separate Payment lifecycle
 - ADMIN-only therapist/shop revenue and tip allocation plus operational analytics
 - Health-detail delivery to the access-controlled registered Admin LINE Group, while retaining masking in Customer LINE and customer status views
 - Persistent customer health profiles with immutable visit-time snapshots and versioned consent evidence
@@ -181,7 +181,7 @@ Responsibilities:
 - Create staff-assisted Bookings for today or a future date with optional phone contact, capacity validation, explicit verbal/paper consent evidence, and an audited initial `CONFIRMED` state
 - Allow only `ADMIN` to apply an optional whole-THB Booking discount with a required reason at creation or in the pre-service Start confirmation, with unpaid `COMPLETED` correction retained as a recovery path, while keeping immutable service prices, subtotal, discount, and net total distinct
 - Allow `ADMIN`/`STAFF` to append active, single-participant catalogue services while a Booking is `IN_SERVICE`; reserve later capacity per added line, assign its therapist, retain `ADMIN`-only discount mutation, and produce one final Booking payment
-- Record past appointments as financial `RECORDED` history with immutable subtotal, Admin discount, net service amount, separate optional tip, and gross amount; allow an audited reason-required correction to `CANCELLED`, but never reserve/release capacity or deliver notifications for this historical path
+- Record past appointments as ADMIN-only financial `RECORDED` history with immutable subtotal, Admin discount, net service amount, separate optional tip, gross amount, required cash/bank-transfer evidence, and atomic Payment/Accounting Export creation; never reserve/release capacity or deliver notifications for this historical path
 - Manage services, duration variants, prices, resources, blocked periods, therapists, and the Phase 1 branch
 - Display health details only to authorized `ADMIN` or `STAFF` users
 - Restrict user, role, and security configuration screens to `ADMIN`
@@ -208,7 +208,7 @@ Responsibilities:
 - Verify LINE credentials on the server and never trust a raw profile supplied by a browser
 - Verify Firebase ID tokens and application roles for Admin Web operations
 - Enforce CAPTCHA, rate limits, duplicate protection, and active `PENDING` limits for Guest submission
-- Calculate availability using branch configuration, resources, blocks, duration, buffer, and existing reservations
+- Calculate availability from every participant's ordered service timeline using branch configuration, resources, blocks, duration, buffer, and existing reservations
 - Execute atomic Booking and capacity transactions
 - Enforce the Booking state machine and all role permissions
 - Validate LINE webhook signatures, registered Group IDs, and approver User IDs
@@ -440,7 +440,7 @@ Concurrent submissions contend on the relevant reservation records. The first tr
 
 - A newly committed Customer Web or LIFF Booking is always `PENDING`.
 - An authenticated Admin Web staff-assisted Booking for today or a future date commits directly as `CONFIRMED` after the creating `ADMIN`/`STAFF` reviews the summary. The transaction records `source=ADMIN_WEB`, creator identity, confirmation time, and audit evidence.
-- A past appointment is accepted only as `HISTORICAL_RECORD`; it commits directly to `RECORDED`, sets `financiallyExcluded=false` and `historicalFinancialRecord=true`, preserves price/discount/net-service/tip/gross snapshots, and skips reservations, automatic payment/accounting creation, and notification outbox writes. Tip input is rejected for every non-historical booking. Its only ordinary transition is reason-required cancellation of an erroneous record.
+- A past appointment is accepted only as ADMIN `HISTORICAL_RECORD`; it commits directly to `RECORDED`, requires `CASH|BANK_TRANSFER` plus an authoritative past `paidAt`, sets `financiallyExcluded=false` and `historicalFinancialRecord=true`, preserves price/discount/net-service/tip/gross snapshots, and atomically creates Payment `PAID`, Accounting Export `READY`, and audit evidence. It skips reservations and notification outbox writes. Tip input is rejected for every non-historical booking. Paid historical records cannot use ordinary Booking cancellation because an accounting correction is required.
 - `PENDING` consumes capacity immediately.
 - There is no automatic expiration or scheduled release.
 - Capacity is released only when the Booking moves to a non-consuming terminal state.
@@ -462,7 +462,7 @@ stateDiagram-v2
     CONFIRMED --> CANCELLED: ADMIN or STAFF
     CONFIRMED --> NO_SHOW: ADMIN or STAFF
     IN_SERVICE --> COMPLETED: ADMIN or STAFF
-    RECORDED --> CANCELLED: ADMIN or STAFF; reason required
+    RECORDED --> CANCELLED: legacy unpaid record only; reason required
     COMPLETED --> [*]
     CANCELLED --> [*]
     NO_SHOW --> [*]
@@ -559,7 +559,8 @@ Firestore is the system of record for Phase 1 operational data. Clients access i
 ### 15.1 Data Rules
 
 - Every operational entity that belongs to a branch includes a Branch ID.
-- Booking and participant service names, durations, and prices are snapshots; later catalog edits do not rewrite history.
+- Booking line items snapshot every selected service, order, scheduled interval, participants, duration, and price; later catalog edits do not rewrite history.
+- Services run sequentially for each participant and participant timelines run in parallel. A two-person `PER_BOOKING` package is represented by one shared line item and charged once. Payment remains one Booking-level transaction.
 - `PER_BOOKING` Couple Package is charged once while capacity and participant safety data are represented for both participants.
 - Current Health Profile is stored separately from Booking Health Snapshots. Profile edits never rewrite historical snapshots.
 - Health detail is stored separately from customer-safe summaries. The Admin Group Worker joins it only at render time and does not copy it into outbox or task payloads.
@@ -706,7 +707,7 @@ The baseline is RPO 24 hours and RTO 4 hours. A future requirement for lower RPO
 
 | Business rule | HLD realization |
 | --- | --- |
-| `BL-BKG-001`–`BL-BKG-003` | Customer Web journey, dual entry modes, one/two participants, no customer therapist selection |
+| `BL-BKG-001`–`BL-BKG-003`, `BL-BKG-009`–`BL-BKG-010` | Customer Web journey, dual entry modes, ordered multi-service participant timelines, shared Package pricing, one/two participants, no customer therapist selection |
 | `BL-BKG-004`–`BL-BKG-005` | Transactional creation as `PENDING`, resource reservations, no automatic expiration |
 | `BL-BKG-006`–`BL-BKG-008` | Guest minimum data, Secure Status Link, server-side CAPTCHA and abuse controls |
 | `BL-CAP-001`–`BL-CAP-003` | Firestore resource-time transactions, complete-duration validation, block handling |

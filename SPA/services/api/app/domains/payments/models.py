@@ -76,6 +76,7 @@ class Payment:
     paid_at: datetime | None = None
     provider_resource_id: str | None = None
     cash_received_by: str | None = None
+    manual_received_by: str | None = None
     cash_settlement_status: CashSettlementStatus = CashSettlementStatus.NOT_APPLICABLE
     version: int = 1
 
@@ -118,6 +119,7 @@ class Payment:
         paid_at: datetime,
         provider_resource_id: str | None = None,
         cash_received_by: str | None = None,
+        manual_received_by: str | None = None,
     ) -> "Payment":
         if paid_at.tzinfo is None or paid_at.utcoffset() is None:
             raise FinancialInvariantError("Authoritative paid time must be timezone-aware")
@@ -127,6 +129,8 @@ class Payment:
             raise FinancialInvariantError("Beam success requires a provider resource ID")
         if source is PaymentSource.CASH and not cash_received_by:
             raise FinancialInvariantError("Cash receipt requires an authorized actor")
+        if source is PaymentSource.BANK_TRANSFER and not manual_received_by:
+            raise FinancialInvariantError("Bank transfer requires an authorized actor")
 
         if self.status is PaymentStatus.PAID:
             if (
@@ -134,6 +138,7 @@ class Payment:
                 and self.paid_at == paid_at
                 and self.provider_resource_id == provider_resource_id
                 and self.cash_received_by == cash_received_by
+                and self.manual_received_by == manual_received_by
             ):
                 return self
             raise FinancialConflict("Payment is already paid with different evidence")
@@ -152,6 +157,7 @@ class Payment:
             paid_at=paid_at,
             provider_resource_id=provider_resource_id,
             cash_received_by=cash_received_by,
+            manual_received_by=manual_received_by,
             cash_settlement_status=settlement_status,
             version=self.version + 1,
         )

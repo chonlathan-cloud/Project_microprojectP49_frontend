@@ -586,6 +586,21 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .walk-in-pax { margin-bottom: 12px; display: flex; gap: 7px; }
 .walk-in-pax button, .walk-in-time-grid button { min-height: 40px; padding: 0 13px; border: 1px solid #aeb6aa; border-radius: 8px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 12px; font-weight: 800; }
 .walk-in-pax button[aria-pressed="true"], .walk-in-time-grid button[aria-pressed="true"] { border-color: var(--forest); background: #e9eee6; box-shadow: inset 0 0 0 1px var(--forest); }
+.walk-in-service-plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 10px; }
+.walk-in-service-plan { overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfa; }
+.walk-in-service-plan > header { min-height: 44px; padding: 9px 11px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); background: #f1f4ef; }
+.walk-in-service-plan > header strong { color: var(--forest-dark); font-size: 12px; }
+.walk-in-service-plan > header small { color: var(--muted); font-size: 10px; font-weight: 750; }
+.walk-in-service-plan ol { margin: 0; padding: 0; list-style: none; }
+.walk-in-service-plan li { min-height: 58px; padding: 8px 10px; display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; border-bottom: 1px solid #e2e6df; }
+.walk-in-service-plan li > span { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: #e7ede3; color: var(--forest-dark); font-size: 9px; font-weight: 900; }
+.walk-in-service-plan li strong, .walk-in-service-plan li small { display: block; }
+.walk-in-service-plan li strong { font-size: 11px; line-height: 1.35; }
+.walk-in-service-plan li small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+.walk-in-service-plan .walk-in-field { margin: 10px; }
+.walk-in-service-actions { display: flex; gap: 3px; }
+.walk-in-service-actions button { width: 30px; height: 30px; border: 1px solid #c6ccc2; border-radius: 6px; background: white; color: var(--forest-dark); cursor: pointer; font-weight: 850; }
+.walk-in-service-actions button:disabled { cursor: not-allowed; opacity: .3; }
 .walk-in-field { margin-top: 12px; display: grid; gap: 6px; color: var(--text); font-size: 12px; font-weight: 800; }
 .walk-in-field input, .walk-in-field select, .walk-in-field textarea { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid #aeb6aa; border-radius: 8px; background: white; color: var(--text); }
 .walk-in-field textarea { min-height: 82px; resize: vertical; line-height: 1.5; }
@@ -611,6 +626,8 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .walk-in-consent { margin-top: 12px; display: flex; align-items: flex-start; gap: 9px; color: #4b5548; font-size: 11px; font-weight: 600; line-height: 1.55; }
 .walk-in-consent.privacy { padding: 13px; border: 1px solid #d6bd89; border-radius: 8px; background: #fffaf0; color: #5e4724; }
 .walk-in-pricing { background: #fbfcfa; }
+.historical-payment-choice { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.historical-paid-at { max-width: 360px; }
 .walk-in-price-grid { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(280px, 1.2fr); align-items: end; gap: 16px; }
 .walk-in-price-subtotal { min-height: 68px; padding: 11px 13px; display: flex; flex-direction: column; justify-content: center; gap: 4px; border-left: 3px solid var(--gold); background: #fffaf0; }
 .walk-in-price-subtotal span { color: var(--muted); font-size: 11px; font-weight: 700; }
@@ -668,7 +685,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .accounting-run.warning { border-left-color: #b36b00; background: #fff5da; color: #754500; }
 .accounting-run div { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
 .accounting-run span { overflow: hidden; font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.accounting-summary { margin: 0 0 16px; display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr; border: 1px solid var(--line); border-radius: 10px; background: white; }
+.accounting-summary { margin: 0 0 16px; display: grid; grid-template-columns: 1.25fr 1fr 1fr 1fr 1fr; border: 1px solid var(--line); border-radius: 10px; background: white; }
 .accounting-summary > div { min-width: 0; padding: 14px 16px; border-right: 1px solid var(--line); }
 .accounting-summary > div:last-child { border-right: 0; }
 .accounting-summary span, .accounting-summary strong { display: block; }
@@ -695,6 +712,31 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .accounting-status-retryable, .accounting-status-reconcile_required, .accounting-status-review_required { border-color: #df8e8e; background: #fff0f0; color: #991b1b; }
 .source-beam { border-color: #7b9dd1; background: #edf4ff; color: #174e9c; }
 .source-cash { border-color: #a59a83; background: #f5f2eb; color: #5f5138; }
+.source-bank_transfer { border-color: #7b9dd1; background: #edf4ff; color: #174e9c; }
+.historical-payment-badge { width: max-content; margin-top: 5px; padding: 2px 6px; display: inline-flex; border-left: 3px solid #8a6d2f; background: #fff8e7; color: #6b5022; font-size: 9px; font-weight: 850; }
+.historical-accounting-queue { margin-bottom: 16px; overflow: hidden; border-color: #d5bd88; }
+.historical-accounting-heading { padding: 16px 18px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid #e7d8b7; background: #fffaf0; }
+.historical-accounting-heading h2, .historical-accounting-heading p { margin: 0; }
+.historical-accounting-heading h2 { margin-top: 2px; color: var(--forest-dark); font-size: 17px; }
+.historical-accounting-heading p:last-child { margin-top: 4px; color: #6d5a35; font-size: 11px; line-height: 1.45; }
+.historical-accounting-heading > strong { min-width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; background: #8a6d2f; color: white; font-size: 17px; }
+.historical-accounting-list { max-height: 440px; overflow-y: auto; }
+.historical-accounting-list article { border-bottom: 1px solid var(--line); }
+.historical-accounting-list article:last-child { border-bottom: 0; }
+.historical-accounting-list article.active { background: #fbfcfa; }
+.historical-accounting-record { min-height: 66px; padding: 10px 18px; display: grid; grid-template-columns: 190px minmax(220px, 1fr) 220px auto; align-items: center; gap: 14px; }
+.historical-accounting-record strong, .historical-accounting-record small { display: block; }
+.historical-accounting-record strong { font-size: 12px; }
+.historical-accounting-record small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.historical-accounting-record > button, .historical-accounting-form button { min-height: 36px; padding: 0 11px; border: 1px solid var(--forest); border-radius: 7px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 11px; font-weight: 850; }
+.historical-accounting-form { padding: 13px 18px 16px; display: grid; grid-template-columns: minmax(260px, 1fr) minmax(240px, 1fr) auto; align-items: end; gap: 18px; border-top: 1px dashed #c8cec4; background: #f7f9f5; }
+.historical-accounting-form fieldset { margin: 0; padding: 0; display: flex; gap: 16px; border: 0; }
+.historical-accounting-form fieldset legend, .historical-accounting-form > label > span { width: 100%; margin-bottom: 6px; display: block; color: var(--muted); font-size: 10px; font-weight: 800; }
+.historical-accounting-form fieldset label { min-height: 40px; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 750; }
+.historical-accounting-form input[type="radio"] { width: 18px; height: 18px; accent-color: var(--forest); }
+.historical-accounting-form input[type="datetime-local"] { width: 100%; min-height: 40px; padding: 0 9px; border: 1px solid #aeb6aa; border-radius: 7px; background: white; }
+.historical-accounting-form > div { display: flex; gap: 7px; }
+.historical-accounting-form .primary-compact-button { background: var(--forest); color: white; }
 .accounting-error-code { max-width: 180px; color: #991b1b; overflow-wrap: anywhere; }
 .accounting-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
 .accounting-row-actions button { min-height: 32px; padding: 0 8px; border: 1px solid #aeb6aa; border-radius: 6px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 10px; font-weight: 850; white-space: nowrap; }
@@ -790,6 +832,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .settlement-service span { margin-top: 4px; color: var(--muted); font-size: 11px; }
 .settlement-allocation-row label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 800; }
 .settlement-allocation-row input, .settlement-allocation-row select { width: 100%; min-height: 40px; padding: 0 9px; border: 1px solid #aeb6aa; border-radius: 7px; background: white; color: var(--text); }
+.settlement-allocation-row input[aria-invalid="true"] { border-color: #b91c1c; background: #fff7f7; box-shadow: 0 0 0 1px rgb(185 28 28 / 14%); }
 .settlement-result { margin: 0 22px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 9px; background: #f8faf7; }
 .settlement-result > div { padding: 14px; border-right: 1px solid var(--line); }
 .settlement-result > div:last-child { border-right: 0; }
@@ -1020,8 +1063,11 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .assignment-item { grid-template-columns: 1fr; }
   .coupon-workspace { grid-template-columns: 1fr; }
   .accounting-summary { grid-template-columns: 1fr 1fr; }
-  .accounting-summary > div:nth-child(2) { border-right: 0; }
-  .accounting-summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .accounting-summary > div:nth-child(even) { border-right: 0; }
+  .accounting-summary > div:nth-child(-n+4) { border-bottom: 1px solid var(--line); }
+  .historical-accounting-record { grid-template-columns: 1fr 1fr; }
+  .historical-accounting-form { grid-template-columns: 1fr 1fr; }
+  .historical-accounting-form > div { grid-column: 1 / -1; justify-content: flex-end; }
   .accounting-filter-grid { grid-template-columns: 1fr 1fr; }
   .accounting-search { grid-column: 1 / -1; }
   .cash-deposit-drawer { width: min(680px, 100vw); }
@@ -1107,6 +1153,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .walk-in-header, .walk-in-section, .walk-in-review { padding-inline: 15px; }
   .walk-in-mode { padding-inline: 15px; grid-template-columns: 1fr; }
   .walk-in-schedule-grid { grid-template-columns: 1fr; }
+  .walk-in-service-plans { grid-template-columns: 1fr; }
   .walk-in-price-grid { grid-template-columns: 1fr; }
   .walk-in-time-grid { grid-template-columns: repeat(4, 1fr); }
   .walk-in-actions { grid-template-columns: 1fr; }
@@ -1116,6 +1163,9 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
   .accounting-summary, .accounting-filter-grid { grid-template-columns: 1fr; }
   .accounting-summary > div { border-right: 0; border-bottom: 1px solid var(--line); }
   .accounting-summary > div:last-child { border-bottom: 0; }
+  .historical-accounting-heading { align-items: flex-start; }
+  .historical-accounting-record, .historical-accounting-form { grid-template-columns: 1fr; }
+  .historical-accounting-form > div { grid-column: auto; display: grid; grid-template-columns: 1fr 1fr; }
   .accounting-search { grid-column: auto; }
   .accounting-heading-actions, .cash-evidence-upload, .cash-confirm-total, .cash-deposit-actions, .cash-qr { grid-template-columns: 1fr; }
   .accounting-heading-actions { width: 100%; display: grid; }

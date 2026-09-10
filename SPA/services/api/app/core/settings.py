@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     app_env: str = "local"
     default_branch_id: str = "branch_001"
     capacity_bucket_minutes: int = 15
+    max_services_per_participant: int = 3
     health_retention_years: int = 3
     health_retention_policy_version: str = "health-3y-approved-v1"
     health_retention_policy_approved: bool = True

@@ -36,7 +36,7 @@ export type BookingDraft = {
   branchId: string;
   participants: Array<{
     nickname: string;
-    serviceVariantId: string;
+    services: Array<{ serviceVariantId: string }>;
     health: { hasInformation: boolean; details?: string };
     healthConsent: { accepted: boolean; version: string };
   }>;
@@ -78,6 +78,9 @@ export type PreviewBooking = {
     serviceNameTh: string;
     serviceNameEn: string;
     durationMinutes: number;
+    serviceNamesTh?: string[];
+    serviceNamesEn?: string[];
+    totalDurationMinutes?: number;
     therapistId?: string;
   }>;
   version: number;
@@ -95,6 +98,8 @@ export type PreviewBooking = {
     lineItemId: string;
     participantId: string;
     participantName: string;
+    participantIds?: string[];
+    participantNames?: string[];
     sequence: number;
     source: "ORIGINAL" | "ADMIN_ADD_ON";
     serviceId: string;
@@ -105,6 +110,8 @@ export type PreviewBooking = {
     lineTotalSatang: number;
     therapistId?: string;
     therapistName?: string;
+    therapistIds?: string[];
+    therapistNames?: string[];
     scheduledStartAt?: string;
     scheduledEndAt?: string;
   }>;

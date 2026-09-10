@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from urllib.parse import urlparse
@@ -15,12 +16,23 @@ from app.core.errors import (
     AccountingExportAlreadySynced,
     AccountingExportNotEligible,
     AccountingExportPurposeUnsupported,
+    FinancialConflict,
     IdempotencyConflict,
     NotFoundDomainError,
     PersistenceUnavailable,
     ValidationDomainError,
 )
 from app.core.settings import Settings
+from app.core.types import CashSettlementStatus, PaymentSource
+from app.domains.accounting.factory import build_accounting_export
+from app.infrastructure.firestore_payments import (
+    _export_data,
+    _new_payment,
+    _payment_data,
+    _payment_id,
+    _service_lines,
+    _with_tip,
+)
 
 BANGKOK = ZoneInfo("Asia/Bangkok")
 CLAIMABLE_SYNC_STATES = {"READY", "RETRYABLE"}
@@ -111,6 +123,8 @@ class FirestoreAccountingRepository:
             "bookingDocId": export.get("bookingDocId"),
             "branchId": export.get("branchId"),
             "serviceAt": booking.get("startAt"),
+            "adminEntryMode": booking.get("adminEntryMode"),
+            "historicalFinancialRecord": bool(booking.get("historicalFinancialRecord")),
             "customerName": booking.get("customerName") or "—",
             "customerPhoneMasked": contact.get("phoneMasked") or "—",
             "serviceSummary": ", ".join(names) or "—",
@@ -228,6 +242,11 @@ class FirestoreAccountingRepository:
             "cashGrossSatang": sum(
                 item["grossAmountSatang"] for item in items if item["paymentSource"] == "CASH"
             ),
+            "bankTransferGrossSatang": sum(
+                item["grossAmountSatang"]
+                for item in items
+                if item["paymentSource"] == "BANK_TRANSFER"
+            ),
             "serviceAmountSatang": sum(item["serviceAmountSatang"] for item in items),
             "tipAmountSatang": sum(item["tipAmountSatang"] for item in items),
             "readyCount": sum(item["exportStatus"] == "READY" for item in items),
@@ -235,6 +254,260 @@ class FirestoreAccountingRepository:
             "attentionCount": sum(item["exportStatus"] in ATTENTION_STATES for item in items),
         }
         return {"items": items, "nextPageToken": next_page_token, "summary": summary}
+
+    def list_pending_historical(self, *, branch_id: str, limit: int = 100) -> dict[str, Any]:
+        try:
+            snapshots = list(
+                self._client.collection("bookings")
+                .where(filter=FieldFilter("branchId", "==", branch_id))
+                .stream()
+            )
+        except GoogleAPICallError as error:
+            raise PersistenceUnavailable(
+                "Historical accounting queue is unavailable"
+            ) from error
+        items: list[dict[str, Any]] = []
+        for snapshot in snapshots:
+            booking = snapshot.to_dict() or {}
+            if (
+                booking.get("status") != "RECORDED"
+                or booking.get("adminEntryMode") != "HISTORICAL_RECORD"
+                or booking.get("historicalFinancialRecord") is not True
+                or booking.get("financiallyExcluded") is not False
+                or booking.get("paymentStatus") != "UNAVAILABLE"
+            ):
+                continue
+            contact = booking.get("contact")
+            contact = contact if isinstance(contact, dict) else {}
+            service_names = booking.get("serviceNamesTh")
+            if not isinstance(service_names, list) or not service_names:
+                service_names = [
+                    booking.get("serviceNameTh")
+                    or booking.get("serviceNameEn")
+                    or booking.get("serviceName")
+                    or "—"
+                ]
+            start_at = booking.get("startAt")
+            end_at = booking.get("endAt")
+            items.append(
+                {
+                    "bookingId": booking.get("publicBookingId", snapshot.id),
+                    "serviceAt": start_at,
+                    "suggestedPaidAt": end_at or start_at,
+                    "customerName": booking.get("customerName") or "—",
+                    "customerPhoneMasked": contact.get("phoneMasked") or "—",
+                    "serviceSummary": ", ".join(str(value) for value in service_names),
+                    "pax": int(booking.get("pax", 1)),
+                    "serviceAmountSatang": int(
+                        booking.get("estimatedAmountSatang", 0)
+                    ),
+                    "tipAmountSatang": int(booking.get("tipAmountSatang", 0)),
+                    "grossAmountSatang": int(
+                        booking.get(
+                            "grossAmountSatang",
+                            int(booking.get("estimatedAmountSatang", 0))
+                            + int(booking.get("tipAmountSatang", 0)),
+                        )
+                    ),
+                    "version": int(booking.get("version", 1)),
+                }
+            )
+        items.sort(
+            key=lambda item: (
+                item.get("serviceAt")
+                if isinstance(item.get("serviceAt"), datetime)
+                else datetime.min.replace(tzinfo=UTC),
+                str(item.get("bookingId", "")),
+            ),
+            reverse=True,
+        )
+        return {"items": items[:limit], "total": len(items)}
+
+    def record_historical_payment(
+        self,
+        *,
+        booking_public_id: str,
+        branch_ids: tuple[str, ...],
+        actor_uid: str,
+        payment_source: PaymentSource,
+        paid_at: datetime,
+        expected_version: int,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        if payment_source not in {PaymentSource.CASH, PaymentSource.BANK_TRANSFER}:
+            raise ValidationDomainError("Historical payment source is invalid")
+        if paid_at.tzinfo is None or paid_at.utcoffset() is None:
+            raise ValidationDomainError("Historical paid time must include a timezone offset")
+        now = datetime.now(UTC)
+        if paid_at.astimezone(UTC) > now:
+            raise ValidationDomainError("Historical paid time cannot be in the future")
+
+        matches = list(
+            self._client.collection("bookings")
+            .where(filter=FieldFilter("publicBookingId", "==", booking_public_id))
+            .limit(2)
+            .stream()
+        )
+        if len(matches) != 1:
+            raise NotFoundDomainError("Historical Booking not found")
+        booking_ref = matches[0].reference
+        line_snapshots = list(
+            self._client.collection("booking_line_items")
+            .where(filter=FieldFilter("bookingDocId", "==", booking_ref.id))
+            .stream()
+        )
+        payment_ref = self._client.collection("payments").document(
+            _payment_id(booking_ref.id)
+        )
+        idem_ref = self._client.collection("idempotency_records").document(
+            hashlib.sha256(
+                f"historical-payment:{actor_uid}:{booking_public_id}:{idempotency_key}".encode()
+            ).hexdigest()
+        )
+        request_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "bookingId": booking_public_id,
+                    "paymentSource": payment_source.value,
+                    "paidAt": paid_at.isoformat(),
+                    "expectedVersion": expected_version,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+
+        @firestore.transactional
+        def commit(transaction: firestore.Transaction) -> dict[str, Any]:
+            idem_snapshot = idem_ref.get(transaction=transaction)
+            booking_snapshot = booking_ref.get(transaction=transaction)
+            payment_snapshot = payment_ref.get(transaction=transaction)
+            if idem_snapshot.exists:
+                idem = idem_snapshot.to_dict() or {}
+                if idem.get("requestDigest") != request_digest:
+                    raise IdempotencyConflict(
+                        "Historical payment idempotency key conflicts"
+                    )
+                response = idem.get("response")
+                if not isinstance(response, dict):
+                    raise FinancialConflict("Historical payment replay is invalid")
+                return response
+            if not booking_snapshot.exists:
+                raise NotFoundDomainError("Historical Booking not found")
+            booking = booking_snapshot.to_dict() or {}
+            if str(booking.get("branchId", "")) not in branch_ids:
+                raise NotFoundDomainError("Historical Booking not found")
+            if (
+                booking.get("status") != "RECORDED"
+                or booking.get("adminEntryMode") != "HISTORICAL_RECORD"
+                or booking.get("historicalFinancialRecord") is not True
+                or booking.get("financiallyExcluded") is not False
+                or booking.get("paymentStatus") != "UNAVAILABLE"
+            ):
+                raise FinancialConflict(
+                    "Historical Booking is not awaiting payment classification"
+                )
+            if int(booking.get("version", 1)) != expected_version:
+                raise FinancialConflict("Historical Booking changed; reload and try again")
+            if payment_snapshot.exists:
+                raise FinancialConflict("Historical Booking already has a Payment")
+
+            lines = _service_lines(line_snapshots)
+            payment = _new_payment(booking_ref.id, booking, lines)
+            tip_amount = int(booking.get("tipAmountSatang", 0))
+            payment = _with_tip(payment, tip_amount)
+            expected_gross = booking.get("grossAmountSatang")
+            if expected_gross is not None and int(expected_gross) != (
+                payment.amounts.gross_amount_satang
+            ):
+                raise FinancialConflict("Historical Booking gross amount is inconsistent")
+            payment = payment.mark_paid(
+                source=payment_source,
+                paid_at=paid_at,
+                cash_received_by=(
+                    actor_uid if payment_source is PaymentSource.CASH else None
+                ),
+                manual_received_by=(
+                    actor_uid
+                    if payment_source is PaymentSource.BANK_TRANSFER
+                    else None
+                ),
+            )
+            if payment_source is PaymentSource.CASH:
+                payment = replace(
+                    payment, cash_settlement_status=CashSettlementStatus.REVIEW
+                )
+            export = build_accounting_export(payment)
+            export_ref = self._client.collection("accounting_exports").document(
+                export.export_id
+            )
+            export_snapshot = export_ref.get(transaction=transaction)
+            if export_snapshot.exists:
+                raise FinancialConflict("Historical Booking already has an accounting export")
+
+            next_version = int(booking.get("version", 1)) + 1
+            response = {
+                "bookingId": booking_public_id,
+                "paymentId": payment.payment_id,
+                "exportId": export.export_id,
+                "paymentStatus": "PAID",
+                "paymentSource": payment_source.value,
+                "paidAt": paid_at,
+                "grossAmountSatang": payment.amounts.gross_amount_satang,
+                "version": next_version,
+            }
+            transaction.create(
+                payment_ref, {**_payment_data(payment, now), "createdAt": now}
+            )
+            transaction.create(export_ref, _export_data(export, now))
+            transaction.update(
+                booking_ref,
+                {
+                    "paymentStatus": "PAID",
+                    "paidAmountSatang": payment.amounts.gross_amount_satang,
+                    "amountDueSatang": 0,
+                    "paymentUpdatedAt": paid_at,
+                    "version": next_version,
+                    "updatedAt": now,
+                },
+            )
+            transaction.create(
+                self._client.collection("audit_events").document(),
+                {
+                    "eventType": "HISTORICAL_PAYMENT_CLASSIFIED",
+                    "actorType": "ADMIN_USER",
+                    "actorId": actor_uid,
+                    "branchId": booking.get("branchId"),
+                    "bookingDocId": booking_ref.id,
+                    "publicBookingId": booking_public_id,
+                    "paymentId": payment.payment_id,
+                    "paymentSource": payment_source.value,
+                    "paidAt": paid_at,
+                    "grossAmountSatang": payment.amounts.gross_amount_satang,
+                    "occurredAt": now,
+                    "createdAt": now,
+                },
+            )
+            transaction.create(
+                idem_ref,
+                {
+                    "scope": "HISTORICAL_PAYMENT_CLASSIFICATION",
+                    "actorId": actor_uid,
+                    "requestDigest": request_digest,
+                    "response": response,
+                    "createdAt": now,
+                    "expiresAt": now
+                    + timedelta(hours=self._settings.idempotency_ttl_hours),
+                },
+            )
+            return response
+
+        try:
+            return commit(self._client.transaction())
+        except GoogleAPICallError as error:
+            raise PersistenceUnavailable(
+                "Historical payment store is unavailable"
+            ) from error
 
     def detail(self, payment_id: str, *, branch_ids: tuple[str, ...]) -> dict[str, Any]:
         exports = list(

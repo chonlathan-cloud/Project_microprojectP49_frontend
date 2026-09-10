@@ -4,9 +4,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
 from google.cloud import firestore
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.core.errors import DependencyUnavailable, NotFoundDomainError
+from app.core.errors import DependencyUnavailable, NotFoundDomainError, ValidationDomainError
+from app.core.settings import get_settings
+from app.domains.bookings.plan import build_booking_plan
 from app.domains.bookings.service import _variant
 from app.domains.capacity.availability import (
     availability_response,
@@ -24,9 +26,23 @@ def _to_camel(value: str) -> str:
     return first + "".join(part.title() for part in rest)
 
 
+class ParticipantServiceAvailabilityRequest(BaseModel):
+    model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True)
+    service_variant_id: str = Field(min_length=1, max_length=160)
+
+
 class ParticipantAvailabilityRequest(BaseModel):
     model_config = ConfigDict(alias_generator=_to_camel, populate_by_name=True)
-    service_variant_id: str
+    service_variant_id: str | None = Field(default=None, min_length=1, max_length=160)
+    services: list[ParticipantServiceAvailabilityRequest] = Field(
+        default_factory=list, max_length=3
+    )
+
+    @model_validator(mode="after")
+    def validate_service_contract(self) -> ParticipantAvailabilityRequest:
+        if bool(self.service_variant_id) == bool(self.services):
+            raise ValueError("Provide either serviceVariantId or services")
+        return self
 
 
 class AvailabilityRequest(BaseModel):
@@ -172,22 +188,19 @@ async def search_availability(
     request: AvailabilityRequest,
     client: Annotated[firestore.Client, Depends(get_firestore_client)],
 ) -> dict[str, object]:
-    variants = [
-        _variant(client, participant.service_variant_id)[1] for participant in request.participants
-    ]
-    if any(item.required_pax == 2 for item in variants) and (
-        len(variants) != 2 or len({item.id for item in variants}) != 1
-    ):
-        return availability_response(
-            request.branch_id, [], "INVALID_PARTICIPANT_CONFIGURATION"
+    try:
+        plan = build_booking_plan(
+            [participant.model_dump(by_alias=True) for participant in request.participants],
+            lambda variant_id: _variant(client, variant_id),
+            max_services_per_participant=get_settings().max_services_per_participant,
         )
-    duration = max(item.duration_minutes for item in variants)
+    except ValidationDomainError:
+        return availability_response(request.branch_id, [], "INVALID_PARTICIPANT_CONFIGURATION")
     return search_capacity_slots(
         client,
         branch_id=request.branch_id,
         date_from=request.date_from,
         date_to=request.date_to,
-        duration_minutes=duration,
-        units=len(variants),
+        participant_duration_minutes=list(plan.participant_duration_minutes),
         mode="PUBLIC",
     )

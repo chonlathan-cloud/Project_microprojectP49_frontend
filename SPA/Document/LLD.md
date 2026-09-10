@@ -4,12 +4,12 @@
 | --- | --- |
 | Product | SPA 49 Booking & Operations |
 | Document | Low-Level Design (LLD) |
-| Version | 1.7 |
+| Version | 1.8 |
 | Status | Implementation baseline |
-| Last updated | 2 September 2026 |
-| Business baseline | [Business Logic v2.0](./BusinessLogic.md) |
-| Architecture baseline | [HLD v1.7](./HLD.md) |
-| Technical baseline | [TDD v1.7](./TDD.md) |
+| Last updated | 10 September 2026 |
+| Business baseline | [Business Logic v2.1](./BusinessLogic.md) |
+| Architecture baseline | [HLD v1.8](./HLD.md) |
+| Technical baseline | [TDD v1.8](./TDD.md) |
 
 ## 1. Purpose
 
@@ -249,7 +249,12 @@ Request:
   "dateFrom": "2026-08-15",
   "dateTo": "2026-08-21",
   "participants": [
-    {"serviceVariantId": "aroma-therapy-60"}
+    {
+      "services": [
+        {"serviceVariantId": "aroma-therapy-60"},
+        {"serviceVariantId": "thai-massage-60"}
+      ]
+    }
   ]
 }
 ```
@@ -297,7 +302,10 @@ Request:
   "participants": [
     {
       "nickname": "Som",
-      "serviceVariantId": "aroma-therapy-60",
+      "services": [
+        {"serviceVariantId": "aroma-therapy-60"},
+        {"serviceVariantId": "thai-massage-60"}
+      ],
       "health": {
         "hasInformation": true,
         "details": "High blood pressure"
@@ -324,10 +332,13 @@ Rules:
 - `phone`: valid Thai or E.164 number and normalized to E.164
 - `health.hasInformation`: required boolean
 - `health.details`: required when true; prohibited when false; maximum 1,000 characters
-- One variant per participant; one/two participants; shared start
+- One to three ordered variants per participant; one/two participants; shared Booking start
+- Services are sequential within each participant and participant timelines run in parallel
+- Legacy `serviceVariantId` remains accepted as a one-item timeline during contract migration; requests must not mix it with `services`
 - `bookingPrivacyAcknowledgement.accepted` and every participant `healthConsent.accepted` must be true with recognized versions
 - `secondParticipantAuthorization.accepted` is required when the submitting contact supplies participant 2 data
-- The Couple Package variant requires exactly two participants. Both participants reference one price-bearing line item and the total includes 119,000 satang once.
+- The Couple Package variant requires exactly two participants, must be the first item in both timelines, and uses the same variant for both. Both participants reference one shared price-bearing line item and the total includes 119,000 satang once; later `PER_PARTICIPANT` items are charged separately.
+- Availability and creation derive per-bucket demand from the same participant timeline durations. The branch buffer is applied once after each participant's final service. `capacityReservation.bucketUnits` stores the exact units reserved per bucket for symmetric release.
 - Guest requires CAPTCHA; verified LINE submission may still be risk/rate limited but does not require Guest CAPTCHA by default
 - `Idempotency-Key` required
 
@@ -1223,7 +1234,7 @@ function createBooking(command, context):
 
 ### 11.1 Admin Staff-assisted and Historical Variants
 
-`POST /api/v1/admin/bookings` accepts `bookingMode=STAFF_ASSISTED|HISTORICAL_RECORD` plus the legacy-compatible `WALK_IN`, branch/date/time, an optional phone, one or two participants, `bookingPrivacyAcknowledged=true`, `consentCaptureMethod=VERBAL|PAPER`, optional `discountAmountSatang` (default `0`), optional `discountReason`, and optional `tipAmountSatang` (default `0`). The authenticated Firebase actor is authoritative; the client cannot supply creator identity, role, or source.
+`POST /api/v1/admin/bookings` accepts `bookingMode=STAFF_ASSISTED|HISTORICAL_RECORD` plus the legacy-compatible `WALK_IN`, branch/date/time, an optional phone, one or two participants, `bookingPrivacyAcknowledged=true`, `consentCaptureMethod=VERBAL|PAPER`, optional `discountAmountSatang` (default `0`), optional `discountReason`, and optional `tipAmountSatang` (default `0`). `HISTORICAL_RECORD` additionally requires `historicalPaymentSource=CASH|BANK_TRANSFER` and timezone-aware `historicalPaidAt`. The authenticated Firebase actor is authoritative; the client cannot supply creator identity, role, or source.
 
 The shared creation transaction applies these differences:
 
@@ -1231,11 +1242,12 @@ The shared creation transaction applies these differences:
 2. Active modes reuse service, operating-hours, closure, duration, duplicate, and capacity validation. Historical mode snapshots the selected service but does not read or write Capacity buckets and does not apply current closure/operating-hours configuration retroactively.
 3. Skip public CAPTCHA, IP/phone abuse counters, active-`PENDING` phone guards, LINE linking, and Guest status-token creation.
 4. When phone is absent, write `contact={"mode":"NONE"}` without `phoneE164`, `phoneMasked`, or a fabricated value.
-5. Active mode commits `status=CONFIRMED`, `confirmedAt`, and `confirmedBy`. Historical mode commits `status=RECORDED`, `recordedAt`, `recordedBy`, `financiallyExcluded=false`, `historicalFinancialRecord=true`, the immutable service subtotal, optional Admin discount, net-service `estimatedAmountSatang`, separate optional whole-THB `tipAmountSatang`, `grossAmountSatang = estimatedAmountSatang + tipAmountSatang`, `paymentStatus=UNAVAILABLE`, and no capacity reservation. Positive tip input is rejected unless mode is `HISTORICAL_RECORD`. Its only subsequent command is reason-required `CANCEL` for correcting an erroneous record.
-6. Both modes append privacy/health consent receipts with the capture method and staff actor. Active mode emits `BOOKING_CREATED` audit/outbox events; historical mode emits only a safe `BOOKING_HISTORY_RECORDED` audit containing subtotal, discount, net service, tip, and gross snapshots, with no notification outbox event.
+5. Active mode commits `status=CONFIRMED`, `confirmedAt`, and `confirmedBy`. ADMIN historical mode commits `status=RECORDED`, `recordedAt`, `recordedBy`, `financiallyExcluded=false`, `historicalFinancialRecord=true`, the immutable service subtotal, optional Admin discount, net-service `estimatedAmountSatang`, separate optional whole-THB `tipAmountSatang`, `grossAmountSatang = estimatedAmountSatang + tipAmountSatang`, `paymentStatus=PAID`, paid/due projections, and no capacity reservation. In the same transaction it creates deterministic Payment and Accounting Export documents; replay cannot duplicate either. Positive tip input is rejected unless mode is `HISTORICAL_RECORD`. Ordinary cancellation is rejected after payment capture.
+6. Both modes append privacy/health consent receipts with the capture method and staff actor. Active mode emits `BOOKING_CREATED` audit/outbox events; historical mode emits `BOOKING_HISTORY_RECORDED` plus `HISTORICAL_PAYMENT_RECORDED` audit evidence containing source/paidAt/amount metadata, with no notification outbox event.
 7. Scope idempotency by the authenticated actor and endpoint so another staff member cannot replay the key.
 8. A non-zero discount is accepted for active or historical modes only from authenticated Role `ADMIN`, must be whole THB, must be less than the service subtotal, and requires a trimmed reason. Store `subtotalAmountSatang`, `discountAmountSatang`, `discountType=ADMIN_FIXED`, reason, actor, time, and final `estimatedAmountSatang` atomically; append `BOOKING_DISCOUNT_APPLIED` without changing service line snapshots.
 9. Coupon code validation/redeem remains under `/api/v1/admin/coupons`; a Booking discount reason may reference a Coupon but does not transition Coupon state.
+10. `GET /api/v1/admin/historical-accounting-candidates` returns active legacy `RECORDED` financial records whose payment projection remains `UNAVAILABLE`. `POST /api/v1/admin/historical-accounting-candidates/{bookingId}:record` requires ADMIN, expected Booking version, idempotency key, explicit confirmation, `CASH|BANK_TRANSFER`, and timezone-aware non-future `paidAt`; it rejects any existing Payment/export and atomically creates both projections. Existing Payment/export records are never backfilled again.
 
 `POST /api/v1/admin/availability/search` is authenticated and returns capacity-safe slots for one Admin-selected date. It bypasses the public Min/Max Advance Booking window, removes only buckets earlier than the current branch-local bucket, and remains advisory until the create transaction commits.
 
@@ -1431,6 +1443,8 @@ transactionally claim event if state is dispatchable or lease expired
 if event already SENT or FAILED: return 204
 
 load customer-safe Booking projection and target configuration
+if the current Booking status makes this lifecycle event stale:
+    mark SENT with delivery.system=SKIPPED_STALE_STATUS and return 2xx
 render versioned template
 send through correct LINE channel with X-Line-Retry-Key=event.providerRetryKey
 
@@ -1520,7 +1534,7 @@ type BookingDraft = {
   branchId: string;
   participants: Array<{
     nickname: string;
-    serviceVariantId: string;
+    services: Array<{ serviceVariantId: string }>;
     health: { hasInformation: boolean; details?: string };
     healthConsent: { accepted: boolean; version: string };
   }>;
@@ -1530,6 +1544,8 @@ type BookingDraft = {
   secondParticipantAuthorization?: { accepted: boolean; version: string };
 };
 ```
+
+Customer UX keeps the five-step journey. Service cards add items to the draft; the participant step groups an ordered, removable/reorderable service list per person; the date/time step shows each participant end time and the overall Booking end; review and confirmation show participant timelines plus one Booking total. The sticky mobile summary shows selected line count, longest timeline duration, and total price. Customer therapist selection remains unavailable.
 
 The result page replaces browser history so accidental Back/Resubmit does not create a second Booking. A UUID idempotency key is generated when entering Review and remains stable for retries of the same draft.
 
@@ -1796,6 +1812,7 @@ The last-capacity test launches at least 20 concurrent create attempts against o
 | Requirement | Minimum automated evidence |
 | --- | --- |
 | `BL-BKG-001`–`003` | Customer E2E and payload validation tests |
+| `BL-BKG-009`–`010` | Ordered multi-service planner, shared Package charge-once line, exact per-participant capacity demand, Admin walk-in, and notification projection tests |
 | `BL-BKG-004`–`005` | Create transaction, guard persistence, no-expiry tests |
 | `BL-BKG-006`–`008` | Guest minimum fields, status token, CAPTCHA/rate/duplicate tests |
 | `BL-CAP-001`–`003` | Bucket/allocation unit and concurrent transaction tests |

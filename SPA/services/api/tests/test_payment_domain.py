@@ -368,7 +368,20 @@ def test_cash_receipt_is_paid_but_remains_unsettled() -> None:
         )
     )
     assert result.payment.cash_settlement_status is CashSettlementStatus.UNSETTLED
-    assert result.accounting_export.payment_strategy == "CASH"
+
+
+def test_bank_transfer_is_paid_without_cash_settlement() -> None:
+    paid = payment().mark_paid(
+        source=PaymentSource.BANK_TRANSFER,
+        paid_at=datetime(2026, 8, 31, 14, 10, tzinfo=UTC),
+        manual_received_by="admin-001",
+    )
+    accounting_export = build_accounting_export(paid)
+
+    assert paid.status is PaymentStatus.PAID
+    assert paid.cash_settlement_status is CashSettlementStatus.NOT_APPLICABLE
+    assert accounting_export.payment_source is PaymentSource.BANK_TRANSFER
+    assert accounting_export.payment_strategy == "BANK_TRANSFER"
 
 
 def test_paid_payment_rejects_different_authoritative_evidence() -> None:

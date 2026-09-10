@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 
 from google.cloud import firestore
 
+from app.domains.bookings.plan import capacity_bucket_demands
 from app.domains.bookings.service import _bucket_id
-from app.domains.capacity.buckets import required_bucket_starts
 
 TZ = ZoneInfo("Asia/Bangkok")
 
@@ -17,8 +17,9 @@ def search_capacity_slots(
     branch_id: str,
     date_from: str,
     date_to: str,
-    duration_minutes: int,
-    units: int,
+    duration_minutes: int | None = None,
+    units: int | None = None,
+    participant_duration_minutes: list[int] | None = None,
     mode: str,
 ) -> dict[str, object]:
     branch_snapshot = client.collection("branches").document(branch_id).get()
@@ -36,6 +37,14 @@ def search_capacity_slots(
         return availability_response(branch_id, [], "INVALID_DATE_RANGE")
     if mode not in {"PUBLIC", "ADMIN"}:
         return availability_response(branch_id, [], "INVALID_AVAILABILITY_MODE")
+    durations = participant_duration_minutes or (
+        [duration_minutes] * units
+        if duration_minutes is not None and units is not None and units > 0
+        else []
+    )
+    if not durations or any(item <= 0 for item in durations):
+        return availability_response(branch_id, [], "INVALID_PARTICIPANT_CONFIGURATION")
+    booking_duration = max(durations)
 
     now = datetime.now(TZ)
     current_bucket = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
@@ -58,31 +67,43 @@ def search_capacity_slots(
             close_time = time.fromisoformat(str(hours.get("close", "22:00")))
             cursor = datetime.combine(day, open_time, TZ)
             closing = datetime.combine(day, close_time, TZ)
-            while cursor + timedelta(minutes=duration_minutes) <= closing:
+            while cursor + timedelta(minutes=booking_duration) <= closing:
                 if mode == "PUBLIC" and cursor <= now + timedelta(days=min_days):
                     cursor += timedelta(minutes=15)
                     continue
                 if mode == "ADMIN" and cursor < current_bucket:
                     cursor += timedelta(minutes=15)
                     continue
-                bucket_starts = required_bucket_starts(
+                demands = capacity_bucket_demands(
                     cursor,
-                    duration_minutes,
+                    durations,
                     int(branch.get("bufferMinutes", 0)),
                 )
-                bucket_snapshots = [
-                    client.collection("capacity_buckets")
-                    .document(_bucket_id(branch_id, item))
+                bucket_snapshots = {
+                    bucket_start: client.collection("capacity_buckets")
+                    .document(_bucket_id(branch_id, bucket_start))
                     .get()
-                    for item in bucket_starts
-                ]
+                    for bucket_start in demands
+                }
                 available = min(
-                    capacity - int((snapshot.to_dict() or {}).get("usedUnits", 0))
-                    if snapshot.exists
-                    else capacity
-                    for snapshot in bucket_snapshots
+                    capacity
+                    - (
+                        int((snapshot.to_dict() or {}).get("usedUnits", 0))
+                        if snapshot.exists
+                        else 0
+                    )
+                    for snapshot in bucket_snapshots.values()
                 )
-                if available >= units:
+                if all(
+                    capacity
+                    - (
+                        int((bucket_snapshots[bucket_start].to_dict() or {}).get("usedUnits", 0))
+                        if bucket_snapshots[bucket_start].exists
+                        else 0
+                    )
+                    >= demand
+                    for bucket_start, demand in demands.items()
+                ):
                     slots.append(
                         {
                             "localDate": day.isoformat(),
@@ -92,9 +113,7 @@ def search_capacity_slots(
                     )
                 cursor += timedelta(minutes=15)
         day += timedelta(days=1)
-    return availability_response(
-        branch_id, slots, "READY" if slots else "CAPACITY_UNAVAILABLE"
-    )
+    return availability_response(branch_id, slots, "READY" if slots else "CAPACITY_UNAVAILABLE")
 
 
 def availability_response(

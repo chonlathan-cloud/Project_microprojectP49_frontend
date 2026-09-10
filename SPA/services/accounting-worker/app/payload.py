@@ -56,13 +56,23 @@ def build_cash_invoice_payload(
             }
         )
 
+    payment_method = {
+        PaymentSource.BEAM: 13,
+        PaymentSource.CASH: 1,
+        PaymentSource.BANK_TRANSFER: 5,
+    }[export.payment_source]
     payment: dict[str, Any] = {
-        "paymentMethod": 13 if export.payment_source is PaymentSource.BEAM else 1,
+        "paymentMethod": payment_method,
         "paymentDate": export.accounting_date.isoformat(),
         "collected": satang_to_baht(export.gross_amount_satang),
     }
     if export.payment_source is PaymentSource.BEAM:
         payment["otherChannelId"] = int(settings.other_channel_id or "0")
+    elif export.payment_source is PaymentSource.BANK_TRANSFER:
+        if not settings.bank_account_id or not settings.transfer_bank_id:
+            raise ValueError("FlowAccount bank-transfer account is not configured")
+        payment["bankAccountId"] = int(settings.bank_account_id or "0")
+        payment["transferBankAccountId"] = int(settings.transfer_bank_id or "0")
 
     payload: dict[str, Any] = {
         "publishedOn": export.accounting_date.isoformat(),
@@ -76,11 +86,11 @@ def build_cash_invoice_payload(
         "contactName": settings.contact_name,
         "contactGroup": 1,
         "projectName": settings.project_name,
-        "documentPaymentStructureType": (
-            "SimpleDocumentWithPaymentReceivingOtherChannel"
-            if export.payment_source is PaymentSource.BEAM
-            else "SimpleDocumentWithPaymentReceivingCash"
-        ),
+        "documentPaymentStructureType": {
+            PaymentSource.BEAM: "SimpleDocumentWithPaymentReceivingOtherChannel",
+            PaymentSource.CASH: "SimpleDocumentWithPaymentReceivingCash",
+            PaymentSource.BANK_TRANSFER: "SimpleDocumentWithPaymentReceivingTransfer",
+        }[export.payment_source],
         "isVat": True,
         "isVatInclusive": True,
         "isManualVat": False,

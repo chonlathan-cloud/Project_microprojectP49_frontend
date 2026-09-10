@@ -7,6 +7,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 class PaymentSource(StrEnum):
     BEAM = "BEAM"
     CASH = "CASH"
+    BANK_TRANSFER = "BANK_TRANSFER"
 
 
 class ServiceLineSnapshot(BaseModel):

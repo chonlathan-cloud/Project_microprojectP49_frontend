@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.core.auth import require_admin_user
 from app.core.errors import DependencyUnavailable, PermissionDenied, ValidationDomainError
 from app.core.settings import get_settings
+from app.core.types import PaymentSource
 from app.infrastructure.accounting_tasks import (
     AccountingTaskEnqueuer,
     AccountingTaskUnavailable,
@@ -29,7 +30,7 @@ ExportStatusFilter = Literal[
     "REVIEW_REQUIRED",
     "SYNCED",
 ]
-PaymentSourceFilter = Literal["BEAM", "CASH"]
+PaymentSourceFilter = Literal["BEAM", "CASH", "BANK_TRANSFER"]
 CashSettlementFilter = Literal[
     "NOT_APPLICABLE", "UNSETTLED", "DEPOSIT_PENDING", "SETTLED", "REVIEW"
 ]
@@ -60,6 +61,19 @@ class CreateAccountingRunRequest(ApiModel):
     def exactly_one_scope(self) -> "CreateAccountingRunRequest":
         if (self.export_ids is None) == (self.filter is None):
             raise ValueError("Provide exportIds or filter, but not both")
+        return self
+
+
+class RecordHistoricalPaymentRequest(ApiModel):
+    payment_source: Literal["CASH", "BANK_TRANSFER"]
+    paid_at: datetime
+    expected_version: int = Field(ge=1)
+    confirmed: bool
+
+    @model_validator(mode="after")
+    def validate_paid_at(self) -> "RecordHistoricalPaymentRequest":
+        if self.paid_at.tzinfo is None or self.paid_at.utcoffset() is None:
+            raise ValueError("Historical paid time must include a timezone offset")
         return self
 
 
@@ -172,6 +186,49 @@ def accounting_payment_detail(
 ) -> dict[str, object]:
     response.headers["Cache-Control"] = "no-store, private"
     return repository.detail(payment_id, branch_ids=_branch_ids(actor))
+
+
+@router.get("/historical-accounting-candidates")
+def list_historical_accounting_candidates(
+    response: Response,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    repository: Annotated[
+        FirestoreAccountingRepository, Depends(get_accounting_repository)
+    ],
+    branch_id: Annotated[str, Query(alias="branchId")] = "branch_001",
+) -> dict[str, object]:
+    _require_sync_permission(actor)
+    if branch_id not in _branch_ids(actor):
+        raise ValidationDomainError("Branch is outside the Admin scope")
+    response.headers["Cache-Control"] = "no-store, private"
+    return repository.list_pending_historical(branch_id=branch_id)
+
+
+@router.post("/historical-accounting-candidates/{booking_id}:record")
+def record_historical_accounting_payment(
+    booking_id: str,
+    request: RecordHistoricalPaymentRequest,
+    response: Response,
+    idempotency_key: Annotated[str, Depends(_idempotency_key)],
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    repository: Annotated[
+        FirestoreAccountingRepository, Depends(get_accounting_repository)
+    ],
+) -> dict[str, object]:
+    _require_sync_permission(actor)
+    if not request.confirmed:
+        raise ValidationDomainError("Historical payment confirmation is required")
+    result = repository.record_historical_payment(
+        booking_public_id=booking_id,
+        branch_ids=_branch_ids(actor),
+        actor_uid=str(actor["uid"]),
+        payment_source=PaymentSource(request.payment_source),
+        paid_at=request.paid_at,
+        expected_version=request.expected_version,
+        idempotency_key=idempotency_key,
+    )
+    response.headers["Cache-Control"] = "no-store, private"
+    return result
 
 
 @router.post(

@@ -368,6 +368,52 @@ test("booking flow can reach live availability without creating a booking", asyn
   await expect(schedule.getByRole("status")).toContainText(/พบ \d+ ช่วงเวลา|วันนี้ไม่มีเวลาว่าง|ตรวจสอบเวลาว่างไม่สำเร็จ/);
 });
 
+test("customer can arrange a multi-service timeline on supported mobile widths", async ({ page }) => {
+  let availabilityPayload: {
+    participants?: Array<{ services?: Array<{ serviceVariantId: string }> }>;
+  } | null = null;
+  await page.route("**/api/spa/api/v1/public/availability/search", async (route) => {
+    availabilityPayload = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        slots: [{ localDate: "2026-09-12", localStartTime: "10:00", availableUnits: 1 }]
+      }
+    });
+  });
+
+  await page.goto(customerUrl, { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: /105 (min|นาที)/ }).click();
+  await page.getByRole("tab", { name: "นวดและสปา" }).click();
+  await page.getByRole("button", { name: /60 นาที ฿300/ }).first().click();
+  await expect(page.getByText(/2 บริการ · 1 ท่าน · 165 นาที/)).toBeVisible();
+
+  await page.getByRole("button", { name: "ดำเนินการต่อ" }).click();
+  const treatmentRows = page.locator(".participant-plan .service-sequence > li");
+  await expect(treatmentRows).toHaveCount(2);
+  await expect(treatmentRows.nth(0)).toContainText("แพ็กเกจผ่อนคลายครบสูตร");
+  await page.getByRole("button", { name: "เลื่อน แพ็กเกจผ่อนคลายครบสูตร ลง" }).click();
+  await expect(treatmentRows.nth(0)).toContainText("นวดแผนไทย");
+
+  for (const viewport of [
+    { width: 360, height: 800 },
+    { width: 390, height: 844 },
+    { width: 430, height: 932 }
+  ]) {
+    await page.setViewportSize(viewport);
+    expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
+    await expect(page.locator(".participant-plan")).toBeVisible();
+  }
+
+  await page.getByRole("button", { name: "ดำเนินการต่อ" }).click();
+  await chooseFirstBookableDate(page);
+  await expect.poll(() => availabilityPayload).not.toBeNull();
+  expect(availabilityPayload?.participants?.[0]?.services).toHaveLength(2);
+  expect(availabilityPayload?.participants?.[0]?.services?.map((item) => item.serviceVariantId)).toEqual([
+    "traditional-thai-60",
+    "complete-relaxation-105"
+  ]);
+});
+
 test("a booking conflict returns the guest to refreshed time selection", async ({ page }) => {
   await page.route("**/api/spa/api/v1/public/availability/search", async (route) => {
     await route.fulfill({ json: { slots: [{ localDate: "2026-08-18", localStartTime: "10:00", availableUnits: 1 }, { localDate: "2026-08-18", localStartTime: "10:15", availableUnits: 1 }] } });

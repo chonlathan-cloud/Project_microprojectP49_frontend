@@ -238,6 +238,20 @@ class FlowAccountClient:
         if len(matches) != 1:
             raise FlowAccountConfigurationError("FlowAccount Other Channel does not match")
 
+        if self._settings.bank_account_id and self._settings.transfer_bank_id:
+            bank_accounts = await self._authorized_get(self._settings.bank_accounts_path)
+            if not isinstance(bank_accounts, list):
+                raise FlowAccountConfigurationError("FlowAccount bank-account response is invalid")
+            bank_matches = [
+                account
+                for account in bank_accounts
+                if isinstance(account, dict)
+                and str(account.get("bankAccountId", "")) == self._settings.bank_account_id
+                and str(account.get("bankId", "")) == self._settings.transfer_bank_id
+            ]
+            if len(bank_matches) != 1:
+                raise FlowAccountConfigurationError("FlowAccount bank account does not match")
+
     async def find_cash_invoices(
         self, *, external_document_id: str, accounting_date: str
     ) -> tuple[dict[str, Any], ...]:

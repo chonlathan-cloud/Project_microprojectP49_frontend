@@ -9,6 +9,7 @@ import { adminApi } from "@/lib/admin-api";
 import type { Locale } from "@spa/shared-types";
 
 type ExportStatus = "READY" | "ENQUEUE_PENDING" | "ENQUEUED" | "PROCESSING" | "RETRYABLE" | "RECONCILE_REQUIRED" | "REVIEW_REQUIRED" | "SYNCED";
+type PaymentSource = "BEAM" | "CASH" | "BANK_TRANSFER";
 type PaymentRow = {
   exportId: string;
   paymentId: string;
@@ -18,7 +19,7 @@ type PaymentRow = {
   customerPhoneMasked: string;
   serviceSummary: string;
   pax: number;
-  paymentSource: "BEAM" | "CASH";
+  paymentSource: PaymentSource;
   paidAt: string;
   providerReferenceId?: string | null;
   serviceAmountSatang: number;
@@ -35,7 +36,23 @@ type PaymentRow = {
   lastErrorCode?: string | null;
   accountingDate: string;
   syncedAt?: string | null;
+  adminEntryMode?: string | null;
+  historicalFinancialRecord?: boolean;
 };
+type HistoricalCandidate = {
+  bookingId: string;
+  serviceAt?: string | null;
+  suggestedPaidAt?: string | null;
+  customerName: string;
+  customerPhoneMasked: string;
+  serviceSummary: string;
+  pax: number;
+  serviceAmountSatang: number;
+  tipAmountSatang: number;
+  grossAmountSatang: number;
+  version: number;
+};
+type HistoricalCandidateResponse = { items: HistoricalCandidate[]; total: number };
 type ListResponse = {
   items: PaymentRow[];
   nextPageToken?: string | null;
@@ -43,6 +60,7 @@ type ListResponse = {
     paidGrossSatang: number;
     beamGrossSatang: number;
     cashGrossSatang: number;
+    bankTransferGrossSatang: number;
     syncedCount: number;
     attentionCount: number;
   };
@@ -94,11 +112,37 @@ function dateTime(value: string | null | undefined, locale: Locale): string {
   }).format(new Date(value));
 }
 
+function bangkokDateTimeLocal(value: string | null | undefined): string {
+  if (!value) return "";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok"
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
+}
+
+function currentBangkokDateTimeLocal(): string {
+  return bangkokDateTimeLocal(new Date().toISOString());
+}
+
+function paymentSourceText(source: PaymentSource, locale: Locale): string {
+  if (source === "CASH") return locale === "th" ? "เงินสด" : "Cash";
+  if (source === "BANK_TRANSFER") return locale === "th" ? "โอนธนาคาร" : "Bank transfer";
+  return "Beam";
+}
+
 export function AccountingOperations({ locale, user }: { locale: Locale; user: User }) {
   const { notify, requestConfirmation } = useAdminFeedback();
   const [items, setItems] = useState<PaymentRow[]>([]);
   const [permissions, setPermissions] = useState({ read: true, sync: false, cashDeposit: false });
-  const [summary, setSummary] = useState<ListResponse["summary"]>({ paidGrossSatang: 0, beamGrossSatang: 0, cashGrossSatang: 0, syncedCount: 0, attentionCount: 0 });
+  const [summary, setSummary] = useState<ListResponse["summary"]>({ paidGrossSatang: 0, beamGrossSatang: 0, cashGrossSatang: 0, bankTransferGrossSatang: 0, syncedCount: 0, attentionCount: 0 });
+  const [historicalCandidates, setHistoricalCandidates] = useState<HistoricalCandidate[]>([]);
+  const [historicalTotal, setHistoricalTotal] = useState(0);
+  const [historicalError, setHistoricalError] = useState("");
+  const [activeHistorical, setActiveHistorical] = useState<HistoricalCandidate | null>(null);
+  const [historicalSource, setHistoricalSource] = useState<"CASH" | "BANK_TRANSFER" | "">("");
+  const [historicalPaidAt, setHistoricalPaidAt] = useState("");
+  const [historicalSubmitting, setHistoricalSubmitting] = useState(false);
   const [dateFrom, setDateFrom] = useState(todayBangkok);
   const [dateTo, setDateTo] = useState(todayBangkok);
   const [source, setSource] = useState("ALL");
@@ -138,6 +182,19 @@ export function AccountingOperations({ locale, user }: { locale: Locale; user: U
       setPermissions(result.permissions);
       setNextToken(result.nextPageToken ?? null);
       setSelected(new Set());
+      if (result.permissions.sync) {
+        try {
+          const candidates = await adminApi<HistoricalCandidateResponse>(user, "/historical-accounting-candidates?branchId=branch_001");
+          setHistoricalCandidates(candidates.items);
+          setHistoricalTotal(candidates.total);
+          setHistoricalError("");
+        } catch (candidateError) {
+          setHistoricalError(candidateError instanceof Error ? candidateError.message : "Historical accounting queue is unavailable");
+        }
+      } else {
+        setHistoricalCandidates([]);
+        setHistoricalTotal(0);
+      }
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : "";
       setError(locale === "th" ? `โหลดข้อมูลบัญชีไม่สำเร็จ${detail ? `: ${detail}` : ""}` : `Accounting data is unavailable${detail ? `: ${detail}` : ""}`);
@@ -256,6 +313,47 @@ export function AccountingOperations({ locale, user }: { locale: Locale; user: U
     setCashPaymentId(options.paymentId ?? null);
     setCashDepositOpen(true);
   };
+  const openHistoricalClassification = (candidate: HistoricalCandidate) => {
+    setActiveHistorical(candidate);
+    setHistoricalSource("");
+    setHistoricalPaidAt(bangkokDateTimeLocal(candidate.suggestedPaidAt || candidate.serviceAt));
+  };
+  const classifyHistorical = async () => {
+    if (!activeHistorical || !historicalSource || !historicalPaidAt) return;
+    if (historicalPaidAt > currentBangkokDateTimeLocal()) {
+      notify({ tone: "error", title: locale === "th" ? "วันเวลารับเงินไม่ถูกต้อง" : "Invalid payment time", message: locale === "th" ? "วันและเวลาที่ได้รับเงินต้องไม่เป็นอนาคต" : "Payment received time cannot be in the future." });
+      return;
+    }
+    const confirmed = await requestConfirmation({
+      title: locale === "th" ? "ยืนยันการรับเงินย้อนหลัง?" : "Confirm historical payment?",
+      message: locale === "th"
+        ? `${activeHistorical.bookingId} • ${paymentSourceText(historicalSource, locale)} • ${baht(activeHistorical.grossAmountSatang, locale)} ระบบจะสร้างรายการชำระและคิวส่ง FlowAccount โดยไม่สร้างรายการซ้ำ`
+        : `${activeHistorical.bookingId} • ${paymentSourceText(historicalSource, locale)} • ${baht(activeHistorical.grossAmountSatang, locale)}. A payment and FlowAccount export queue will be created without duplicating existing records.`,
+      confirmLabel: locale === "th" ? "ยืนยันและลงบัญชี" : "Confirm and account",
+      cancelLabel: locale === "th" ? "กลับไปตรวจสอบ" : "Review again",
+    });
+    if (!confirmed.confirmed) return;
+    setHistoricalSubmitting(true);
+    try {
+      await adminApi(user, `/historical-accounting-candidates/${encodeURIComponent(activeHistorical.bookingId)}:record`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({
+          paymentSource: historicalSource,
+          paidAt: `${historicalPaidAt}:00+07:00`,
+          expectedVersion: activeHistorical.version,
+          confirmed: true,
+        }),
+      });
+      notify({ tone: "success", title: locale === "th" ? "ลงบัญชีรายการย้อนหลังแล้ว" : "Historical payment recorded", message: activeHistorical.bookingId });
+      setActiveHistorical(null);
+      await load();
+    } catch (caught) {
+      notify({ tone: "error", title: locale === "th" ? "ลงบัญชีไม่สำเร็จ" : "Could not record payment", message: caught instanceof Error ? caught.message : undefined });
+    } finally {
+      setHistoricalSubmitting(false);
+    }
+  };
 
   return <main className="dashboard-content accounting-page">
     <div className="module-heading-action">
@@ -268,10 +366,20 @@ export function AccountingOperations({ locale, user }: { locale: Locale; user: U
 
     {run && <section className={`accounting-run ${run.status === "PARTIAL_FAILURE" ? "warning" : ""}`} aria-live="polite"><div><strong>{locale === "th" ? "รอบส่งบัญชี" : "Accounting run"}</strong></div><div><span>{run.status}</span><strong>{run.processedCount ?? 0}/{run.enqueuedCount ?? run.selectedCount ?? 0}</strong></div></section>}
 
+    {permissions.sync && (historicalCandidates.length > 0 || historicalError) && <section className="module-panel historical-accounting-queue" aria-labelledby="historical-accounting-title">
+      <div className="historical-accounting-heading"><div><p className="eyebrow">HISTORICAL • PAYMENT CLASSIFICATION</p><h2 id="historical-accounting-title">{locale === "th" ? "รายการย้อนหลังที่รอลงบัญชี" : "Historical records awaiting accounting"}</h2><p>{locale === "th" ? "รายการเหล่านี้ยังไม่มี Payment และไม่เคยสร้าง FlowAccount จากระบบ กรุณาตรวจหลักฐานแล้วเลือกช่องทางรับเงินจริง" : "These records have no Payment and were never exported by this system. Verify the evidence, then choose the actual payment source."}</p></div><strong>{historicalTotal}</strong></div>
+      {historicalError && <div className="module-state error" role="alert">{historicalError}</div>}
+      <div className="historical-accounting-list">{historicalCandidates.map((candidate) => <article key={candidate.bookingId} className={activeHistorical?.bookingId === candidate.bookingId ? "active" : undefined}>
+        <div className="historical-accounting-record"><div><strong>{dateTime(candidate.serviceAt, locale)}</strong><small>{candidate.bookingId}</small></div><div><strong>{candidate.customerName}</strong><small>{candidate.serviceSummary} · {candidate.pax} pax</small></div><div><strong>{baht(candidate.grossAmountSatang, locale)}</strong><small>{locale === "th" ? "บริการ" : "Service"} {baht(candidate.serviceAmountSatang, locale)} · {locale === "th" ? "ทิป" : "Tip"} {baht(candidate.tipAmountSatang, locale)}</small></div><button type="button" onClick={() => openHistoricalClassification(candidate)}>{locale === "th" ? "ตรวจและลงบัญชี" : "Review & account"}</button></div>
+        {activeHistorical?.bookingId === candidate.bookingId && <div className="historical-accounting-form"><fieldset><legend>{locale === "th" ? "ช่องทางที่ได้รับเงินจริง" : "Payment received via"}</legend><label><input type="radio" name={`source-${candidate.bookingId}`} checked={historicalSource === "CASH"} onChange={() => setHistoricalSource("CASH")} /> {locale === "th" ? "เงินสด" : "Cash"}</label><label><input type="radio" name={`source-${candidate.bookingId}`} checked={historicalSource === "BANK_TRANSFER"} onChange={() => setHistoricalSource("BANK_TRANSFER")} /> {locale === "th" ? "โอนธนาคาร" : "Bank transfer"}</label></fieldset><label><span>{locale === "th" ? "วันที่และเวลาที่ได้รับเงิน" : "Payment received at"}</span><input type="datetime-local" max={currentBangkokDateTimeLocal()} value={historicalPaidAt} onChange={(event) => setHistoricalPaidAt(event.target.value)} /></label><div><button type="button" onClick={() => setActiveHistorical(null)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button className="primary-compact-button" type="button" disabled={!historicalSource || !historicalPaidAt || historicalSubmitting} onClick={() => { void classifyHistorical(); }}>{historicalSubmitting ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "ยืนยันและลงบัญชี" : "Confirm and account")}</button></div></div>}
+      </article>)}</div>
+    </section>}
+
     <section className="accounting-summary" aria-label={locale === "th" ? "สรุปยอดในหน้าปัจจุบัน" : "Current page summary"}>
       <div><span>{locale === "th" ? "ยอดรับรวมในหน้านี้" : "Page gross"}</span><strong>{baht(summary.paidGrossSatang, locale)}</strong></div>
       <div><span>Beam</span><strong>{baht(summary.beamGrossSatang, locale)}</strong></div>
       <div><span>{locale === "th" ? "เงินสด" : "Cash"}</span><strong>{baht(summary.cashGrossSatang, locale)}</strong></div>
+      <div><span>{locale === "th" ? "โอนธนาคาร" : "Bank transfer"}</span><strong>{baht(summary.bankTransferGrossSatang, locale)}</strong></div>
       <div><span>{locale === "th" ? "ส่งสำเร็จ / ต้องตรวจ" : "Synced / Attention"}</span><strong>{summary.syncedCount} / {summary.attentionCount}</strong></div>
     </section>
 
@@ -279,7 +387,7 @@ export function AccountingOperations({ locale, user }: { locale: Locale; user: U
       <div className="accounting-filter-grid">
         <label>{locale === "th" ? "จากวันที่" : "From"}<input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); resetPage(); }} /></label>
         <label>{locale === "th" ? "ถึงวันที่" : "To"}<input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); resetPage(); }} /></label>
-        <label>{locale === "th" ? "ช่องทาง" : "Source"}<select value={source} onChange={(event) => { setSource(event.target.value); resetPage(); }}><option value="ALL">{locale === "th" ? "ทั้งหมด" : "All"}</option><option value="BEAM">Beam</option><option value="CASH">{locale === "th" ? "เงินสด" : "Cash"}</option></select></label>
+        <label>{locale === "th" ? "ช่องทาง" : "Source"}<select value={source} onChange={(event) => { setSource(event.target.value); resetPage(); }}><option value="ALL">{locale === "th" ? "ทั้งหมด" : "All"}</option><option value="BEAM">Beam</option><option value="CASH">{locale === "th" ? "เงินสด" : "Cash"}</option><option value="BANK_TRANSFER">{locale === "th" ? "โอนธนาคาร" : "Bank transfer"}</option></select></label>
         <label>FlowAccount<select value={exportStatus} onChange={(event) => { setExportStatus(event.target.value); resetPage(); }}><option value="ALL">{locale === "th" ? "ทุกสถานะ" : "All statuses"}</option>{Object.entries(statusText).map(([value, label]) => <option value={value} key={value}>{label[locale]}</option>)}</select></label>
         <label className="accounting-search">{locale === "th" ? "Booking / ลูกค้า" : "Booking / customer"}<input value={query} maxLength={100} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder={locale === "th" ? "ค้นหา Booking, ชื่อ หรือเบอร์ที่ปกปิด" : "Search booking, name, or masked phone"} /></label>
         <label className="attention-toggle"><input type="checkbox" checked={attentionOnly} onChange={(event) => { setAttentionOnly(event.target.checked); resetPage(); }} />{locale === "th" ? "เฉพาะรายการที่ต้องตรวจ" : "Requires attention"}</label>
@@ -295,9 +403,9 @@ export function AccountingOperations({ locale, user }: { locale: Locale; user: U
           <tbody>{items.map((row) => <tr key={row.exportId} className={attentionStates.has(row.exportStatus) ? "attention-row" : undefined}>
             <td><input type="checkbox" aria-label={`${locale === "th" ? "เลือก" : "Select"} ${row.bookingId}`} checked={selected.has(row.exportId)} disabled={!permissions.sync || !selectableStates.has(row.exportStatus)} onChange={() => toggleOne(row.exportId)} /></td>
             <td><strong>{dateTime(row.serviceAt || row.paidAt, locale)}</strong><small>{row.bookingId}</small></td>
-            <td><strong>{row.customerName}</strong><small>{row.customerPhoneMasked}</small><span className="accounting-service">{row.serviceSummary} · {row.pax} pax</span></td>
+            <td><strong>{row.customerName}</strong><small>{row.customerPhoneMasked}</small><span className="accounting-service">{row.serviceSummary} · {row.pax} pax</span>{row.historicalFinancialRecord && <span className="historical-payment-badge">{locale === "th" ? "บันทึกย้อนหลัง" : "Historical"}</span>}</td>
             <td><strong>{baht(row.grossAmountSatang, locale)}</strong><small>{locale === "th" ? "บริการ" : "Service"} {baht(row.serviceAmountSatang, locale)} · {locale === "th" ? "ทิป" : "Tip"} {baht(row.tipAmountSatang, locale)}</small></td>
-            <td><span className={`payment-source source-${row.paymentSource.toLowerCase()}`}>{row.paymentSource === "CASH" ? (locale === "th" ? "เงินสด" : "Cash") : "Beam"}</span><small>{dateTime(row.paidAt, locale)}</small></td>
+            <td><span className={`payment-source source-${row.paymentSource.toLowerCase()}`}>{paymentSourceText(row.paymentSource, locale)}</span><small>{dateTime(row.paidAt, locale)}</small></td>
             <td><span className={`accounting-status accounting-status-${row.exportStatus.toLowerCase()}`}>{statusText[row.exportStatus][locale]}</span>{row.flowAccountDocumentSerial && <small>{row.flowAccountDocumentSerial}</small>}{row.lastErrorCode && <small className="accounting-error-code">{row.lastErrorCode}</small>}</td>
             <td><span>{row.paymentSource === "CASH" ? row.cashSettlementStatus : (locale === "th" ? "ไม่เกี่ยวข้อง" : "N/A")}</span></td>
             <td><div className="accounting-row-actions"><button type="button" disabled={detailLoading} onClick={() => { void openDetail(row); }} aria-label={`${locale === "th" ? "รายละเอียด" : "Details"} ${row.bookingId}`}>→</button>{permissions.cashDeposit && row.paymentSource === "CASH" && row.cashSettlementStatus === "UNSETTLED" && <button type="button" onClick={() => openCashDeposit({ paymentId: row.paymentId })}>{locale === "th" ? "รวมยอด" : "Deposit"}</button>}{permissions.cashDeposit && row.paymentSource === "CASH" && row.cashDepositId && <button type="button" onClick={() => openCashDeposit({ depositId: row.cashDepositId })}>{locale === "th" ? "ดูชุด" : "Batch"}</button>}{permissions.sync && row.exportStatus === "READY" && <button type="button" onClick={() => { void startRun([row.exportId]); }}>{locale === "th" ? "ส่ง" : "Sync"}</button>}{permissions.sync && row.exportStatus === "RETRYABLE" && <button type="button" onClick={() => { void exportAction(row, "retry"); }}>{locale === "th" ? "ลองใหม่" : "Retry"}</button>}{permissions.sync && row.exportStatus === "RECONCILE_REQUIRED" && <button type="button" onClick={() => { void exportAction(row, "reconcile"); }}>{locale === "th" ? "ตรวจผล" : "Reconcile"}</button>}</div></td>

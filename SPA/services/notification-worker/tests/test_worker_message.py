@@ -88,7 +88,9 @@ class FakeClient:
                 "state": "PENDING",
             },
         )
-        self.booking = FakeDocument("booking-1", {"publicBookingId": "BK-TEST"})
+        self.booking = FakeDocument(
+            "booking-1", {"publicBookingId": "BK-TEST", "status": "PENDING"}
+        )
         self.audit_documents: dict[str, FakeDocument] = {}
 
     def collection(self, name: str) -> FakeCollection:
@@ -143,3 +145,29 @@ def test_health_disclosure_to_admin_group_is_audited_without_detail(monkeypatch)
     assert audit["eventType"] == "HEALTH_DATA_DISCLOSED_TO_ADMIN_LINE_GROUP"
     assert audit["targetGroupId"] == "group-admin"
     assert "แพ้น้ำมันลาเวนเดอร์" not in str(audit)
+
+
+def test_stale_confirmed_event_is_completed_without_sending(monkeypatch) -> None:
+    database = FakeClient()
+    database.event.data.update({"eventType": "BOOKING_CONFIRMED", "state": "ENQUEUED"})
+    database.booking.data.update({"status": "COMPLETED"})
+    push_attempted = False
+
+    async def fake_push_line(**_kwargs: object) -> None:
+        nonlocal push_attempted
+        push_attempted = True
+
+    monkeypatch.setattr("app.main.firestore_client", lambda: database)
+    monkeypatch.setattr("app.main._push_line", fake_push_line)
+
+    response = TestClient(app).post(
+        "/internal/v1/tasks/notifications", json={"eventId": "event-1"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "skipped-stale"}
+    assert push_attempted is False
+    assert database.event.writes[-1]["state"] == "SENT"
+    assert database.event.writes[-1]["delivery"] == {
+        "system": "SKIPPED_STALE_STATUS"
+    }
