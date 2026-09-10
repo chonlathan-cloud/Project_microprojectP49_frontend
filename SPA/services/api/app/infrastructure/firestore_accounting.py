@@ -74,6 +74,25 @@ def _local_boundary(value: date) -> datetime:
     return datetime.combine(value, time.min, BANGKOK).astimezone(UTC)
 
 
+def _historical_amounts(booking: dict[str, Any]) -> tuple[int, int, int]:
+    service_amount_satang = int(booking.get("estimatedAmountSatang", 0))
+    tip_amount_satang = int(booking.get("tipAmountSatang", 0))
+    gross_amount_satang = int(
+        booking.get(
+            "grossAmountSatang",
+            service_amount_satang + tip_amount_satang,
+        )
+    )
+    return service_amount_satang, tip_amount_satang, gross_amount_satang
+
+
+def _historical_blocking_reason(booking: dict[str, Any]) -> str | None:
+    service_amount_satang, _, gross_amount_satang = _historical_amounts(booking)
+    if service_amount_satang <= 0 or gross_amount_satang <= 0:
+        return "NON_POSITIVE_AMOUNT"
+    return None
+
+
 class FirestoreAccountingRepository:
     def __init__(self, settings: Settings, client: firestore.Client | None = None) -> None:
         self._settings = settings
@@ -289,6 +308,10 @@ class FirestoreAccountingRepository:
                 ]
             start_at = booking.get("startAt")
             end_at = booking.get("endAt")
+            service_amount_satang, tip_amount_satang, gross_amount_satang = (
+                _historical_amounts(booking)
+            )
+            blocking_reason = _historical_blocking_reason(booking)
             items.append(
                 {
                     "bookingId": booking.get("publicBookingId", snapshot.id),
@@ -298,17 +321,11 @@ class FirestoreAccountingRepository:
                     "customerPhoneMasked": contact.get("phoneMasked") or "—",
                     "serviceSummary": ", ".join(str(value) for value in service_names),
                     "pax": int(booking.get("pax", 1)),
-                    "serviceAmountSatang": int(
-                        booking.get("estimatedAmountSatang", 0)
-                    ),
-                    "tipAmountSatang": int(booking.get("tipAmountSatang", 0)),
-                    "grossAmountSatang": int(
-                        booking.get(
-                            "grossAmountSatang",
-                            int(booking.get("estimatedAmountSatang", 0))
-                            + int(booking.get("tipAmountSatang", 0)),
-                        )
-                    ),
+                    "serviceAmountSatang": service_amount_satang,
+                    "tipAmountSatang": tip_amount_satang,
+                    "grossAmountSatang": gross_amount_satang,
+                    "eligible": blocking_reason is None,
+                    "blockingReason": blocking_reason,
                     "version": int(booking.get("version", 1)),
                 }
             )
@@ -411,6 +428,11 @@ class FirestoreAccountingRepository:
                 raise FinancialConflict("Historical Booking changed; reload and try again")
             if payment_snapshot.exists:
                 raise FinancialConflict("Historical Booking already has a Payment")
+
+            if _historical_blocking_reason(booking):
+                raise ValidationDomainError(
+                    "Historical Booking requires a positive service amount before accounting"
+                )
 
             lines = _service_lines(line_snapshots)
             payment = _new_payment(booking_ref.id, booking, lines)

@@ -728,7 +728,9 @@ td small { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .historical-accounting-record strong, .historical-accounting-record small { display: block; }
 .historical-accounting-record strong { font-size: 12px; }
 .historical-accounting-record small { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.historical-accounting-record .historical-accounting-blocked { color: #9f1717; font-weight: 750; }
 .historical-accounting-record > button, .historical-accounting-form button { min-height: 36px; padding: 0 11px; border: 1px solid var(--forest); border-radius: 7px; background: white; color: var(--forest-dark); cursor: pointer; font-size: 11px; font-weight: 850; }
+.historical-accounting-record > button:disabled { border-color: var(--line); color: var(--muted); cursor: not-allowed; }
 .historical-accounting-form { padding: 13px 18px 16px; display: grid; grid-template-columns: minmax(260px, 1fr) minmax(240px, 1fr) auto; align-items: end; gap: 18px; border-top: 1px dashed #c8cec4; background: #f7f9f5; }
 .historical-accounting-form fieldset { margin: 0; padding: 0; display: flex; gap: 16px; border: 0; }
 .historical-accounting-form fieldset legend, .historical-accounting-form > label > span { width: 100%; margin-bottom: 6px; display: block; color: var(--muted); font-size: 10px; font-weight: 800; }
