@@ -13,7 +13,7 @@ import { BookingDiscountControl, type BookingDiscountUpdate } from "@/components
 import { CompleteServiceDialog } from "@/components/complete-service-dialog";
 import { StartServiceDialog } from "@/components/start-service-dialog";
 import { WalkInBookingDrawer } from "@/components/walk-in-booking-drawer";
-import { adminApi } from "@/lib/admin-api";
+import { AdminApiError, adminApi } from "@/lib/admin-api";
 import { countNotificationsRequiringAction } from "@/lib/notification-state";
 
 const statusLabel: Record<BookingStatus, { th: string; en: string }> = {
@@ -29,6 +29,43 @@ const statusLabel: Record<BookingStatus, { th: string; en: string }> = {
 function adminEntryLabel(booking: PreviewBooking, locale: Locale): string {
   if (booking.adminEntryMode === "HISTORICAL_RECORD") return locale === "th" ? "บันทึกย้อนหลัง" : "Historical";
   return locale === "th" ? "Admin จองให้" : "Staff assisted";
+}
+
+function historicalVoidReason(reasonCode: string | null | undefined, locale: Locale): string {
+  const reasons: Record<string, { th: string; en: string }> = {
+    ACCOUNTING_EXPORT_SYNCED: {
+      th: "ส่งรายการเข้า FlowAccount แล้ว ต้องทำรายการแก้ไขบัญชีก่อน",
+      en: "This record is already synced to FlowAccount and requires an accounting correction.",
+    },
+    ACCOUNTING_EXPORT_IN_FLIGHT: {
+      th: "รายการกำลังส่งเข้า FlowAccount กรุณารอผลและตรวจสอบอีกครั้ง",
+      en: "This record is being sent to FlowAccount. Wait for the result and review it again.",
+    },
+    ACCOUNTING_EXPORT_ATTEMPTED: {
+      th: "รายการเคยเริ่มส่งบัญชีแล้ว ต้องตรวจสอบผลก่อนแก้ไข",
+      en: "An accounting attempt already exists and must be reconciled before correction.",
+    },
+    ACCOUNTING_CORRECTION_REQUIRED: {
+      th: "สถานะรายการบัญชีต้องได้รับการตรวจสอบและแก้ไขก่อน",
+      en: "The accounting record must be reviewed and corrected first.",
+    },
+    ACCOUNTING_EXPORT_INCONSISTENT: {
+      th: "ข้อมูลรายการส่งบัญชีไม่ครบหรือซ้ำ กรุณาให้ผู้ดูแลตรวจสอบ",
+      en: "The accounting export is missing or duplicated and requires review.",
+    },
+    CASH_SETTLEMENT_IN_PROGRESS: {
+      th: "เงินสดรายการนี้อยู่ในกระบวนการนำเข้าบัญชี ต้องยกเลิกหรือกระทบยอดชุดเงินสดก่อน",
+      en: "This cash payment is in a deposit workflow and must be reconciled first.",
+    },
+    THERAPIST_COMPENSATION_PAID: {
+      th: "รายการนี้ถูกนำไปจ่ายค่ามือแล้ว ต้องสร้างรายการปรับปรุงค่ามือ",
+      en: "Therapist compensation has already been paid and requires an adjustment.",
+    },
+  };
+  return reasons[reasonCode ?? ""]?.[locale]
+    ?? (locale === "th"
+      ? "รายการนี้ต้องผ่านขั้นตอนแก้ไขบัญชี ไม่สามารถยกเลิกอัตโนมัติได้"
+      : "This record requires an accounting correction and cannot be voided automatically.");
 }
 
 function googleProfilePhoto(value: string | null): string | null {
@@ -588,6 +625,93 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
     }
   }
 
+  async function voidHistoricalBooking() {
+    const listedBooking = liveBookings.find((item) => item.bookingId === selectedId);
+    const booking = listedBooking && bookingDetail?.bookingId === listedBooking.bookingId
+      ? { ...listedBooking, ...bookingDetail }
+      : listedBooking;
+    if (
+      !booking
+      || booking.status !== "RECORDED"
+      || booking.paymentStatus !== "PAID"
+      || booking.historicalVoid?.eligible !== true
+      || actionState === "submitting"
+    ) return;
+
+    const confirmation = await requestConfirmation({
+      title: locale === "th" ? "ยกเลิกและ Void รายการย้อนหลังนี้?" : "Void this historical financial record?",
+      message: locale === "th"
+        ? `${booking.bookingId} จะถูกตัดออกจากยอดการเงิน พร้อม Void การชำระและยกเลิกรายการส่ง FlowAccount ที่ยังไม่ได้ส่ง โดยเก็บ Audit Trail ไว้`
+        : `${booking.bookingId} will be excluded from financial totals. Its payment and unsent FlowAccount export will be voided with a retained audit trail.`,
+      confirmLabel: locale === "th" ? "ยืนยัน Void รายการ" : "Void record",
+      cancelLabel: locale === "th" ? "กลับ" : "Go back",
+      tone: "danger",
+      input: {
+        label: locale === "th" ? "เหตุผลในการแก้ไข" : "Correction reason",
+        placeholder: locale === "th" ? "เช่น บันทึกบริการผิดรายการ" : "For example: incorrect service was recorded",
+        required: true,
+        maxLength: 500,
+      },
+    });
+    if (!confirmation.confirmed) return;
+
+    setActionState("submitting");
+    try {
+      const payload = await adminApi<{
+        status: BookingStatus;
+        version: number;
+        paymentStatus: "VOIDED";
+        financiallyExcluded: true;
+      }>(user, `/bookings/${encodeURIComponent(booking.bookingId)}:void-historical`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: confirmation.inputValue,
+          expectedVersion: booking.version,
+          commandId: crypto.randomUUID(),
+        }),
+      });
+      const update = (item: PreviewBooking): PreviewBooking => ({
+        ...item,
+        status: payload.status,
+        version: payload.version,
+        paymentStatus: payload.paymentStatus,
+        paidAmountSatang: 0,
+        financiallyExcluded: payload.financiallyExcluded,
+        historicalVoid: {
+          eligible: false,
+          reasonCode: "NOT_ACTIVE_HISTORICAL_RECORD",
+          paymentStatus: payload.paymentStatus,
+          exportStatus: "CANCELLED",
+          settlementState: item.historicalVoid?.settlementState === "ALLOCATED" ? "VOIDED" : item.historicalVoid?.settlementState,
+        },
+      });
+      setLiveBookings((items) => items.map((item) => item.bookingId === booking.bookingId ? update(item) : item));
+      setBookingDetail((current) => current?.bookingId === booking.bookingId ? update(current) : current);
+      setBookingRefresh((value) => value + 1);
+      notify({
+        tone: "success",
+        title: locale === "th" ? "Void รายการย้อนหลังแล้ว" : "Historical record voided",
+        message: booking.bookingId,
+      });
+    } catch (caught) {
+      const message = caught instanceof AdminApiError && caught.code === "HISTORICAL_CORRECTION_REQUIRED"
+        ? historicalVoidReason(caught.message, locale)
+        : caught instanceof AdminApiError && caught.code === "RESOURCE_VERSION_CONFLICT"
+        ? (locale === "th" ? "ข้อมูลรายการเปลี่ยนแปลงแล้ว กรุณาโหลดใหม่และลองอีกครั้ง" : "The record changed. Reload and try again.")
+        : caught instanceof Error
+        ? caught.message
+        : (locale === "th" ? "ไม่สามารถแก้ไขรายการย้อนหลังได้" : "Historical correction failed");
+      notify({
+        tone: "error",
+        title: locale === "th" ? "Void รายการไม่สำเร็จ" : "Could not void record",
+        message,
+      });
+      setBookingRefresh((value) => value + 1);
+    } finally {
+      setActionState("idle");
+    }
+  }
+
   async function addBookingService(input: AddBookingServiceInput) {
     const listedBooking = liveBookings.find((item) => item.bookingId === addServiceBookingId);
     const booking = listedBooking && bookingDetail?.bookingId === listedBooking.bookingId
@@ -840,10 +964,11 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
 
   const bookings = liveBookings;
   const filtered = bookings;
-  const selected = bookings.find((booking) => booking.bookingId === selectedId);
-  const selectedWithDetail = selected && bookingDetail?.bookingId === selected.bookingId
-    ? { ...selected, ...bookingDetail }
-    : selected;
+  const listedSelected = bookings.find((booking) => booking.bookingId === selectedId);
+  const selected = bookingDetail?.bookingId === listedSelected?.bookingId
+    ? bookingDetail
+    : listedSelected;
+  const selectedWithDetail = selected;
   const detailParticipants = bookingDetail?.bookingId === selectedId
     ? bookingDetail.participants ?? []
     : [];
@@ -1081,12 +1206,23 @@ export function AdminDashboard({ user, onSignOut }: { user: User; onSignOut: () 
             </aside>
           </div>
           <div className="booking-detail-footer">
-            <p>{selected.status === "CONFIRMED" && !selected.therapistName ? (locale === "th" ? "มอบหมายหมอให้ครบก่อนเริ่มบริการ" : "Assign every guest before starting service") : ""}</p>
+            <p>{selected.status === "CONFIRMED" && !selected.therapistName
+              ? (locale === "th" ? "มอบหมายหมอให้ครบก่อนเริ่มบริการ" : "Assign every guest before starting service")
+              : selected.status === "RECORDED" && selected.paymentStatus === "PAID" && detailLoadState === "loading"
+              ? (locale === "th" ? "กำลังตรวจสอบสถานะบัญชี…" : "Checking accounting status…")
+              : selected.status === "RECORDED" && selected.paymentStatus === "PAID" && selected.historicalVoid?.eligible && adminRole !== "ADMIN"
+              ? (locale === "th" ? "รายการนี้แก้ไขได้โดยผู้ดูแลระบบ (ADMIN) เท่านั้น" : "Only an ADMIN can correct and void this record.")
+              : selected.status === "RECORDED" && selected.paymentStatus === "PAID" && selected.historicalVoid?.eligible
+              ? (locale === "th" ? "ยกเลิกได้เฉพาะก่อนเริ่มส่ง FlowAccount และจะเก็บ Audit Trail" : "Can be voided before FlowAccount sync; the audit trail is retained.")
+              : selected.status === "RECORDED" && selected.paymentStatus === "PAID" && selected.historicalVoid
+              ? historicalVoidReason(selected.historicalVoid.reasonCode, locale)
+              : ""}</p>
             <div className="drawer-actions">
               {selected.status === "PENDING" && <><button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="confirm-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("confirm")}>{actionState === "submitting" ? (locale === "th" ? "กำลังบันทึก..." : "Saving...") : text.confirm}</button></>}
               {selected.status === "CONFIRMED" && <><button className="cancel-button" disabled={actionState === "submitting"} onClick={() => transitionBooking("cancel")}>{text.cancel}</button><button className="cancel-button" disabled={actionState === "submitting" || currentTime < new Date(selected.startLocal).getTime() + 15 * 60_000} onClick={() => transitionBooking("no_show")}>{locale === "th" ? "ไม่มาตามนัด" : "No show"}</button><button className="confirm-button" disabled={!selected.therapistName || !adminRole || actionState === "submitting"} onClick={() => { setStartServiceError(""); setStartServiceBookingId(selected.bookingId); }}>{locale === "th" ? "เริ่มให้บริการ" : "Start service"}</button></>}
               {selected.status === "IN_SERVICE" && <><button className="add-service-button" disabled={actionState === "submitting" || detailLoadState !== "ready"} onClick={() => { setAddServiceError(""); setAddServiceBookingId(selected.bookingId); }}>+ {locale === "th" ? "เพิ่มบริการ" : "Add service"}</button><button className="confirm-button" disabled={actionState === "submitting" || detailLoadState !== "ready"} onClick={() => setCompleteServiceBookingId(selected.bookingId)}>{locale === "th" ? "ตรวจสอบและจบบริการ" : "Review & complete"}</button></>}
-              {selected.status === "RECORDED" && <button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{locale === "th" ? "ยกเลิกรายการย้อนหลัง" : "Cancel historical record"}</button>}
+              {selected.status === "RECORDED" && selected.paymentStatus !== "PAID" && <button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => transitionBooking("cancel")}>{locale === "th" ? "ยกเลิกรายการย้อนหลัง" : "Cancel historical record"}</button>}
+              {selected.status === "RECORDED" && selected.paymentStatus === "PAID" && adminRole === "ADMIN" && selected.historicalVoid?.eligible === true && <button className="cancel-button" disabled={actionState === "submitting" || bookingState !== "ready"} onClick={() => { void voidHistoricalBooking(); }}>{actionState === "submitting" ? (locale === "th" ? "กำลัง Void…" : "Voiding…") : (locale === "th" ? "แก้ไขและ Void รายการ" : "Correct & void record")}</button>}
             </div>
           </div>
         </div>

@@ -17,6 +17,7 @@ from app.core.auth import require_admin_user
 from app.core.errors import (
     CapacityUnavailable,
     ConflictDomainError,
+    HistoricalCorrectionRequired,
     NotFoundDomainError,
     PermissionDenied,
     ValidationDomainError,
@@ -38,6 +39,9 @@ from app.domains.bookings.state_machine import BookingStateMachine
 from app.domains.capacity.availability import search_capacity_slots
 from app.domains.capacity.buckets import required_bucket_starts
 from app.infrastructure.firestore import get_firestore_client
+from app.infrastructure.firestore_historical_corrections import (
+    FirestoreHistoricalCorrectionRepository,
+)
 from app.integrations.line_identity import (
     line_identity_hash,
 )
@@ -157,6 +161,12 @@ class TransitionRequest(ApiModel):
     discount_reason: str | None = Field(default=None, max_length=200)
 
 
+class VoidHistoricalBookingRequest(ApiModel):
+    reason: str = Field(min_length=1, max_length=500)
+    expected_version: int = Field(ge=1)
+    command_id: str = Field(min_length=8, max_length=128)
+
+
 class AddBookingServiceRequest(ApiModel):
     participant_id: str = Field(min_length=1, max_length=160)
     service_variant_id: str = Field(min_length=1, max_length=160)
@@ -193,6 +203,15 @@ BANGKOK = ZoneInfo("Asia/Bangkok")
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _actor_branch_ids(actor: dict[str, object]) -> tuple[str, ...]:
+    raw = actor.get("branchIds")
+    if isinstance(raw, list):
+        values = tuple(str(value) for value in raw if value)
+        if values:
+            return values
+    return (get_settings().default_branch_id,)
 
 
 def _cursor_secret() -> bytes:
@@ -719,7 +738,7 @@ async def search_admin_booking_availability(
 @router.get("/api/v1/admin/bookings/{booking_id}")
 async def get_admin_booking_detail(
     booking_id: str,
-    _: Annotated[dict[str, object], Depends(require_admin_user)],
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
     client: Annotated[firestore.Client, Depends(get_firestore_client)],
 ) -> dict[str, object]:
     matches = list(
@@ -871,7 +890,7 @@ async def get_admin_booking_detail(
         if current_bucket.minute % 15:
             current_bucket += timedelta(minutes=15 - current_bucket.minute % 15)
         next_service_start = max(next_service_start.astimezone(BANGKOK), current_bucket)
-    return {
+    response = {
         **serialize_booking(booking_snapshot),
         "participants": participants,
         "serviceItems": service_items,
@@ -879,6 +898,12 @@ async def get_admin_booking_detail(
             next_service_start.isoformat() if isinstance(next_service_start, datetime) else None
         ),
     }
+    if booking_data.get("adminEntryMode") == "HISTORICAL_RECORD":
+        response["historicalVoid"] = FirestoreHistoricalCorrectionRepository(client).inspect(
+            booking_id,
+            branch_ids=_actor_branch_ids(actor),
+        ).as_dict()
+    return response
 
 
 @router.get("/api/v1/admin/bookings/{booking_id}/health")
@@ -1310,6 +1335,25 @@ async def add_admin_booking_service(
     return write(transaction)
 
 
+@router.post("/api/v1/admin/bookings/{booking_id}:void-historical")
+async def void_admin_historical_booking(
+    booking_id: str,
+    request: VoidHistoricalBookingRequest,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> dict[str, object]:
+    if actor.get("role") != "ADMIN":
+        raise PermissionDenied("Only ADMIN may void a paid historical Booking")
+    return FirestoreHistoricalCorrectionRepository(client).void(
+        booking_id,
+        branch_ids=_actor_branch_ids(actor),
+        actor_uid=str(actor["uid"]),
+        expected_version=request.expected_version,
+        command_id=request.command_id,
+        reason=request.reason,
+    )
+
+
 @router.post("/api/v1/admin/bookings/{booking_id}:{action}")
 async def transition_admin_booking(
     booking_id: str,
@@ -1419,8 +1463,8 @@ async def transition_admin_booking(
             and current is BookingStatus.RECORDED
             and data.get("paymentStatus") == "PAID"
         ):
-            raise ConflictDomainError(
-                "Paid historical Booking cannot be cancelled after accounting capture"
+            raise HistoricalCorrectionRequired(
+                "Paid historical Booking requires the financial correction action"
             )
         subtotal_amount_satang = int(
             data.get(

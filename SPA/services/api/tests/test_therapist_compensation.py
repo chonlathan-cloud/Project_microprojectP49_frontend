@@ -119,6 +119,49 @@ def test_compensation_payload_separates_service_shop_tip_and_payout() -> None:
     assert all(item["editable"] is False for item in payload["entries"])
 
 
+def test_voided_settlement_is_excluded_from_compensation() -> None:
+    payload = _build_compensation_payload(
+        therapists=[
+            {
+                "documentId": "therapist-1",
+                "therapistId": "therapist-1",
+                "displayName": "คุณนิด",
+                "branchId": "branch_001",
+                "active": True,
+            }
+        ],
+        guarantee_rates=[],
+        attendances=[],
+        settlements=[
+            {
+                "documentId": "booking-doc-1",
+                "bookingPublicId": "BK-VOIDED",
+                "serviceDate": "2026-09-03",
+                "state": "VOIDED",
+                "allocations": [
+                    {
+                        "bookingLineItemId": "line-1",
+                        "therapistId": "therapist-1",
+                        "therapistPaySatang": 25_000,
+                        "tipShareSatang": 5_000,
+                    }
+                ],
+            }
+        ],
+        adjustments=[],
+        payouts=[],
+        start=date(2026, 9, 3),
+        end=date(2026, 9, 3),
+        branch_id="branch_001",
+    )
+
+    row = payload["summary"][0]
+    assert row["servicePaySatang"] == 0
+    assert row["tipSatang"] == 0
+    assert row["outstandingSatang"] == 0
+    assert payload["entries"] == []
+
+
 def test_staff_cannot_access_compensation_financials() -> None:
     previous = app.dependency_overrides.copy()
     app.dependency_overrides[require_admin_user] = lambda: {

@@ -128,6 +128,7 @@ function stateForPayment(result: CustomerPaymentResult): ResultState | null {
     || result.status === "REFUND_PENDING"
     || result.status === "PARTIALLY_REFUNDED"
     || result.status === "REFUNDED"
+    || result.status === "VOIDED"
   ) return "review";
   return null;
 }

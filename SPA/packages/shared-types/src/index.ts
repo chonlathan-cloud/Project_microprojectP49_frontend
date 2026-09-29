@@ -86,6 +86,23 @@ export type PreviewBooking = {
   version: number;
   paymentStatus?: PaymentStatus;
   paidAmountSatang?: number;
+  historicalVoid?: {
+    eligible: boolean;
+    reasonCode?: string | null;
+    paymentStatus: PaymentStatus;
+    exportStatus?:
+      | "READY"
+      | "ENQUEUE_PENDING"
+      | "ENQUEUED"
+      | "PROCESSING"
+      | "RETRYABLE"
+      | "RECONCILE_REQUIRED"
+      | "REVIEW_REQUIRED"
+      | "SYNCED"
+      | "CANCELLED"
+      | null;
+    settlementState?: string | null;
+  };
   subtotalAmountSatang?: number;
   discountAmountSatang?: number;
   discountReason?: string;
@@ -125,6 +142,7 @@ export type PaymentStatus =
   | "PAID"
   | "REFUND_PENDING"
   | "PARTIALLY_REFUNDED"
-  | "REFUNDED";
+  | "REFUNDED"
+  | "VOIDED";
 
 export { INITIAL_SERVICE_CATALOG } from "./catalog";

@@ -78,6 +78,10 @@ class FinancialConflict(DomainError):
     code = "FINANCIAL_CONFLICT"
 
 
+class HistoricalCorrectionRequired(DomainError):
+    code = "HISTORICAL_CORRECTION_REQUIRED"
+
+
 class AuthenticationRequired(DomainError):
     code = "AUTHENTICATION_REQUIRED"
     status_code = 401

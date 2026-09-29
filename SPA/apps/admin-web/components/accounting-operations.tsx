@@ -8,7 +8,7 @@ import { CashDepositWorkflow } from "@/components/cash-deposit-workflow";
 import { adminApi } from "@/lib/admin-api";
 import type { Locale } from "@spa/shared-types";
 
-type ExportStatus = "READY" | "ENQUEUE_PENDING" | "ENQUEUED" | "PROCESSING" | "RETRYABLE" | "RECONCILE_REQUIRED" | "REVIEW_REQUIRED" | "SYNCED";
+type ExportStatus = "READY" | "ENQUEUE_PENDING" | "ENQUEUED" | "PROCESSING" | "RETRYABLE" | "RECONCILE_REQUIRED" | "REVIEW_REQUIRED" | "SYNCED" | "CANCELLED";
 type PaymentSource = "BEAM" | "CASH" | "BANK_TRANSFER";
 type BankTransferAccount = { key: string; labelTh: string; labelEn: string };
 type PaymentRow = {
@@ -96,6 +96,7 @@ const statusText: Record<ExportStatus, { th: string; en: string }> = {
   RECONCILE_REQUIRED: { th: "ต้องตรวจสอบผล", en: "Reconcile" },
   REVIEW_REQUIRED: { th: "ต้องให้ผู้ดูแลตรวจ", en: "Review" },
   SYNCED: { th: "ส่งสำเร็จ", en: "Synced" },
+  CANCELLED: { th: "ยกเลิกก่อนส่ง", en: "Cancelled before sync" },
 };
 
 function todayBangkok(): string {

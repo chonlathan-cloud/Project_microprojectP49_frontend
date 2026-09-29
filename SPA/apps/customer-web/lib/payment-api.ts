@@ -6,7 +6,8 @@ export type PaymentStatus =
   | "PAID"
   | "REFUND_PENDING"
   | "PARTIALLY_REFUNDED"
-  | "REFUNDED";
+  | "REFUNDED"
+  | "VOIDED";
 
 export type BeamPaymentMethod =
   | "KPLUS"

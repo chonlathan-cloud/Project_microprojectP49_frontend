@@ -65,6 +65,7 @@ class PaymentStatus(StrEnum):
     REFUND_PENDING = "REFUND_PENDING"
     PARTIALLY_REFUNDED = "PARTIALLY_REFUNDED"
     REFUNDED = "REFUNDED"
+    VOIDED = "VOIDED"
 
 
 class PaymentAttemptStatus(StrEnum):
@@ -140,6 +141,7 @@ class AccountingExportStatus(StrEnum):
     RECONCILE_REQUIRED = "RECONCILE_REQUIRED"
     REVIEW_REQUIRED = "REVIEW_REQUIRED"
     SYNCED = "SYNCED"
+    CANCELLED = "CANCELLED"
 
 
 class FlowAccountPaymentStrategy(StrEnum):

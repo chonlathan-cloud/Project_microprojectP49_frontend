@@ -8,6 +8,17 @@ type ApiResponse<T> = {
   response: Response;
 };
 
+export class AdminApiError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "AdminApiError";
+  }
+}
+
 async function requestAdminResponse(
   user: User,
   path: string,
@@ -42,7 +53,11 @@ export async function adminApi<T>(user: User, path: string, init: RequestInit = 
       typeof payload === "object" && payload !== null && "detail" in (payload as Record<string, any>)
         ? String((payload as Record<string, any>).detail)
         : "Admin API request failed";
-    throw new Error(detail);
+    const code =
+      typeof payload === "object" && payload !== null && "code" in (payload as Record<string, any>)
+        ? String((payload as Record<string, any>).code)
+        : "ADMIN_API_ERROR";
+    throw new AdminApiError(detail, code, response.status);
   }
   return payload as T;
 }

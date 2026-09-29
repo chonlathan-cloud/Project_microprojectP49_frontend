@@ -490,6 +490,8 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 - Booking Status และ Payment Status เป็นคนละ state machine; ห้ามเปลี่ยน Booking เป็น `PAID`
 - ยอดรับเงินจริงเกิดจาก Beam ที่ตรวจสอบกับ Provider แล้ว หรือการบันทึกรับเงินสด/โอนธนาคารแบบ idempotent โดย Admin; รายการย้อนหลังต้องเลือกหนึ่งในสองช่องทาง manual นี้เสมอ
 - รายการย้อนหลังเดิมที่มี Payment/Accounting Export อยู่แล้วต้องนำมาแสดงตาม projection เดิมและห้าม backfill ซ้ำ ส่วนรายการ `RECORDED` ที่ยังเป็น `paymentStatus=UNAVAILABLE` ให้แสดงในคิว Admin เพื่อเลือกช่องทาง/เวลารับเงินก่อนสร้าง Payment และ Accounting Export แบบ version-checked transaction
+- Paid `HISTORICAL_RECORD` ที่กรอกผิดห้ามลบหรือใช้ Booking cancellation ปกติ; `ADMIN` สามารถ Void ได้ก่อนเริ่มส่งบัญชีเท่านั้นเมื่อ Accounting Export ยังเป็น `READY`, ไม่เคย Attempt, เงินสดไม่อยู่ใน Cash Deposit และค่ามือยังไม่ถูกจ่าย โดย Transaction เดียวต้องเปลี่ยน Booking เป็น `CANCELLED`/`financiallyExcluded=true`, Payment เป็น `VOIDED`, Accounting Export เป็น `CANCELLED`, Void Settlement ที่ยังไม่จ่าย และเก็บ Audit Trail
+- ถ้า Accounting Export เริ่มเข้าคิว/ส่งแล้ว, Sync สำเร็จแล้ว, เงินสดอยู่ระหว่างนำเข้าบัญชี หรือค่ามือถูกจ่ายแล้ว ระบบต้องไม่เปลี่ยนข้อมูลบางส่วนและต้องส่งเข้ากระบวนการ Accounting/Compensation Correction แยก
 - ทิปต้องเก็บแยกจากค่าบริการ และ Payment ที่เปลี่ยนทิปต้องสะท้อนยอด Tip/Gross ล่าสุดกลับไปที่ Booking เพื่อใช้ตรวจ Settlement
 - นโยบาย VAT และข้อความทางภาษีต้องได้รับการยืนยันก่อน Production ไม่ใช้ข้อความตัวอย่างใน Stitch เป็นข้อสรุป
 
@@ -500,6 +502,7 @@ Website Guest ที่ยังไม่เชื่อม LINE เห็นส
 - หาก Capacity ใหม่ไม่พอ ระบบต้องไม่บันทึกการเปลี่ยนแปลง
 - การแก้ Booking ที่ `CONFIRMED` ต้องคง Capacity เดิมไว้จนกว่าการจอง Resource ใหม่จะสำเร็จ เพื่อไม่ให้ Booking สูญเสีย Slot จากความผิดพลาดระหว่างเปลี่ยน
 - การยกเลิกต้องมีเหตุผลและคืน Capacity ทันที
+- การ Void รายการย้อนหลังที่มีผลทางการเงินทำได้เฉพาะ `ADMIN`, ต้องมีเหตุผล, optimistic version และ idempotent command; ห้าม Hard Delete เอกสาร Booking, Payment, Export, Settlement หรือ Audit
 - ทุกการเปลี่ยนแปลงที่มีผลต่อ Booking ต้องเก็บผู้ดำเนินการ เวลา ค่าเดิม และค่าใหม่
 
 ## 18. Failure และ Exception Rules

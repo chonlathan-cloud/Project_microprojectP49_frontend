@@ -278,6 +278,7 @@ Public APIs never return health detail, internal document IDs, resource allocati
 | `PATCH` | `/api/v1/admin/bookings/{bookingId}` | `booking.update` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:confirm` | `booking.confirm` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:cancel` | `booking.cancel` |
+| `POST` | `/api/v1/admin/bookings/{bookingId}:void-historical` | `ADMIN`; idempotent void for a paid historical record whose accounting export is pristine `READY` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:start` | `booking.transition`; optional discount mutation requires `ADMIN` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}/services` | `booking.update`; append an active single-participant service during `IN_SERVICE`; optional discount mutation requires `ADMIN` |
 | `POST` | `/api/v1/admin/bookings/{bookingId}:complete` | `booking.transition` |
@@ -501,7 +502,7 @@ The transaction:
 2. Revalidates advance window and service/resource active states.
 3. Confirms the complete allocation for all participant timelines. Bucket demand may vary over time when participant timelines have different total durations; branch buffer is reserved once after each participant's final item.
 4. Reads and increments the branch-local appointment-date Booking counter.
-5. Creates Customer Web/LIFF Bookings as `PENDING`; creates an authenticated active Admin Booking as `CONFIRMED`, or an ADMIN historical record as paid `RECORDED`, with trusted actor timestamps in the same transaction. A paid `RECORDED` Booking rejects ordinary cancellation and requires an accounting correction workflow.
+5. Creates Customer Web/LIFF Bookings as `PENDING`; creates an authenticated active Admin Booking as `CONFIRMED`, or an ADMIN historical record as paid `RECORDED`, with trusted actor timestamps in the same transaction. A paid `RECORDED` Booking rejects ordinary cancellation. A separate ADMIN financial-void command is available only while its accounting export remains pristine `READY` and no cash-deposit or paid-compensation dependency exists.
 6. Creates immutable, ordered, scheduled price-bearing Booking line items; each `PER_PARTICIPANT` selection is a participant line and a two-person `PER_BOOKING` selection is one shared line linked to both participants and charged once. The Booking separately stores subtotal, Admin discount, and net estimated amount.
 7. Creates participant and immutable Booking Health Snapshot documents linked to the appropriate line item.
 8. Resolves or creates the verified/provisional Customer Profile, updates the current Health Profile, and writes versioned consent receipts.
@@ -537,7 +538,7 @@ If new capacity is unavailable, no old capacity is released and the Booking rema
 
 ### 15.2 Cancellation and Terminal States
 
-`CANCELLED`, `COMPLETED`, `NO_SHOW`, and `RECORDED` do not consume capacity. Active Booking transitions decrement every active reservation bucket exactly once and mark reservation documents released. Legacy unpaid `RECORDED → CANCELLED` has no reservation to release and must not read or mutate Capacity; paid `RECORDED` rejects ordinary cancellation. Repeated transitions cannot decrement again.
+`CANCELLED`, `COMPLETED`, `NO_SHOW`, and `RECORDED` do not consume capacity. Active Booking transitions decrement every active reservation bucket exactly once and mark reservation documents released. Legacy unpaid `RECORDED → CANCELLED` has no reservation to release and must not read or mutate Capacity; paid `RECORDED` rejects ordinary cancellation. The financial-void path also performs no Capacity writes. Repeated transitions cannot decrement again.
 
 `IN_SERVICE` continues consuming capacity until `COMPLETED`.
 
@@ -556,8 +557,9 @@ Reducing resource capacity or adding a block never auto-cancels an existing Book
 | `CONFIRMED` | No-show | `NO_SHOW` | Appointment has reached the operational no-show window |
 | `IN_SERVICE` | Complete | `COMPLETED` | Authorized Admin Web user |
 | `RECORDED` | Cancel | `CANCELLED` | Legacy `paymentStatus=UNAVAILABLE` only; reason required; set `financiallyExcluded=true`; no Capacity or notification write |
+| `RECORDED` | Void historical financial record | `CANCELLED` | `ADMIN`; Payment `PAID`; Accounting Export pristine `READY`; no active cash deposit or paid therapist compensation; reason/version/idempotency required |
 
-`COMPLETED`, `CANCELLED`, and `NO_SHOW` cannot be reopened in Phase 1 through ordinary endpoints. A legacy unpaid `RECORDED` supports the reason-required correction to `CANCELLED`; paid historical records require a separate accounting correction workflow.
+`COMPLETED`, `CANCELLED`, and `NO_SHOW` cannot be reopened in Phase 1 through ordinary endpoints. A legacy unpaid `RECORDED` supports the reason-required correction to `CANCELLED`. A paid historical record may be voided only before accounting delivery starts; once queued, attempted, synced, included in a cash-deposit workflow, or included in paid therapist compensation it requires the corresponding manual/automated correction workflow.
 
 While status remains `IN_SERVICE`, `POST /bookings/{bookingId}/services` may run repeatedly. The command requires an existing participant, an active same-branch therapist, an active `PER_PARTICIPANT` variant, a 15-minute-aligned start at or after the Booking's current `endAt`, operating hours, available capacity, Booking `expectedVersion`, and an idempotent `commandId`. One transaction appends an immutable `ADMIN_ADD_ON` line and its therapist/schedule snapshot, increments the relevant capacity buckets, extends `endAt`, recalculates subtotal/net/gross, applies an optional `ADMIN`-only Booking discount change, and records audit evidence. Completing or cancelling later releases both original and added reservations.
 

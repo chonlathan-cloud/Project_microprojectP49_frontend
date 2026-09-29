@@ -12,6 +12,7 @@ from app.core.errors import AdvanceWindowViolation, ValidationDomainError
 from app.core.settings import Settings
 from app.domains.bookings import service as booking_service
 from app.infrastructure.firestore import get_firestore_client
+from app.infrastructure.firestore_payments import _payment_id
 from app.main import app
 
 client = TestClient(app)
@@ -858,6 +859,333 @@ def test_historical_record_can_be_cancelled_without_capacity_or_notification(
     assert status_audit["fromStatus"] == "RECORDED"
     assert status_audit["toStatus"] == "CANCELLED"
     assert status_audit["reason"] == "บันทึกผิดรายการ"
+
+
+def _seed_paid_historical_record(
+    database: WalkInFirestore,
+    *,
+    export_status: str = "READY",
+    payment_method: str = "BANK_TRANSFER",
+    cash_settlement_status: str = "NOT_APPLICABLE",
+    with_settlement: bool = False,
+) -> tuple[str, str]:
+    booking_doc_id = "booking-history-paid-001"
+    booking_public_id = "BK-20260922-F8DA4A"
+    payment_id = _payment_id(booking_doc_id)
+    database.documents[("bookings", booking_doc_id)] = {
+        "publicBookingId": booking_public_id,
+        "branchId": "branch_001",
+        "localDate": "2026-09-22",
+        "status": "RECORDED",
+        "version": 1,
+        "customerListBucket": "HISTORY",
+        "adminEntryMode": "HISTORICAL_RECORD",
+        "historicalFinancialRecord": True,
+        "financiallyExcluded": False,
+        "capacityReleased": True,
+        "paymentStatus": "PAID",
+        "paidAmountSatang": 30_000,
+        "amountDueSatang": 0,
+        "estimatedAmountSatang": 30_000,
+        "tipAmountSatang": 0,
+        "grossAmountSatang": 30_000,
+    }
+    database.documents[("payments", payment_id)] = {
+        "bookingDocId": booking_doc_id,
+        "bookingPublicId": booking_public_id,
+        "branchId": "branch_001",
+        "status": "PAID",
+        "paymentMethod": payment_method,
+        "cashSettlementStatus": cash_settlement_status,
+        "grossAmountSatang": 30_000,
+        "paidAmountSatang": 30_000,
+        "version": 2,
+    }
+    database.documents[("accounting_exports", "fa-history-paid-001")] = {
+        "bookingDocId": booking_doc_id,
+        "bookingPublicId": booking_public_id,
+        "paymentId": payment_id,
+        "branchId": "branch_001",
+        "status": export_status,
+        "attemptCount": 0,
+        "grossAmountSatang": 30_000,
+    }
+    if with_settlement:
+        database.documents[("service_settlements", booking_doc_id)] = {
+            "bookingDocId": booking_doc_id,
+            "bookingPublicId": booking_public_id,
+            "branchId": "branch_001",
+            "serviceDate": "2026-09-22",
+            "state": "ALLOCATED",
+            "version": 1,
+            "allocations": [
+                {
+                    "therapistId": "therapist-001",
+                    "therapistPaySatang": 12_000,
+                    "tipShareSatang": 0,
+                }
+            ],
+        }
+    return booking_doc_id, payment_id
+
+
+def test_paid_historical_record_uses_typed_correction_error_on_ordinary_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    _seed_paid_historical_record(database)
+    monkeypatch.setattr(booking_routes.firestore, "transactional", lambda function: function)
+    previous_auth, previous_firestore = _override_dependencies(database, role="ADMIN")
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260922-F8DA4A:cancel",
+            json={
+                "reason": "กรอกข้อมูลผิด",
+                "expectedVersion": 1,
+                "commandId": "ordinary-cancel-paid-history-001",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "HISTORICAL_CORRECTION_REQUIRED"
+
+
+def test_admin_can_void_ready_paid_historical_record_atomically_and_idempotently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    booking_doc_id, payment_id = _seed_paid_historical_record(
+        database, with_settlement=True
+    )
+    monkeypatch.setattr(booking_routes.firestore, "transactional", lambda function: function)
+    from app.infrastructure import firestore_historical_corrections as correction_store
+
+    monkeypatch.setattr(correction_store.firestore, "transactional", lambda function: function)
+    previous_auth, previous_firestore = _override_dependencies(database, role="ADMIN")
+    request = {
+        "reason": "กรอกข้อมูลผิด",
+        "expectedVersion": 1,
+        "commandId": "void-paid-history-001",
+    }
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260922-F8DA4A:void-historical",
+            json=request,
+        )
+        replay = client.post(
+            "/api/v1/admin/bookings/BK-20260922-F8DA4A:void-historical",
+            json=request,
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 200, response.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == response.json()
+    assert response.json() == {
+        "bookingId": "BK-20260922-F8DA4A",
+        "status": "CANCELLED",
+        "version": 2,
+        "paymentStatus": "VOIDED",
+        "exportStatus": "CANCELLED",
+        "financiallyExcluded": True,
+    }
+    booking = database.documents[("bookings", booking_doc_id)]
+    assert booking["status"] == "CANCELLED"
+    assert booking["financiallyExcluded"] is True
+    assert booking["paymentStatus"] == "VOIDED"
+    assert booking["cancellation"]["kind"] == "HISTORICAL_FINANCIAL_VOID"  # type: ignore[index]
+    payment = database.documents[("payments", payment_id)]
+    assert payment["status"] == "VOIDED"
+    assert payment["paidAmountSatang"] == 0
+    assert payment["voidReason"] == "กรอกข้อมูลผิด"
+    export = database.documents[("accounting_exports", "fa-history-paid-001")]
+    assert export["status"] == "CANCELLED"
+    settlement = database.documents[("service_settlements", booking_doc_id)]
+    assert settlement["state"] == "VOIDED"
+    audits = [
+        value
+        for (collection, _), value in database.documents.items()
+        if collection == "audit_events"
+        and value.get("eventType") == "HISTORICAL_FINANCIAL_RECORD_VOIDED"
+    ]
+    assert len(audits) == 1
+    assert audits[0]["reason"] == "กรอกข้อมูลผิด"
+
+
+@pytest.mark.parametrize(
+    ("export_status", "reason_code"),
+    [
+        ("ENQUEUED", "ACCOUNTING_EXPORT_IN_FLIGHT"),
+        ("PROCESSING", "ACCOUNTING_EXPORT_IN_FLIGHT"),
+        ("SYNCED", "ACCOUNTING_EXPORT_SYNCED"),
+        ("RETRYABLE", "ACCOUNTING_CORRECTION_REQUIRED"),
+    ],
+)
+def test_historical_void_rejects_export_that_is_not_pristine_ready(
+    monkeypatch: pytest.MonkeyPatch,
+    export_status: str,
+    reason_code: str,
+) -> None:
+    database = WalkInFirestore()
+    booking_doc_id, _ = _seed_paid_historical_record(
+        database, export_status=export_status
+    )
+    from app.infrastructure import firestore_historical_corrections as correction_store
+
+    monkeypatch.setattr(correction_store.firestore, "transactional", lambda function: function)
+    previous_auth, previous_firestore = _override_dependencies(database, role="ADMIN")
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260922-F8DA4A:void-historical",
+            json={
+                "reason": "กรอกข้อมูลผิด",
+                "expectedVersion": 1,
+                "commandId": f"void-{export_status.lower()}-history-001",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "HISTORICAL_CORRECTION_REQUIRED"
+    assert response.json()["detail"] == reason_code
+    assert database.documents[("bookings", booking_doc_id)]["status"] == "RECORDED"
+    assert database.documents[("accounting_exports", "fa-history-paid-001")][
+        "status"
+    ] == export_status
+
+
+@pytest.mark.parametrize(
+    ("export_patch", "expected_detail"),
+    [
+        ({"attemptCount": 1}, "ACCOUNTING_EXPORT_ATTEMPTED"),
+        ({"flowAccountDocumentId": "flow-doc-001"}, "ACCOUNTING_EXPORT_ATTEMPTED"),
+    ],
+)
+def test_historical_void_rejects_ready_export_with_accounting_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    export_patch: dict[str, object],
+    expected_detail: str,
+) -> None:
+    database = WalkInFirestore()
+    booking_doc_id, _ = _seed_paid_historical_record(database)
+    database.documents[("accounting_exports", "fa-history-paid-001")].update(
+        export_patch
+    )
+    from app.infrastructure import firestore_historical_corrections as correction_store
+
+    monkeypatch.setattr(correction_store.firestore, "transactional", lambda function: function)
+    previous_auth, previous_firestore = _override_dependencies(database, role="ADMIN")
+    try:
+        response = client.post(
+            "/api/v1/admin/bookings/BK-20260922-F8DA4A:void-historical",
+            json={
+                "reason": "กรอกข้อมูลผิด",
+                "expectedVersion": 1,
+                "commandId": "void-attempted-history-001",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == expected_detail
+    assert database.documents[("bookings", booking_doc_id)]["status"] == "RECORDED"
+
+
+def test_historical_void_rejects_active_cash_deposit_and_paid_compensation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.infrastructure import firestore_historical_corrections as correction_store
+
+    monkeypatch.setattr(correction_store.firestore, "transactional", lambda function: function)
+
+    cash_database = WalkInFirestore()
+    _, cash_payment_id = _seed_paid_historical_record(
+        cash_database,
+        payment_method="CASH",
+        cash_settlement_status="DEPOSIT_PENDING",
+    )
+    cash_database.documents[("cash_deposit_allocation_guards", cash_payment_id)] = {
+        "active": True,
+        "depositId": "dep-001",
+    }
+    previous_auth, previous_firestore = _override_dependencies(cash_database, role="ADMIN")
+    try:
+        cash_response = client.post(
+            "/api/v1/admin/bookings/BK-20260922-F8DA4A:void-historical",
+            json={
+                "reason": "กรอกข้อมูลผิด",
+                "expectedVersion": 1,
+                "commandId": "void-cash-history-001",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert cash_response.status_code == 409
+    assert cash_response.json()["detail"] == "CASH_SETTLEMENT_IN_PROGRESS"
+
+    payout_database = WalkInFirestore()
+    _seed_paid_historical_record(payout_database, with_settlement=True)
+    payout_database.documents[("therapist_payouts", "payout-001")] = {
+        "branchId": "branch_001",
+        "therapistId": "therapist-001",
+        "dailyAllocations": [
+            {"localDate": "2026-09-22", "amountSatang": 12_000}
+        ],
+    }
+    previous_auth, previous_firestore = _override_dependencies(payout_database, role="ADMIN")
+    try:
+        payout_response = client.post(
+            "/api/v1/admin/bookings/BK-20260922-F8DA4A:void-historical",
+            json={
+                "reason": "กรอกข้อมูลผิด",
+                "expectedVersion": 1,
+                "commandId": "void-payout-history-001",
+            },
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert payout_response.status_code == 409
+    assert payout_response.json()["detail"] == "THERAPIST_COMPENSATION_PAID"
+
+
+def test_historical_void_is_admin_only_and_detail_exposes_eligibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = WalkInFirestore()
+    _seed_paid_historical_record(database)
+    previous_auth, previous_firestore = _override_dependencies(database, role="STAFF")
+    try:
+        forbidden = client.post(
+            "/api/v1/admin/bookings/BK-20260922-F8DA4A:void-historical",
+            json={
+                "reason": "กรอกข้อมูลผิด",
+                "expectedVersion": 1,
+                "commandId": "staff-void-history-001",
+            },
+        )
+        detail = client.get(
+            "/api/v1/admin/bookings/BK-20260922-F8DA4A"
+        )
+    finally:
+        _restore_dependencies(previous_auth, previous_firestore)
+
+    assert forbidden.status_code == 403
+    assert forbidden.json()["code"] == "PERMISSION_DENIED"
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["historicalVoid"] == {
+        "eligible": True,
+        "reasonCode": None,
+        "paymentStatus": "PAID",
+        "exportStatus": "READY",
+        "settlementState": None,
+    }
 
 
 def test_admin_start_service_applies_discount_atomically(

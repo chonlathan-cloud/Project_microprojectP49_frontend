@@ -230,6 +230,8 @@ def _build_compensation_payload(
 
     entries: list[dict[str, object]] = []
     for settlement in settlements:
+        if settlement.get("state") == "VOIDED":
+            continue
         local_date = str(settlement.get("serviceDate") or "")
         if not _in_range(local_date, start, end):
             continue

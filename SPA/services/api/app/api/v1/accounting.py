@@ -29,6 +29,7 @@ ExportStatusFilter = Literal[
     "RECONCILE_REQUIRED",
     "REVIEW_REQUIRED",
     "SYNCED",
+    "CANCELLED",
 ]
 PaymentSourceFilter = Literal["BEAM", "CASH", "BANK_TRANSFER"]
 CashSettlementFilter = Literal[

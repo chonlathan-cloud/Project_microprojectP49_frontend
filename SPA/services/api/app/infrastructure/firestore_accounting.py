@@ -93,6 +93,38 @@ def _historical_blocking_reason(booking: dict[str, Any]) -> str | None:
     return None
 
 
+def _page_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    active_items = [item for item in items if item["exportStatus"] != "CANCELLED"]
+    return {
+        "scope": "CURRENT_PAGE",
+        "paidGrossSatang": sum(item["grossAmountSatang"] for item in active_items),
+        "beamGrossSatang": sum(
+            item["grossAmountSatang"]
+            for item in active_items
+            if item["paymentSource"] == "BEAM"
+        ),
+        "cashGrossSatang": sum(
+            item["grossAmountSatang"]
+            for item in active_items
+            if item["paymentSource"] == "CASH"
+        ),
+        "bankTransferGrossSatang": sum(
+            item["grossAmountSatang"]
+            for item in active_items
+            if item["paymentSource"] == "BANK_TRANSFER"
+        ),
+        "serviceAmountSatang": sum(
+            item["serviceAmountSatang"] for item in active_items
+        ),
+        "tipAmountSatang": sum(item["tipAmountSatang"] for item in active_items),
+        "readyCount": sum(item["exportStatus"] == "READY" for item in items),
+        "syncedCount": sum(item["exportStatus"] == "SYNCED" for item in items),
+        "attentionCount": sum(
+            item["exportStatus"] in ATTENTION_STATES for item in items
+        ),
+    }
+
+
 class FirestoreAccountingRepository:
     def __init__(self, settings: Settings, client: firestore.Client | None = None) -> None:
         self._settings = settings
@@ -254,26 +286,7 @@ class FirestoreAccountingRepository:
             paid_at = (last_snapshot.to_dict() or {}).get("paidAt")
             if isinstance(paid_at, datetime):
                 next_page_token = _encode_cursor(paid_at, last_snapshot.id, fingerprint)
-        summary = {
-            "scope": "CURRENT_PAGE",
-            "paidGrossSatang": sum(item["grossAmountSatang"] for item in items),
-            "beamGrossSatang": sum(
-                item["grossAmountSatang"] for item in items if item["paymentSource"] == "BEAM"
-            ),
-            "cashGrossSatang": sum(
-                item["grossAmountSatang"] for item in items if item["paymentSource"] == "CASH"
-            ),
-            "bankTransferGrossSatang": sum(
-                item["grossAmountSatang"]
-                for item in items
-                if item["paymentSource"] == "BANK_TRANSFER"
-            ),
-            "serviceAmountSatang": sum(item["serviceAmountSatang"] for item in items),
-            "tipAmountSatang": sum(item["tipAmountSatang"] for item in items),
-            "readyCount": sum(item["exportStatus"] == "READY" for item in items),
-            "syncedCount": sum(item["exportStatus"] == "SYNCED" for item in items),
-            "attentionCount": sum(item["exportStatus"] in ATTENTION_STATES for item in items),
-        }
+        summary = _page_summary(items)
         return {"items": items, "nextPageToken": next_page_token, "summary": summary}
 
     def list_pending_historical(self, *, branch_id: str, limit: int = 100) -> dict[str, Any]:
