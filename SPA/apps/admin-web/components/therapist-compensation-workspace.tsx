@@ -5,7 +5,7 @@ import type { User } from "firebase/auth";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { useAdminFeedback } from "@/components/admin-feedback";
-import { adminApi } from "@/lib/admin-api";
+import { adminApi, adminDownload } from "@/lib/admin-api";
 
 export type CompensationTab = "TODAY" | "LEDGER" | "PROFILES";
 
@@ -15,6 +15,8 @@ type DayRow = {
   attendanceVersion: number;
   guaranteeRateSatang: number;
   guaranteeTopUpSatang: number;
+  serviceCount: number;
+  durationMinutes: number;
 };
 
 type CompensationRow = {
@@ -260,6 +262,7 @@ export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: Com
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState<"DAILY_DETAIL" | "THERAPIST_SUMMARY" | null>(null);
   const [sourceFilter, setSourceFilter] = useState<"ALL" | "SERVICE" | "SHOP">("ALL");
   const [therapistFilter, setTherapistFilter] = useState("ALL");
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -307,6 +310,40 @@ export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: Com
     } finally { setSaving(false); }
   }
 
+  async function exportCompensation(reportType: "DAILY_DETAIL" | "THERAPIST_SUMMARY") {
+    if (exporting) return;
+    setExporting(reportType);
+    try {
+      await adminDownload(user, "/therapist-compensation:export", {
+        method: "POST",
+        body: JSON.stringify({
+          branchId: "branch_001",
+          dateFrom,
+          dateTo,
+          reportType,
+          ...(therapistFilter === "ALL" ? {} : { therapistId: therapistFilter }),
+        }),
+      });
+      notify({
+        tone: "success",
+        title: reportType === "DAILY_DETAIL"
+          ? (locale === "th" ? "ดาวน์โหลดรายละเอียดค่าตอบแทนแล้ว" : "Daily compensation CSV downloaded")
+          : (locale === "th" ? "ดาวน์โหลดสรุปยอดจ่ายหมอแล้ว" : "Therapist payout summary downloaded"),
+        message: locale === "th"
+          ? "ไฟล์ CSV ภาษาไทยใช้ช่วงวันที่และตัวกรองหมอที่เลือก พร้อมบันทึก Audit แล้ว"
+          : "The Thai-column CSV uses the selected date range and therapist filter and was audited.",
+      });
+    } catch (caught) {
+      notify({
+        tone: "error",
+        title: locale === "th" ? "ส่งออก CSV ไม่สำเร็จ" : "CSV export failed",
+        message: caught instanceof Error ? caught.message : undefined,
+      });
+    } finally {
+      setExporting(null);
+    }
+  }
+
   async function submitEditor(values: { amountBaht: number; tipBaht: number; reason: string; effectiveFrom: string; adjustmentKind: "BONUS" | "ADJUSTMENT"; paymentMethod: "CASH" | "TRANSFER" }) {
     if (!editor) return;
     setSaving(true);
@@ -336,7 +373,11 @@ export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: Com
 
   const toolbar = <div className="compensation-toolbar">
     <div><label><span>{locale === "th" ? (tab === "TODAY" ? "วันที่ทำงาน" : "ตั้งแต่") : (tab === "TODAY" ? "Work date" : "From")}</span><input type="date" value={dateFrom} max={dateTo} onChange={(event) => { setDateFrom(event.target.value); if (tab === "TODAY") setDateTo(event.target.value); }} /></label>{tab !== "TODAY" && <label><span>{locale === "th" ? "ถึง" : "To"}</span><input type="date" value={dateTo} min={dateFrom} onChange={(event) => setDateTo(event.target.value)} /></label>}</div>
-    <button type="button" disabled={loading} onClick={() => { void load(); }}>{locale === "th" ? "รีเฟรชข้อมูล" : "Refresh"}</button>
+    <div className="compensation-toolbar-actions">
+      <button type="button" disabled={loading || Boolean(exporting)} onClick={() => { void load(); }}>{locale === "th" ? "รีเฟรชข้อมูล" : "Refresh"}</button>
+      <button type="button" disabled={loading || Boolean(exporting) || !payload} onClick={() => { void exportCompensation("DAILY_DETAIL"); }}>{exporting === "DAILY_DETAIL" ? (locale === "th" ? "กำลังสร้าง CSV…" : "Creating CSV…") : (locale === "th" ? "รายละเอียดรายวัน CSV" : "Daily detail CSV")}</button>
+      <button type="button" className="primary" disabled={loading || Boolean(exporting) || !payload} onClick={() => { void exportCompensation("THERAPIST_SUMMARY"); }}>{exporting === "THERAPIST_SUMMARY" ? (locale === "th" ? "กำลังสร้าง CSV…" : "Creating CSV…") : (locale === "th" ? "สรุปยอดจ่ายหมอ CSV" : "Payout summary CSV")}</button>
+    </div>
   </div>;
 
   if (loading && !payload) return <><div className="module-state" role="status">{locale === "th" ? "กำลังโหลดค่าหมอ…" : "Loading therapist compensation…"}</div></>;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from math import ceil
 from typing import Literal
 
@@ -92,15 +93,54 @@ def _service_groups(
                 "durationMinutes": int(service.get("durationMinutes", 0)),
                 "grossServiceSatang": 0,
                 "participantIds": set(),
+                "participantDurationMinutes": {},
             },
         )
         group["grossServiceSatang"] = int(group["grossServiceSatang"]) + int(
             line.get("lineTotalSatang", 0)
         )
         participant_ids = group["participantIds"]
+        participant_durations = group["participantDurationMinutes"]
         if isinstance(participant_ids, set):
-            participant_ids.update(str(item) for item in line.get("participantIds") or [])
+            line_participant_ids = [str(item) for item in line.get("participantIds") or []]
+            participant_ids.update(line_participant_ids)
+            if isinstance(participant_durations, dict):
+                for participant_id in line_participant_ids:
+                    participant_durations[participant_id] = int(
+                        participant_durations.get(participant_id, 0)
+                    ) + int(service.get("durationMinutes", 0))
     return result
+
+
+def _as_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _booking_duration_minutes(
+    booking: dict[str, object], groups: dict[tuple[str, str], dict[str, object]]
+) -> int:
+    start_at = _as_datetime(booking.get("startAt"))
+    end_at = _as_datetime(booking.get("endAt"))
+    if start_at and end_at and end_at >= start_at:
+        return int((end_at - start_at).total_seconds() // 60)
+
+    participant_totals: dict[str, int] = defaultdict(int)
+    for group in groups.values():
+        durations = group.get("participantDurationMinutes")
+        if not isinstance(durations, dict):
+            continue
+        for participant_id, duration in durations.items():
+            participant_totals[str(participant_id)] += int(duration)
+    if participant_totals:
+        return max(participant_totals.values())
+    return max((int(group.get("durationMinutes", 0)) for group in groups.values()), default=0)
 
 
 def _matches_filters(
@@ -186,6 +226,7 @@ def _booking_row(
         "bookingId": booking.get("publicBookingId", document_id),
         "localDate": booking.get("localDate"),
         "localStartTime": booking.get("localStartTime"),
+        "durationMinutes": _booking_duration_minutes(booking, groups),
         "status": booking.get("status"),
         "source": booking.get("source"),
         "adminEntryMode": booking.get("adminEntryMode"),

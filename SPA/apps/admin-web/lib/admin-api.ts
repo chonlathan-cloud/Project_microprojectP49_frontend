@@ -72,6 +72,18 @@ async function requestAdminDownload(user: User, path: string, init: RequestInit,
   return response;
 }
 
+export function downloadFilename(disposition: string): string {
+  const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encodedFilename) {
+    try {
+      return decodeURIComponent(encodedFilename);
+    } catch {
+      // Fall through to the ASCII filename when the extended value is malformed.
+    }
+  }
+  return disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? "spa49-export.csv";
+}
+
 export async function adminDownload(user: User, path: string, init: RequestInit = {}): Promise<void> {
   const response = await requestAdminDownload(user, path, init, false);
   if (!response.ok) {
@@ -80,7 +92,7 @@ export async function adminDownload(user: User, path: string, init: RequestInit 
   }
   const blob = await response.blob();
   const disposition = response.headers.get("Content-Disposition") ?? "";
-  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? "spa49-export.csv";
+  const filename = downloadFilename(disposition);
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;

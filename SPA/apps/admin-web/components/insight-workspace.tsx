@@ -218,12 +218,12 @@ export function InsightWorkspace({ locale, user }: { locale: Locale; user: User 
     try {
       await adminDownload(user, "/analytics/insight:export", {
         method: "POST",
-        body: JSON.stringify({ ...buildFilterPayload(applied), view }),
+        body: JSON.stringify({ ...buildFilterPayload(applied), view: "BOOKINGS" }),
       });
       notify({
         tone: "success",
-        title: locale === "th" ? "ดาวน์โหลด Insight CSV แล้ว" : "Insight CSV downloaded",
-        message: locale === "th" ? "ไฟล์ใช้ตัวกรองที่กำลังแสดงและบันทึก Audit แล้ว" : "Current filters were applied and the export was audited.",
+        title: locale === "th" ? "ดาวน์โหลดรายการขาย CSV แล้ว" : "Sales CSV downloaded",
+        message: locale === "th" ? "ไฟล์ภาษาไทยใช้ตัวกรองที่กำลังแสดงและบันทึก Audit แล้ว" : "The Thai-column report uses the active filters and was audited.",
       });
       setState("ready");
     } catch (caught) {
@@ -243,7 +243,7 @@ export function InsightWorkspace({ locale, user }: { locale: Locale; user: User 
   return <main className="dashboard-content insight-workspace">
     <div className="module-heading-action insight-heading">
       <div className="module-heading"><p className="eyebrow">DETAILED PERFORMANCE • ASIA/BANGKOK</p><h1>{locale === "th" ? "Insight รายละเอียดธุรกิจ" : "Business insight"}</h1><p>{locale === "th" ? "วิเคราะห์รายได้ บริการ และผลงานหมอจากข้อมูลที่ให้บริการจริง" : "Explore serviced revenue, treatments, and therapist performance."}</p></div>
-      <button type="button" className="primary-compact-button insight-export" disabled={state === "loading" || state === "exporting" || !data} onClick={() => { void exportCsv(); }}>{state === "exporting" ? (locale === "th" ? "กำลัง Export…" : "Exporting…") : `Export CSV • ${tabs.find(([id]) => id === view)?.[locale === "th" ? 1 : 2]}`}</button>
+      <button type="button" className="primary-compact-button insight-export" disabled={state === "loading" || state === "exporting" || !data} onClick={() => { void exportCsv(); }}>{state === "exporting" ? (locale === "th" ? "กำลังสร้าง CSV…" : "Creating CSV…") : (locale === "th" ? "ส่งออกรายการขาย CSV" : "Export sales CSV")}</button>
     </div>
 
     <form className="insight-filter-bar" onSubmit={(event) => { event.preventDefault(); applyFilters(); }}>

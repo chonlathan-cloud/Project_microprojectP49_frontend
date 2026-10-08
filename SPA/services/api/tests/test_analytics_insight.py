@@ -1,4 +1,39 @@
+import csv
+import io
+
+from fastapi.testclient import TestClient
+
+from app.api.v1 import analytics as analytics_api
+from app.api.v1.analytics import SALES_CSV_FIELDS, _sales_csv_row
+from app.core.auth import require_admin_user
 from app.domains.analytics.insight import InsightFilters, build_insight_payload
+from app.infrastructure.firestore import get_firestore_client
+from app.main import app
+
+
+class _AuditDocument:
+    def __init__(self, events: list[dict[str, object]]) -> None:
+        self.events = events
+
+    def set(self, payload: dict[str, object]) -> None:
+        self.events.append(payload)
+
+
+class _AuditCollection:
+    def __init__(self, events: list[dict[str, object]]) -> None:
+        self.events = events
+
+    def document(self) -> _AuditDocument:
+        return _AuditDocument(self.events)
+
+
+class _AuditClient:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    def collection(self, name: str) -> _AuditCollection:
+        assert name == "audit_events"
+        return _AuditCollection(self.events)
 
 
 def test_insight_filters_and_summarizes_without_double_counting_package_revenue() -> None:
@@ -98,6 +133,18 @@ def test_insight_filters_and_summarizes_without_double_counting_package_revenue(
     assert bookings_result["summary"]["grossAmountSatang"] == 100_000
     assert bookings_result["summary"]["bookingCount"] == 1
     assert set(bookings_result["items"][0]["therapistNames"]) == {"หนึ่ง", "สอง"}
+    assert bookings_result["items"][0]["durationMinutes"] == 120
+
+    export_row = _sales_csv_row(bookings_result["items"][0])
+    assert tuple(export_row) == SALES_CSV_FIELDS
+    assert export_row["ราคาขายสุทธิ (บาท)"] == "900.00"
+    assert export_row["ค่ามือหมอ (บาท)"] == "600.00"
+    assert export_row["เงินร้านจากค่าบริการ (บาท)"] == "300.00"
+    assert export_row["ทิปรวม (บาท)"] == "100.00"
+    assert export_row["ทิปหมอ (บาท)"] == "80.00"
+    assert export_row["ทิปร้าน (บาท)"] == "20.00"
+    assert export_row["สถานะชำระเงิน"] == "จ่ายแล้ว"
+    assert export_row["สถานะสรุปค่าหมอ"] == "สรุปแล้ว"
 
     services_result = build_insight_payload(
         bookings=bookings,
@@ -187,3 +234,71 @@ def test_insight_marks_settlement_stale_after_booking_discount_version_changes()
 
     assert result["items"][0]["settlementState"] == "STALE"
     assert result["summary"]["therapistPaySatang"] == 0
+    export_row = _sales_csv_row(result["items"][0])
+    assert export_row["ค่ามือหมอ (บาท)"] == ""
+    assert export_row["เงินร้านจากค่าบริการ (บาท)"] == ""
+    assert export_row["ทิปหมอ (บาท)"] == ""
+    assert export_row["ทิปร้าน (บาท)"] == ""
+    assert export_row["สถานะสรุปค่าหมอ"] == "ต้องตรวจใหม่"
+
+
+def test_sales_csv_export_has_thai_filename_bom_safe_cells_and_audit(
+    monkeypatch,
+) -> None:
+    audit_client = _AuditClient()
+    monkeypatch.setattr(
+        analytics_api,
+        "_load_insight_payload",
+        lambda **_kwargs: {
+            "items": [
+                {
+                    "localDate": "2026-10-08",
+                    "localStartTime": "10:30",
+                    "durationMinutes": 90,
+                    "bookingId": "=unsafe-booking-id",
+                    "serviceNamesTh": ["นวดไทย"],
+                    "therapistNames": ["คุณนิด"],
+                    "netServiceAmountSatang": 45_000,
+                    "therapistPaySatang": 25_000,
+                    "tipAmountSatang": 5_000,
+                    "therapistTipSatang": 5_000,
+                    "paymentStatus": "PAID",
+                    "settlementState": "ALLOCATED",
+                }
+            ]
+        },
+    )
+    previous = app.dependency_overrides.copy()
+    app.dependency_overrides[require_admin_user] = lambda: {
+        "uid": "admin-001",
+        "role": "ADMIN",
+    }
+    app.dependency_overrides[get_firestore_client] = lambda: audit_client
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/v1/admin/analytics/insight:export",
+            json={
+                "dateFrom": "2026-10-01",
+                "dateTo": "2026-10-31",
+                "view": "BOOKINGS",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"\xef\xbb\xbf")
+    rows = list(csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"))))
+    assert tuple(rows[0]) == SALES_CSV_FIELDS
+    assert rows[0]["เลขที่รายการ"] == "'=unsafe-booking-id"
+    assert rows[0]["เงินร้านจากค่าบริการ (บาท)"] == "200.00"
+    disposition = response.headers["content-disposition"]
+    assert "filename*=UTF-8''" in disposition
+    assert (
+        "%E0%B8%A3%E0%B8%B2%E0%B8%A2%E0%B8%81%E0%B8%B2%E0%B8%A3"
+        "%E0%B8%82%E0%B8%B2%E0%B8%A2"
+    ) in disposition
+    assert audit_client.events[0]["eventType"] == "ANALYTICS_CSV_EXPORTED"
+    assert audit_client.events[0]["recordCount"] == 1

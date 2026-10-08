@@ -4,7 +4,9 @@ import csv
 import io
 from collections import defaultdict
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Annotated, Literal
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -1059,6 +1061,85 @@ INSIGHT_CSV_FIELDS: dict[InsightView, tuple[str, ...]] = {
     ),
 }
 
+SALES_CSV_FIELDS = (
+    "วันที่ให้บริการ",
+    "เวลาเริ่มนวด",
+    "ระยะเวลานวด (นาที)",
+    "เลขที่รายการ",
+    "รายการขาย",
+    "ชื่อหมอนวด",
+    "ราคาขายสุทธิ (บาท)",
+    "ค่ามือหมอ (บาท)",
+    "เงินร้านจากค่าบริการ (บาท)",
+    "ทิปรวม (บาท)",
+    "ทิปหมอ (บาท)",
+    "ทิปร้าน (บาท)",
+    "สถานะชำระเงิน",
+    "สถานะสรุปค่าหมอ",
+)
+
+PAYMENT_STATUS_TH = {
+    "PAID": "จ่ายแล้ว",
+    "DUE": "ค้างชำระ",
+    "UNAVAILABLE": "ไม่มีข้อมูลการชำระ",
+    "VOIDED": "ยกเลิกการชำระ",
+}
+SETTLEMENT_STATUS_TH = {
+    "ALLOCATED": "สรุปแล้ว",
+    "PENDING": "รอสรุป",
+    "STALE": "ต้องตรวจใหม่",
+}
+
+
+def _baht_csv(value: object) -> str:
+    return format(Decimal(int(value or 0)) / Decimal(100), ".2f")
+
+
+def _spreadsheet_safe(value: object) -> str:
+    text = str(value or "")
+    return f"'{text}" if text.startswith(("=", "+", "-", "@")) else text
+
+
+def _joined_csv(value: object) -> str:
+    if not isinstance(value, list):
+        return _spreadsheet_safe(value)
+    return _spreadsheet_safe(" | ".join(str(item) for item in value if item))
+
+
+def _sales_csv_row(item: dict[str, object]) -> dict[str, object]:
+    allocated = item.get("settlementState") == "ALLOCATED"
+    therapist_pay = int(item.get("therapistPaySatang", 0))
+    therapist_tip = int(item.get("therapistTipSatang", 0))
+    net_service = int(item.get("netServiceAmountSatang", 0))
+    total_tip = int(item.get("tipAmountSatang", 0))
+    return {
+        "วันที่ให้บริการ": _spreadsheet_safe(item.get("localDate")),
+        "เวลาเริ่มนวด": _spreadsheet_safe(item.get("localStartTime")),
+        "ระยะเวลานวด (นาที)": int(item.get("durationMinutes", 0)),
+        "เลขที่รายการ": _spreadsheet_safe(item.get("bookingId")),
+        "รายการขาย": _joined_csv(item.get("serviceNamesTh")),
+        "ชื่อหมอนวด": _joined_csv(item.get("therapistNames")) if allocated else "",
+        "ราคาขายสุทธิ (บาท)": _baht_csv(net_service),
+        "ค่ามือหมอ (บาท)": _baht_csv(therapist_pay) if allocated else "",
+        "เงินร้านจากค่าบริการ (บาท)": (
+            _baht_csv(net_service - therapist_pay) if allocated else ""
+        ),
+        "ทิปรวม (บาท)": _baht_csv(total_tip),
+        "ทิปหมอ (บาท)": _baht_csv(therapist_tip) if allocated else "",
+        "ทิปร้าน (บาท)": _baht_csv(total_tip - therapist_tip) if allocated else "",
+        "สถานะชำระเงิน": PAYMENT_STATUS_TH.get(
+            str(item.get("paymentStatus")), str(item.get("paymentStatus") or "ไม่ทราบสถานะ")
+        ),
+        "สถานะสรุปค่าหมอ": SETTLEMENT_STATUS_TH.get(
+            str(item.get("settlementState")),
+            str(item.get("settlementState") or "ไม่ทราบสถานะ"),
+        ),
+    }
+
+
+def _attachment_header(filename: str, fallback: str) -> str:
+    return f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{quote(filename)}'
+
 
 @router.post("/analytics/insight:export")
 def export_analytics_insight(
@@ -1093,12 +1174,15 @@ def export_analytics_insight(
     )
     items = payload["items"]
     rows = items if isinstance(items, list) else []
-    fields = INSIGHT_CSV_FIELDS[request.view]
-    output = io.StringIO()
+    fields = SALES_CSV_FIELDS if request.view == "BOOKINGS" else INSIGHT_CSV_FIELDS[request.view]
+    output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for item in rows:
         if not isinstance(item, dict):
+            continue
+        if request.view == "BOOKINGS":
+            writer.writerow(_sales_csv_row(item))
             continue
         writer.writerow(
             {
@@ -1127,10 +1211,17 @@ def export_analytics_insight(
         }
     )
     filename = (
-        f"spa49-insight-{request.view.lower()}-{request.date_from}-{request.date_to}.csv"
+        f"รายการขาย_{request.date_from}_ถึง_{request.date_to}.csv"
+        if request.view == "BOOKINGS"
+        else f"spa49-insight-{request.view.lower()}-{request.date_from}-{request.date_to}.csv"
+    )
+    fallback = (
+        f"spa49-sales-{request.date_from}-to-{request.date_to}.csv"
+        if request.view == "BOOKINGS"
+        else filename
     )
     return Response(
         content="\ufeff" + output.getvalue(),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": _attachment_header(filename, fallback)},
     )

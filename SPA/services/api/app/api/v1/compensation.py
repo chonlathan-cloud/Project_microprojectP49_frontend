@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 from collections import defaultdict
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Annotated, Literal
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from google.cloud import firestore
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -83,6 +88,14 @@ class PayoutCreate(ApiModel):
     payment_method: Literal["CASH", "TRANSFER"]
     note: str = Field(default="", max_length=300)
     command_id: str = Field(min_length=8, max_length=160)
+
+
+class CompensationExportInput(ApiModel):
+    branch_id: Literal["branch_001"] = "branch_001"
+    date_from: str
+    date_to: str
+    report_type: Literal["DAILY_DETAIL", "THERAPIST_SUMMARY"]
+    therapist_id: str | None = Field(default=None, min_length=1, max_length=160)
 
 
 def _require_admin(actor: dict[str, object]) -> None:
@@ -384,6 +397,8 @@ def _build_compensation_payload(
                         "attendanceVersion": int(attendance.get("version", 0)),
                         "guaranteeRateSatang": guarantee_rate,
                         "guaranteeTopUpSatang": calculated.guarantee_top_up_satang,
+                        "serviceCount": int(raw["serviceCount"]),
+                        "durationMinutes": int(raw["durationMinutes"]),
                         "servicePaySatang": calculated.service_pay_satang,
                         "tipSatang": calculated.tip_satang,
                         "shopAdjustmentSatang": calculated.shop_adjustment_satang,
@@ -535,6 +550,143 @@ def _load_payload(
     )
 
 
+DAILY_COMPENSATION_CSV_FIELDS = (
+    "วันที่",
+    "ชื่อหมอนวด",
+    "สถานะมาทำงาน",
+    "จำนวนงาน",
+    "เวลานวดรวม (นาที)",
+    "ค่ามือจากบริการ (บาท)",
+    "ค่าประกันมือต่อวัน (บาท)",
+    "เงินเติมค่าประกันจากร้าน (บาท)",
+    "โบนัส/รายการปรับปรุงจากร้าน (บาท)",
+    "ทิปหมอ (บาท)",
+    "รายได้หมอรวมของวัน (บาท)",
+    "จ่ายแล้ว (บาท)",
+    "ค้างจ่าย (บาท)",
+)
+
+SUMMARY_COMPENSATION_CSV_FIELDS = (
+    "ชื่อหมอนวด",
+    "จำนวนวันที่มาทำงาน",
+    "จำนวนงาน",
+    "เวลานวดรวม (นาที)",
+    "ค่ามือจากบริการ (บาท)",
+    "เงินเติมค่าประกันจากร้าน (บาท)",
+    "โบนัส/รายการปรับปรุง (บาท)",
+    "ทิปหมอ (บาท)",
+    "รวมรายได้หมอ (บาท)",
+    "จ่ายแล้ว (บาท)",
+    "ค้างจ่าย (บาท)",
+    "สถานะการจ่าย",
+)
+
+PAYOUT_STATUS_TH = {
+    "PAID": "จ่ายแล้ว",
+    "PARTIAL": "จ่ายบางส่วน",
+    "UNPAID": "ยังไม่จ่าย",
+}
+
+
+def _baht_csv(value: object) -> str:
+    return format(Decimal(int(value or 0)) / Decimal(100), ".2f")
+
+
+def _spreadsheet_safe(value: object) -> str:
+    text = str(value or "")
+    return f"'{text}" if text.startswith(("=", "+", "-", "@")) else text
+
+
+def _compensation_export_rows(
+    payload: dict[str, object],
+    report_type: Literal["DAILY_DETAIL", "THERAPIST_SUMMARY"],
+    therapist_id: str | None = None,
+) -> tuple[tuple[str, ...], list[dict[str, object]]]:
+    summary = [item for item in payload.get("summary", []) if isinstance(item, dict)]
+    if therapist_id:
+        summary = [item for item in summary if item.get("therapistId") == therapist_id]
+        if not summary:
+            raise NotFoundDomainError("Therapist not found")
+
+    if report_type == "DAILY_DETAIL":
+        rows: list[dict[str, object]] = []
+        for therapist in summary:
+            therapist_name = _spreadsheet_safe(therapist.get("therapistName"))
+            for day in therapist.get("days", []):
+                if not isinstance(day, dict):
+                    continue
+                rows.append(
+                    {
+                        "วันที่": _spreadsheet_safe(day.get("localDate")),
+                        "ชื่อหมอนวด": therapist_name,
+                        "สถานะมาทำงาน": "มาทำงาน" if day.get("present") else "ไม่ได้มาทำงาน",
+                        "จำนวนงาน": int(day.get("serviceCount", 0)),
+                        "เวลานวดรวม (นาที)": int(day.get("durationMinutes", 0)),
+                        "ค่ามือจากบริการ (บาท)": _baht_csv(day.get("servicePaySatang")),
+                        "ค่าประกันมือต่อวัน (บาท)": _baht_csv(
+                            day.get("guaranteeRateSatang")
+                        ),
+                        "เงินเติมค่าประกันจากร้าน (บาท)": _baht_csv(
+                            day.get("guaranteeTopUpSatang")
+                        ),
+                        "โบนัส/รายการปรับปรุงจากร้าน (บาท)": _baht_csv(
+                            day.get("shopAdjustmentSatang")
+                        ),
+                        "ทิปหมอ (บาท)": _baht_csv(day.get("tipSatang")),
+                        "รายได้หมอรวมของวัน (บาท)": _baht_csv(
+                            day.get("totalEarnedSatang")
+                        ),
+                        "จ่ายแล้ว (บาท)": _baht_csv(day.get("paidSatang")),
+                        "ค้างจ่าย (บาท)": _baht_csv(day.get("outstandingSatang")),
+                    }
+                )
+        rows.sort(key=lambda item: (str(item["วันที่"]), str(item["ชื่อหมอนวด"])))
+        return DAILY_COMPENSATION_CSV_FIELDS, rows
+
+    rows = []
+    for therapist in summary:
+        has_activity = any(
+            int(therapist.get(key, 0)) != 0
+            for key in (
+                "attendedDays",
+                "serviceCount",
+                "totalEarnedSatang",
+                "paidSatang",
+                "outstandingSatang",
+            )
+        )
+        if not therapist_id and not has_activity:
+            continue
+        rows.append(
+            {
+                "ชื่อหมอนวด": _spreadsheet_safe(therapist.get("therapistName")),
+                "จำนวนวันที่มาทำงาน": int(therapist.get("attendedDays", 0)),
+                "จำนวนงาน": int(therapist.get("serviceCount", 0)),
+                "เวลานวดรวม (นาที)": int(therapist.get("durationMinutes", 0)),
+                "ค่ามือจากบริการ (บาท)": _baht_csv(therapist.get("servicePaySatang")),
+                "เงินเติมค่าประกันจากร้าน (บาท)": _baht_csv(
+                    therapist.get("guaranteeTopUpSatang")
+                ),
+                "โบนัส/รายการปรับปรุง (บาท)": _baht_csv(
+                    therapist.get("shopAdjustmentSatang")
+                ),
+                "ทิปหมอ (บาท)": _baht_csv(therapist.get("tipSatang")),
+                "รวมรายได้หมอ (บาท)": _baht_csv(therapist.get("totalEarnedSatang")),
+                "จ่ายแล้ว (บาท)": _baht_csv(therapist.get("paidSatang")),
+                "ค้างจ่าย (บาท)": _baht_csv(therapist.get("outstandingSatang")),
+                "สถานะการจ่าย": PAYOUT_STATUS_TH.get(
+                    str(therapist.get("payoutState")),
+                    str(therapist.get("payoutState") or "ไม่ทราบสถานะ"),
+                ),
+            }
+        )
+    return SUMMARY_COMPENSATION_CSV_FIELDS, rows
+
+
+def _attachment_header(filename: str, fallback: str) -> str:
+    return f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{quote(filename)}'
+
+
 @router.get("/therapist-compensation")
 def get_therapist_compensation(
     actor: Annotated[dict[str, object], Depends(require_admin_user)],
@@ -546,6 +698,63 @@ def get_therapist_compensation(
     _require_admin(actor)
     start, end = _parse_range(date_from, date_to)
     return _load_payload(client, branch_id=branch_id, start=start, end=end)
+
+
+@router.post("/therapist-compensation:export")
+def export_therapist_compensation(
+    request: CompensationExportInput,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> Response:
+    _require_admin(actor)
+    start, end = _parse_range(request.date_from, request.date_to)
+    payload = _load_payload(
+        client,
+        branch_id=request.branch_id,
+        start=start,
+        end=end,
+    )
+    fields, rows = _compensation_export_rows(
+        payload,
+        request.report_type,
+        request.therapist_id,
+    )
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+
+    client.collection("audit_events").document().set(
+        {
+            "eventType": "THERAPIST_COMPENSATION_CSV_EXPORTED",
+            "actorId": actor["uid"],
+            "actorType": "ADMIN_USER",
+            "branchId": request.branch_id,
+            "reportType": request.report_type,
+            "dateFrom": request.date_from,
+            "dateTo": request.date_to,
+            "therapistId": request.therapist_id,
+            "recordCount": len(rows),
+            "createdAt": datetime.now(UTC),
+        }
+    )
+    stem = (
+        "ค่าตอบแทนหมอรายวัน"
+        if request.report_type == "DAILY_DETAIL"
+        else "สรุปยอดจ่ายหมอ"
+    )
+    fallback_stem = (
+        "therapist-compensation-daily"
+        if request.report_type == "DAILY_DETAIL"
+        else "therapist-compensation-summary"
+    )
+    filename = f"{stem}_{request.date_from}_ถึง_{request.date_to}.csv"
+    fallback = f"{fallback_stem}-{request.date_from}-to-{request.date_to}.csv"
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": _attachment_header(filename, fallback)},
+    )
 
 
 @router.patch("/therapists/{therapist_id}/compensation-profile")
