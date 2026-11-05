@@ -14,6 +14,7 @@ from app.core.errors import (
     ConflictDomainError,
     DependencyUnavailable,
     NotFoundDomainError,
+    TherapistHasOpenBookings,
     ValidationDomainError,
 )
 from app.domains.catalog.images import MAX_UPLOAD_BYTES, OUTPUT_SIZE, normalize_service_image
@@ -53,6 +54,12 @@ class TherapistInput(ApiModel):
 class AssignmentInput(ApiModel):
     therapist_ids: list[str] = Field(min_length=1, max_length=2)
     expected_version: int = Field(ge=1)
+
+
+class TherapistStatusUpdate(ApiModel):
+    active: bool
+    expected_version: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=300)
 
 
 class ServiceUpdate(ApiModel):
@@ -248,6 +255,95 @@ async def create_therapist(
     return {"therapistId": therapist_id, "version": 1}
 
 
+@router.patch("/therapists/{therapist_id}/status")
+def update_therapist_status(
+    therapist_id: str,
+    request: TherapistStatusUpdate,
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+) -> dict[str, object]:
+    _require_admin_role(actor)
+    reason = request.reason.strip()
+    if not reason:
+        raise ValidationDomainError("A status change reason is required")
+    ref = client.collection("therapists").document(therapist_id)
+
+    @firestore.transactional
+    def write(tx: firestore.Transaction) -> dict[str, object]:
+        snapshot = ref.get(transaction=tx)
+        if not snapshot.exists:
+            raise NotFoundDomainError("Therapist not found")
+        data = snapshot.to_dict() or {}
+        if int(data.get("version", 1)) != request.expected_version:
+            raise ConflictDomainError("Therapist changed; reload before trying again")
+        if bool(data.get("active")) == request.active:
+            return {
+                "therapistId": therapist_id,
+                "active": request.active,
+                "version": request.expected_version,
+            }
+        if not request.active:
+            # Single-field queries need no new composite index. Include add-on
+            # assignments, whose therapist may differ from the initial roster.
+            open_bookings = list(
+                client.collection("bookings")
+                .where("status", "in", ["CONFIRMED", "IN_SERVICE"])
+                .stream(transaction=tx)
+            )
+            assigned_lines = list(
+                client.collection("booking_line_items")
+                .where("assignment.therapistId", "==", therapist_id)
+                .stream(transaction=tx)
+            )
+            line_booking_ids = {
+                (item.to_dict() or {}).get("bookingDocId") for item in assigned_lines
+            }
+            blockers = [
+                str(booking.get("publicBookingId") or item.id)
+                for item in open_bookings
+                if (booking := item.to_dict() or {}).get("branchId") == data.get("branchId")
+                and (
+                    therapist_id in (booking.get("therapistIds") or [])
+                    or item.id in line_booking_ids
+                )
+            ]
+            if blockers:
+                raise TherapistHasOpenBookings(
+                    "Reassign or finish open bookings before changing status: "
+                    + ", ".join(sorted(blockers))
+                )
+        now = datetime.now(UTC)
+        version = request.expected_version + 1
+        tx.update(
+            ref,
+            {
+                "active": request.active,
+                "version": version,
+                "updatedAt": now,
+                "statusChangedAt": now,
+                "statusChangedBy": actor["uid"],
+                "statusReason": reason,
+            },
+        )
+        tx.set(
+            client.collection("audit_events").document(),
+            {
+                "eventType": "THERAPIST_STATUS_CHANGED",
+                "targetId": therapist_id,
+                "branchId": data.get("branchId"),
+                "oldActive": bool(data.get("active")),
+                "newActive": request.active,
+                "reason": reason,
+                "actorType": "ADMIN_USER",
+                "actorId": actor["uid"],
+                "createdAt": now,
+            },
+        )
+        return {"therapistId": therapist_id, "active": request.active, "version": version}
+
+    return write(client.transaction())
+
+
 @router.put("/bookings/{booking_id}/assignments")
 async def assign_therapists(
     booking_id: str,
@@ -261,45 +357,63 @@ async def assign_therapists(
     if not matches:
         raise NotFoundDomainError("Booking not found")
     ref = matches[0].reference
-    data = matches[0].to_dict() or {}
-    if int(data.get("version", 1)) != request.expected_version:
-        raise ConflictDomainError("Booking changed; reload before trying again")
-    if len(request.therapist_ids) != int(data.get("pax", 1)):
-        raise ValidationDomainError("Every participant requires one therapist assignment")
-    if len(set(request.therapist_ids)) != len(request.therapist_ids):
-        raise ValidationDomainError(
-            "Every participant in a multi-guest Booking requires a different therapist"
+
+    @firestore.transactional
+    def write(tx: firestore.Transaction) -> dict[str, object]:
+        data = ref.get(transaction=tx).to_dict() or {}
+        if int(data.get("version", 1)) != request.expected_version:
+            raise ConflictDomainError("Booking changed; reload before trying again")
+        if data.get("status") != "CONFIRMED":
+            raise ConflictDomainError("Only confirmed bookings can be assigned")
+        if len(request.therapist_ids) != int(data.get("pax", 1)):
+            raise ValidationDomainError("Every participant requires one therapist assignment")
+        if len(set(request.therapist_ids)) != len(request.therapist_ids):
+            raise ValidationDomainError("Every participant requires a different therapist")
+        therapists = [
+            client.collection("therapists").document(item).get(transaction=tx)
+            for item in request.therapist_ids
+        ]
+        if any(not item.exists or not (item.to_dict() or {}).get("active") for item in therapists):
+            raise ValidationDomainError("Every assigned therapist must be active")
+        if any(
+            (item.to_dict() or {}).get("branchId") != data.get("branchId", "branch_001")
+            for item in therapists
+        ):
+            raise ValidationDomainError(
+                "Every assigned therapist must belong to the Booking branch"
+            )
+        version = request.expected_version + 1
+        now = datetime.now(UTC)
+        names = ", ".join(str((item.to_dict() or {}).get("displayName")) for item in therapists)
+        tx.update(
+            ref,
+            {
+                "therapistIds": request.therapist_ids,
+                "therapistName": names,
+                "assignmentState": "ASSIGNED",
+                "version": version,
+                "updatedAt": now,
+            },
         )
-    therapists = [
-        client.collection("therapists").document(item).get() for item in request.therapist_ids
-    ]
-    if any(not item.exists or not (item.to_dict() or {}).get("active") for item in therapists):
-        raise ValidationDomainError("Every assigned therapist must be active")
-    if any(
-        (item.to_dict() or {}).get("branchId")
-        and (item.to_dict() or {}).get("branchId") != data.get("branchId", "branch_001")
-        for item in therapists
-    ):
-        raise ValidationDomainError("Every assigned therapist must belong to the Booking branch")
-    next_version = request.expected_version + 1
-    names = [(item.to_dict() or {}).get("displayName") for item in therapists]
-    ref.update(
-        {
-            "therapistIds": request.therapist_ids,
-            "therapistName": ", ".join(str(name) for name in names),
+        tx.set(
+            client.collection("audit_events").document(),
+            {
+                "eventType": "THERAPISTS_ASSIGNED",
+                "targetId": booking_id,
+                "actorType": "ADMIN_USER",
+                "actorId": actor["uid"],
+                "createdAt": now,
+            },
+        )
+        return {
+            "bookingId": booking_id,
             "assignmentState": "ASSIGNED",
-            "version": next_version,
-            "updatedAt": datetime.now(UTC),
+            "therapistIds": request.therapist_ids,
+            "therapistName": names,
+            "version": version,
         }
-    )
-    _audit(client, actor=actor, event_type="THERAPISTS_ASSIGNED", target_id=booking_id)
-    return {
-        "bookingId": booking_id,
-        "assignmentState": "ASSIGNED",
-        "therapistIds": request.therapist_ids,
-        "therapistName": ", ".join(str(name) for name in names),
-        "version": next_version,
-    }
+
+    return write(client.transaction())
 
 
 @router.get("/services")

@@ -930,9 +930,29 @@ Settlement validity compares `sourceBookingVersion`, discount/net snapshots, and
 
 `PUT /api/v1/admin/bookings/{bookingId}/settlement` requires `expectedVersion` and exactly one allocation per Booking Participant. Amounts are non-negative whole-baht satang values. Positive therapist pay or tip requires a valid therapist; therapist tip shares cannot exceed the Booking tip. The service share is `netServiceAmountSatang - therapistPaySatang`; a negative result is persisted with an exception flag rather than rejected. Every write appends `SERVICE_SETTLEMENT_RECORDED` audit evidence and updates only the Booking settlement projection fields, not the Booking lifecycle version.
 
+### Therapist employment status
+
+`active` remains the single source of current employment status; daily attendance is separate.
+`PATCH /api/v1/admin/therapists/{therapistId}/status` requires `ADMIN`, `active`,
+`expectedVersion`, and a non-blank reason. One Firestore transaction verifies the therapist
+version, blocks departure while `CONFIRMED` or `IN_SERVICE` Bookings reference the therapist
+(including add-on line assignments), updates status metadata/version, and records
+`THERAPIST_STATUS_CHANGED`. Existing therapist IDs, compensation terms, and financial history
+are retained on departure and reactivation. Assignment now reads active therapist records and
+writes Booking plus audit in one transaction, preventing concurrent deactivation races.
+
 ### Therapist compensation ledger and payout
 
-`GET /api/v1/admin/therapist-compensation` is `ADMIN`-only and accepts `dateFrom`, `dateTo`, and `branchId`. The inclusive local-date range is limited to 93 days. It joins active/inactive therapist records, effective guarantee rates, attendance, service settlements, shop adjustments, and payouts on the server. The response contains therapist summaries, daily rows, source-tagged ledger entries, payout history, and totals; the browser must not recompute authoritative outstanding amounts.
+`GET /api/v1/admin/therapist-compensation` is `ADMIN`-only and accepts `dateFrom`, `dateTo`, and `branchId`. The inclusive local-date range is limited to 93 days. It joins active/inactive therapist records, effective guarantee rates, attendance, service settlements, shop adjustments, and payouts on the server. The response contains therapist summaries, daily rows, source-tagged ledger entries, payout history, all-staff `totals`, and `activeTotals` for the daily working roster; the browser must not recompute authoritative outstanding amounts.
+
+`GET /api/v1/admin/therapist-compensation/former-outstanding` is ADMIN-only and returns
+non-zero all-history balances for inactive therapists, including old unpaid service/tip/guarantee
+amounts and overpayments. Collection reads are batched; calculation traverses dates with source
+records rather than every calendar day. Each row retains the full original payout period,
+including legacy payments without daily splits. Payout still uses the existing 93-day limit:
+longer histories open the ledger for explicit period review. This endpoint reads branch financial
+history on demand; a maintained balance projection should replace it if branch history makes
+these reads operationally expensive.
 
 Daily compensation is calculated as:
 

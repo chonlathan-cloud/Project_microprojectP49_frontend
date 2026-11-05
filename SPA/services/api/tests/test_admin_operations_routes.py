@@ -389,6 +389,9 @@ class AssignmentBookingReference:
     def __init__(self, database: "AssignmentFirestore") -> None:
         self.database = database
 
+    def get(self, transaction=None):
+        return AssignmentSnapshot(self.database.booking, self)
+
     def update(self, value: dict[str, object]) -> None:
         self.database.booking.update(value)
 
@@ -413,7 +416,7 @@ class AssignmentDocument:
         self.database = database
         self.document_id = document_id
 
-    def get(self) -> AssignmentSnapshot:
+    def get(self, transaction=None) -> AssignmentSnapshot:
         return AssignmentSnapshot(self.database.therapists[self.document_id])
 
     def set(self, value: dict[str, object]) -> None:
@@ -451,21 +454,34 @@ class AssignmentFirestore:
     def __init__(self) -> None:
         self.booking: dict[str, object] = {
             "publicBookingId": "BK-001",
+            "branchId": "branch_001",
+            "status": "CONFIRMED",
             "pax": 2,
             "version": 4,
         }
         self.therapists: dict[str, dict[str, object]] = {
-            "therapist_1": {"displayName": "คุณนิด", "active": True},
-            "therapist_2": {"displayName": "คุณอ้อย", "active": True},
+            "therapist_1": {"displayName": "คุณนิด", "active": True, "branchId": "branch_001"},
+            "therapist_2": {"displayName": "คุณอ้อย", "active": True, "branchId": "branch_001"},
         }
         self.audits: list[dict[str, object]] = []
+
+    def transaction(self):
+        return type(
+            "Transaction",
+            (),
+            {
+                "update": lambda self, ref, data: ref.update(data),
+                "set": lambda self, ref, data: ref.set(data),
+            },
+        )()
 
     def collection(self, name: str) -> AssignmentCollection:
         assert name in {"bookings", "therapists", "audit_events"}
         return AssignmentCollection(self, name)
 
 
-def test_staff_assignment_updates_booking_projection() -> None:
+def test_staff_assignment_updates_booking_projection(monkeypatch) -> None:
+    monkeypatch.setattr(firestore, "transactional", lambda fn: lambda tx: fn(tx))
     database = AssignmentFirestore()
     previous_auth = app.dependency_overrides.get(require_admin_user)
     previous_firestore = app.dependency_overrides.get(get_firestore_client)
@@ -492,7 +508,8 @@ def test_staff_assignment_updates_booking_projection() -> None:
     assert database.audits[-1]["eventType"] == "THERAPISTS_ASSIGNED"
 
 
-def test_assignment_rejects_same_therapist_for_two_participants() -> None:
+def test_assignment_rejects_same_therapist_for_two_participants(monkeypatch) -> None:
+    monkeypatch.setattr(firestore, "transactional", lambda fn: lambda tx: fn(tx))
     database = AssignmentFirestore()
     previous_auth = app.dependency_overrides.get(require_admin_user)
     previous_firestore = app.dependency_overrides.get(get_firestore_client)

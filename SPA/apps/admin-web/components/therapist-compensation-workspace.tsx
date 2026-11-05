@@ -65,6 +65,7 @@ type CompensationPayload = {
   dateFrom: string;
   dateTo: string;
   summary: CompensationRow[];
+  activeTotals: CompensationPayload["totals"];
   entries: CompensationEntry[];
   payouts: Array<{
     payoutId: string;
@@ -106,7 +107,7 @@ type Editor =
   | { kind: "EDIT_ADJUSTMENT"; entry: CompensationEntry }
   | { kind: "EDIT_SERVICE"; entry: CompensationEntry; settlement: Settlement }
   | { kind: "EDIT_PROFILE"; row: CompensationRow }
-  | { kind: "PAYOUT"; row: CompensationRow };
+  | { kind: "PAYOUT"; row: CompensationRow; dateFrom?: string; dateTo?: string };
 
 function bangkokToday(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -253,12 +254,16 @@ function CompensationEditor({
   </div>;
 }
 
-export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: CompensationTab; locale: Locale; user: User }) {
+export function TherapistCompensationWorkspace({ tab, locale, user, statusFilter, onTabChange, onProfilesChanged }: {
+  tab: CompensationTab; locale: Locale; user: User; statusFilter: "ACTIVE" | "INACTIVE" | "ALL";
+  onTabChange: (tab: CompensationTab) => void; onProfilesChanged: () => void;
+}) {
   const { notify, requestConfirmation } = useAdminFeedback();
   const today = bangkokToday();
   const [dateFrom, setDateFrom] = useState(tab === "TODAY" || tab === "PROFILES" ? today : daysBefore(today, 6));
   const [dateTo, setDateTo] = useState(today);
   const [payload, setPayload] = useState<CompensationPayload | null>(null);
+  const [formerBalances, setFormerBalances] = useState<Array<CompensationRow & { dateFrom: string; dateTo: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -267,25 +272,45 @@ export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: Com
   const [therapistFilter, setTherapistFilter] = useState("ALL");
   const [editor, setEditor] = useState<Editor | null>(null);
   const closeEditor = useCallback(() => setEditor(null), []);
+  const loadRequest = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequest.current;
     setLoading(true);
     setError("");
     try {
-      const result = await adminApi<CompensationPayload>(user, `/therapist-compensation?dateFrom=${encodeURIComponent(dateFrom)}&dateTo=${encodeURIComponent(dateTo)}&branchId=branch_001`);
+      const [result, former] = await Promise.all([
+        adminApi<CompensationPayload>(user, `/therapist-compensation?dateFrom=${encodeURIComponent(dateFrom)}&dateTo=${encodeURIComponent(tab === "TODAY" ? dateFrom : dateTo)}&branchId=branch_001`),
+        tab === "TODAY" ? adminApi<{ items: Array<CompensationRow & { dateFrom: string; dateTo: string }> }>(user, "/therapist-compensation/former-outstanding?branchId=branch_001") : Promise.resolve(null),
+      ]);
+      if (requestId !== loadRequest.current) return;
       setPayload(result);
+      if (former) setFormerBalances(former.items);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Therapist compensation unavailable");
+      if (requestId === loadRequest.current) setError(caught instanceof Error ? caught.message : "Therapist compensation unavailable");
     } finally {
-      setLoading(false);
+      if (requestId === loadRequest.current) setLoading(false);
     }
-  }, [dateFrom, dateTo, user]);
+  }, [dateFrom, dateTo, user, tab]);
 
-  useEffect(() => { queueMicrotask(() => { void load(); }); }, [load]);
+  useEffect(() => { queueMicrotask(() => { void load(); }); return () => { loadRequest.current += 1; }; }, [load]);
 
   const filteredEntries = useMemo(() => (payload?.entries ?? []).filter((entry) =>
     (sourceFilter === "ALL" || entry.source === sourceFilter)
     && (therapistFilter === "ALL" || entry.therapistId === therapistFilter)), [payload, sourceFilter, therapistFilter]);
+
+  const activeRows = (payload?.summary ?? []).filter((row) => row.active);
+  const profileRows = (payload?.summary ?? []).filter((row) => statusFilter === "ALL" || row.active === (statusFilter === "ACTIVE"));
+  const selectedLedgerRow = payload?.summary.find((row) => row.therapistId === therapistFilter);
+  const activeTotals = payload?.activeTotals;
+
+  function openFormerHistory(row: CompensationRow & { dateFrom: string; dateTo: string }) {
+    setTherapistFilter(row.therapistId);
+    setDateFrom(row.dateFrom);
+    const latest = daysBefore(row.dateFrom, -92);
+    setDateTo(row.dateTo < latest ? row.dateTo : latest);
+    onTabChange("LEDGER");
+  }
 
   async function markAttendance(row: CompensationRow, present: boolean) {
     const day = row.days.find((item) => item.localDate === dateFrom);
@@ -319,9 +344,9 @@ export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: Com
         body: JSON.stringify({
           branchId: "branch_001",
           dateFrom,
-          dateTo,
+          dateTo: tab === "TODAY" ? dateFrom : dateTo,
           reportType,
-          ...(therapistFilter === "ALL" ? {} : { therapistId: therapistFilter }),
+          ...(tab !== "LEDGER" || therapistFilter === "ALL" ? {} : { therapistId: therapistFilter }),
         }),
       });
       notify({
@@ -355,9 +380,11 @@ export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: Com
       } else if (editor.kind === "EDIT_PROFILE") {
         await adminApi(user, `/therapists/${encodeURIComponent(editor.row.therapistId)}/compensation-profile`, { method: "PATCH", body: JSON.stringify({ dailyGuaranteeSatang: values.amountBaht * 100, effectiveFrom: values.effectiveFrom, expectedVersion: editor.row.profileVersion, reason: values.reason }) });
       } else if (editor.kind === "PAYOUT") {
-        const confirmation = await requestConfirmation({ title: locale === "th" ? "ยืนยันการจ่ายเงินให้หมอ" : "Confirm therapist payout", message: locale === "th" ? `บันทึกจ่าย ${baht(editor.row.outstandingSatang, locale)} ให้ ${editor.row.therapistName} สำหรับ ${dateLabel(dateFrom, locale)} ถึง ${dateLabel(dateTo, locale)}` : `Record ${baht(editor.row.outstandingSatang, locale)} paid to ${editor.row.therapistName} for ${dateLabel(dateFrom, locale)} to ${dateLabel(dateTo, locale)}.`, confirmLabel: locale === "th" ? "ยืนยันว่าจ่ายแล้ว" : "Confirm paid", cancelLabel: locale === "th" ? "กลับไปตรวจ" : "Review again" });
+        const payoutFrom = editor.dateFrom ?? dateFrom;
+        const payoutTo = editor.dateTo ?? (tab === "TODAY" ? dateFrom : dateTo);
+        const confirmation = await requestConfirmation({ title: locale === "th" ? "ยืนยันการจ่ายเงินให้หมอ" : "Confirm therapist payout", message: locale === "th" ? `บันทึกจ่าย ${baht(editor.row.outstandingSatang, locale)} ให้ ${editor.row.therapistName} สำหรับ ${dateLabel(payoutFrom, locale)} ถึง ${dateLabel(payoutTo, locale)}` : `Record ${baht(editor.row.outstandingSatang, locale)} paid to ${editor.row.therapistName} for ${dateLabel(payoutFrom, locale)} to ${dateLabel(payoutTo, locale)}.`, confirmLabel: locale === "th" ? "ยืนยันว่าจ่ายแล้ว" : "Confirm paid", cancelLabel: locale === "th" ? "กลับไปตรวจ" : "Review again" });
         if (!confirmation.confirmed) { setSaving(false); return; }
-        await adminApi(user, "/therapist-compensation/payouts", { method: "POST", body: JSON.stringify({ branchId: "branch_001", therapistId: editor.row.therapistId, dateFrom, dateTo, paymentMethod: values.paymentMethod, note: values.reason, commandId: crypto.randomUUID() }) });
+        await adminApi(user, "/therapist-compensation/payouts", { method: "POST", body: JSON.stringify({ branchId: "branch_001", therapistId: editor.row.therapistId, dateFrom: payoutFrom, dateTo: payoutTo, paymentMethod: values.paymentMethod, note: values.reason, commandId: crypto.randomUUID() }) });
       } else {
         const allocation = editor.settlement.allocations.find((item) => item.bookingLineItemId === editor.entry.bookingLineItemId);
         if (!allocation || !editor.entry.bookingId) throw new Error("Service allocation is unavailable");
@@ -366,6 +393,7 @@ export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: Com
       notify({ tone: "success", title: locale === "th" ? "บันทึกข้อมูลค่าหมอแล้ว" : "Therapist compensation saved" });
       setEditor(null);
       await load();
+      if (editor.kind === "EDIT_PROFILE") onProfilesChanged();
     } catch (caught) {
       notify({ tone: "error", title: locale === "th" ? "บันทึกข้อมูลไม่สำเร็จ" : "Save failed", message: caught instanceof Error ? caught.message : undefined });
     } finally { setSaving(false); }
@@ -380,14 +408,15 @@ export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: Com
     </div>
   </div>;
 
-  if (loading && !payload) return <><div className="module-state" role="status">{locale === "th" ? "กำลังโหลดค่าหมอ…" : "Loading therapist compensation…"}</div></>;
-  if (error && !payload) return <><div className="module-state error" role="alert">{error}</div></>;
+  if (loading) return <div className="module-state" role="status">{locale === "th" ? "กำลังโหลดค่าหมอ…" : "Loading therapist compensation…"}</div>;
+  if (error) return <div className="module-state error" role="alert">{error} <button type="button" className="table-action" onClick={() => { void load(); }}>{locale === "th" ? "ลองใหม่" : "Retry"}</button></div>;
 
   if (tab === "LEDGER") return <section className="module-panel compensation-panel" aria-labelledby="compensation-ledger-title">
     <div className="panel-title"><div><h2 id="compensation-ledger-title">{locale === "th" ? "รายการค่ามือและเงินจากร้าน" : "Compensation ledger"}</h2><small>{locale === "th" ? "ค่าจากบริการเชื่อมกับ Settlement; รายการจากร้านมีประวัติแก้ไข" : "Service pay remains linked to settlement; shop entries keep revision history."}</small></div></div>
     {toolbar}
     <div className="compensation-ledger-filters"><label><span>{locale === "th" ? "แหล่งเงิน" : "Source"}</span><select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as typeof sourceFilter)}><option value="ALL">{locale === "th" ? "ทั้งหมด" : "All"}</option><option value="SERVICE">{locale === "th" ? "จากการให้บริการ" : "From service"}</option><option value="SHOP">{locale === "th" ? "จากร้านนวด" : "From shop"}</option></select></label><label><span>{locale === "th" ? "หมอนวด" : "Therapist"}</span><select value={therapistFilter} onChange={(event) => setTherapistFilter(event.target.value)}><option value="ALL">{locale === "th" ? "ทุกคน" : "All therapists"}</option>{payload?.summary.map((row) => <option value={row.therapistId} key={row.therapistId}>{row.therapistName}</option>)}</select></label></div>
     <div className="table-scroll"><table className="compensation-ledger-table"><thead><tr><th>{locale === "th" ? "วันที่" : "Date"}</th><th>{locale === "th" ? "หมอนวด / รายการ" : "Therapist / item"}</th><th>{locale === "th" ? "แหล่งเงิน" : "Source"}</th><th>{locale === "th" ? "ค่ามือ" : "Pay"}</th><th>{locale === "th" ? "ทิป" : "Tip"}</th><th>{locale === "th" ? "สถานะ" : "Status"}</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{filteredEntries.map((entry) => <tr key={entry.entryId}><td>{dateLabel(entry.localDate, locale)}</td><td><strong>{entry.therapistName}</strong><small>{entryKindLabel(entry, locale)}{entry.bookingId ? ` • ${entry.bookingId}` : ""}{entry.reason ? ` • ${entry.reason}` : ""}</small></td><td><span className={`compensation-source ${entry.source.toLowerCase()}`}>{entry.source === "SERVICE" ? (locale === "th" ? "จากการให้บริการ" : "Service") : (locale === "th" ? "จากร้านนวด" : "Shop")}</span></td><td className={entry.amountSatang < 0 ? "negative-amount" : ""}>{baht(entry.amountSatang, locale)}</td><td>{baht(entry.tipSatang, locale)}</td><td><span className={`state-chip ${entry.lockedReason === "PAID" ? "success" : "warning"}`}>{entry.lockedReason === "PAID" ? (locale === "th" ? "จ่ายแล้ว" : "Paid") : (locale === "th" ? "ยังแก้ไขได้" : "Editable")}</span></td><td>{entry.editable ? <button type="button" className="table-action" disabled={saving} onClick={() => { if (entry.source === "SERVICE") void openServiceEditor(entry); else if (entry.kind !== "GUARANTEE_TOP_UP") setEditor({ kind: "EDIT_ADJUSTMENT", entry }); }}>{locale === "th" ? "แก้ไข" : "Edit"}</button> : <span className="not-applicable">—</span>}</td></tr>)}</tbody></table></div>
+    {selectedLedgerRow && <div className="compensation-ledger-balance"><span>{locale === "th" ? `ยอดค้างจ่ายของ ${selectedLedgerRow.therapistName} ในช่วงที่เลือก` : `${selectedLedgerRow.therapistName}: outstanding in selected period`}: <strong>{baht(selectedLedgerRow.outstandingSatang, locale)}</strong></span><button className="table-action" type="button" disabled={saving || selectedLedgerRow.outstandingSatang <= 0} onClick={() => setEditor({ kind: "PAYOUT", row: selectedLedgerRow })}>{locale === "th" ? "บันทึกจ่าย" : "Record payout"}</button></div>}
     {!filteredEntries.length && <div className="module-state">{locale === "th" ? "ไม่มีรายการตามตัวกรอง" : "No ledger entries match the filters."}</div>}
     {!!payload?.payouts.length && <div className="compensation-payout-history"><h3>{locale === "th" ? "ประวัติการจ่าย" : "Payout history"}</h3>{payload.payouts.map((item) => <div key={item.payoutId}><span><strong>{item.therapistName}</strong><small>{dateLabel(item.dateFrom, locale)} – {dateLabel(item.dateTo, locale)} • {item.paymentMethod === "TRANSFER" ? (locale === "th" ? "โอนเงิน" : "Transfer") : (locale === "th" ? "เงินสด" : "Cash")}</small></span><strong>{baht(item.amountSatang, locale)}</strong></div>)}</div>}
     {editor && <CompensationEditor editor={editor} locale={locale} saving={saving} onClose={closeEditor} onSubmit={submitEditor} />}
@@ -395,16 +424,26 @@ export function TherapistCompensationWorkspace({ tab, locale, user }: { tab: Com
 
   if (tab === "PROFILES") return <section className="module-panel compensation-panel" aria-labelledby="compensation-profile-title">
     <div className="panel-title"><div><h2 id="compensation-profile-title">{locale === "th" ? "เงื่อนไขค่าประกันมือ" : "Hand-guarantee profiles"}</h2><small>{locale === "th" ? "เรตมีวันที่เริ่มใช้และไม่แก้ย้อนหลังข้ามช่วงที่จ่ายแล้ว" : "Rates are effective-dated and cannot rewrite a paid period."}</small></div></div>
-    <div className="table-scroll"><table className="compensation-profile-table"><thead><tr><th>{locale === "th" ? "หมอนวด" : "Therapist"}</th><th>{locale === "th" ? "สถานะ" : "Status"}</th><th>{locale === "th" ? "ค่าประกันมือต่อวัน" : "Daily guarantee"}</th><th>{locale === "th" ? "เริ่มใช้" : "Effective from"}</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{payload?.summary.map((row) => <tr key={row.therapistId}><td><strong>{row.therapistName}</strong></td><td><span className={`state-chip ${row.active ? "success" : ""}`}>{row.active ? (locale === "th" ? "เปิดใช้งาน" : "Active") : (locale === "th" ? "ปิดใช้งาน" : "Inactive")}</span></td><td><strong>{baht(row.dailyGuaranteeSatang, locale)}</strong></td><td>{row.guaranteeEffectiveFrom ? dateLabel(row.guaranteeEffectiveFrom, locale) : (locale === "th" ? "ค่าเริ่มต้นระบบ" : "System default")}</td><td><button type="button" className="table-action" onClick={() => setEditor({ kind: "EDIT_PROFILE", row })}>{locale === "th" ? "แก้เงื่อนไข" : "Edit terms"}</button></td></tr>)}</tbody></table></div>
+    <div className="table-scroll"><table className="compensation-profile-table"><thead><tr><th>{locale === "th" ? "หมอนวด" : "Therapist"}</th><th>{locale === "th" ? "สถานะ" : "Status"}</th><th>{locale === "th" ? "ค่าประกันมือต่อวัน" : "Daily guarantee"}</th><th>{locale === "th" ? "เริ่มใช้" : "Effective from"}</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{profileRows.map((row) => <tr key={row.therapistId}><td><strong>{row.therapistName}</strong></td><td><span className={`state-chip ${row.active ? "success" : ""}`}>{row.active ? (locale === "th" ? "ยังทำงาน" : "Working") : (locale === "th" ? "เลิกทำงานแล้ว" : "No longer working")}</span></td><td><strong>{baht(row.dailyGuaranteeSatang, locale)}</strong></td><td>{row.guaranteeEffectiveFrom ? dateLabel(row.guaranteeEffectiveFrom, locale) : (locale === "th" ? "ค่าเริ่มต้นระบบ" : "System default")}</td><td><button type="button" className="table-action" onClick={() => setEditor({ kind: "EDIT_PROFILE", row })}>{locale === "th" ? "แก้เงื่อนไข" : "Edit terms"}</button></td></tr>)}</tbody></table></div>
+    {!profileRows.length && <div className="module-state">{locale === "th" ? "ไม่พบหมอนวดตามสถานะที่เลือก" : "No therapists match this status."}</div>}
     {editor && <CompensationEditor editor={editor} locale={locale} saving={saving} onClose={closeEditor} onSubmit={submitEditor} />}
   </section>;
 
   return <section className="module-panel compensation-panel" aria-labelledby="compensation-summary-title">
     <div className="panel-title"><div><h2 id="compensation-summary-title">{locale === "th" ? "ภาพรวมค่าหมอ" : "Therapist compensation overview"}</h2><small>{locale === "th" ? "ต้องระบุมาทำงานก่อน ระบบจึงคำนวณส่วนเติมค่าประกันมือ" : "Attendance is required before a guarantee top-up is calculated."}</small></div></div>
     {toolbar}
-    {payload && <dl className="compensation-summary-strip"><div><dt>{locale === "th" ? "จากบริการ" : "Service"}</dt><dd>{baht(payload.totals.servicePaySatang, locale)}</dd></div><div><dt>{locale === "th" ? "จากร้าน" : "Shop"}</dt><dd>{baht(payload.totals.shopSourceSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ทิปหมอ" : "Tips"}</dt><dd>{baht(payload.totals.tipSatang, locale)}</dd></div><div><dt>{locale === "th" ? "จ่ายแล้ว" : "Paid"}</dt><dd>{baht(payload.totals.paidSatang, locale)}</dd></div><div className="outstanding"><dt>{locale === "th" ? "ค้างจ่าย" : "Outstanding"}</dt><dd>{baht(payload.totals.outstandingSatang, locale)}</dd></div></dl>}
-    <div className="table-scroll"><table className="compensation-summary-table"><thead><tr><th>{locale === "th" ? "หมอนวด" : "Therapist"}</th><th>{locale === "th" ? "มาทำงาน" : "Attendance"}</th><th>{locale === "th" ? "งาน / นาที" : "Jobs / min"}</th><th>{locale === "th" ? "จากบริการ" : "Service"}</th><th>{locale === "th" ? "จากร้าน" : "Shop"}</th><th>{locale === "th" ? "ทิป" : "Tip"}</th><th>{locale === "th" ? "รวมต้องจ่าย" : "Total due"}</th><th>{locale === "th" ? "จ่ายแล้ว / ค้าง" : "Paid / due"}</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{payload?.summary.map((row) => { const day = row.days.find((item) => item.localDate === dateFrom); return <tr key={row.therapistId}><td><strong>{row.therapistName}</strong><small>{locale === "th" ? `ประกัน ${baht(row.dailyGuaranteeSatang, locale)}/วัน` : `Guarantee ${baht(row.dailyGuaranteeSatang, locale)}/day`}</small></td><td><button type="button" role="switch" aria-checked={Boolean(day?.present)} className={`attendance-switch ${day?.present ? "active" : ""}`} disabled={saving} onClick={() => { void markAttendance(row, !day?.present); }}>{day?.present ? (locale === "th" ? "มาทำงาน" : "Present") : (locale === "th" ? "ยังไม่ระบุ" : "Not marked")}</button></td><td><strong>{row.serviceCount}</strong><small>{row.durationMinutes} {locale === "th" ? "นาที" : "min"}</small></td><td>{baht(row.servicePaySatang, locale)}</td><td><strong>{baht(row.shopSourceSatang, locale)}</strong><small>{locale === "th" ? `ประกัน ${baht(row.guaranteeTopUpSatang, locale)}` : `Guarantee ${baht(row.guaranteeTopUpSatang, locale)}`}</small></td><td>{baht(row.tipSatang, locale)}</td><td><strong>{baht(row.totalEarnedSatang, locale)}</strong></td><td><span className={`state-chip ${row.payoutState === "PAID" ? "success" : row.payoutState === "PARTIAL" ? "warning" : ""}`}>{payoutLabel(row.payoutState, locale)}</span><small>{baht(row.paidSatang, locale)} / {baht(row.outstandingSatang, locale)}</small></td><td><div className="compensation-row-actions"><button type="button" onClick={() => setEditor({ kind: "CREATE_ADJUSTMENT", row })}>{locale === "th" ? "+ จากร้าน" : "+ Shop entry"}</button><button type="button" className="primary" disabled={row.outstandingSatang <= 0} onClick={() => setEditor({ kind: "PAYOUT", row })}>{locale === "th" ? "บันทึกจ่าย" : "Record payout"}</button></div></td></tr>; })}</tbody></table></div>
-    {!payload?.summary.length && <div className="module-state">{locale === "th" ? "ยังไม่มีข้อมูลหมอนวด" : "No therapists found."}</div>}
+    <p className="compensation-scope">{locale === "th" ? "ยอดเฉพาะหมอนวดที่ยังทำงานในวันที่เลือก · CSV รวมทุกสถานะ" : "Totals for working therapists on the selected date · CSV includes all statuses"}</p>
+    {activeTotals && <dl className="compensation-summary-strip"><div><dt>{locale === "th" ? "จากบริการ" : "Service"}</dt><dd>{baht(activeTotals.servicePaySatang, locale)}</dd></div><div><dt>{locale === "th" ? "จากร้าน" : "Shop"}</dt><dd>{baht(activeTotals.shopSourceSatang, locale)}</dd></div><div><dt>{locale === "th" ? "ทิปหมอ" : "Tips"}</dt><dd>{baht(activeTotals.tipSatang, locale)}</dd></div><div><dt>{locale === "th" ? "จ่ายแล้ว" : "Paid"}</dt><dd>{baht(activeTotals.paidSatang, locale)}</dd></div><div className="outstanding"><dt>{locale === "th" ? "ค้างจ่าย" : "Outstanding"}</dt><dd>{baht(activeTotals.outstandingSatang, locale)}</dd></div></dl>}
+    <div className="table-scroll"><table className="compensation-summary-table"><thead><tr><th>{locale === "th" ? "หมอนวด" : "Therapist"}</th><th>{locale === "th" ? "มาทำงาน" : "Attendance"}</th><th>{locale === "th" ? "งาน / นาที" : "Jobs / min"}</th><th>{locale === "th" ? "จากบริการ" : "Service"}</th><th>{locale === "th" ? "จากร้าน" : "Shop"}</th><th>{locale === "th" ? "ทิป" : "Tip"}</th><th>{locale === "th" ? "รวมต้องจ่าย" : "Total due"}</th><th>{locale === "th" ? "จ่ายแล้ว / ค้าง" : "Paid / due"}</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{activeRows.map((row) => { const day = row.days.find((item) => item.localDate === dateFrom); return <tr key={row.therapistId}><td><strong>{row.therapistName}</strong><small>{locale === "th" ? `ประกัน ${baht(row.dailyGuaranteeSatang, locale)}/วัน` : `Guarantee ${baht(row.dailyGuaranteeSatang, locale)}/day`}</small></td><td><button type="button" role="switch" aria-checked={Boolean(day?.present)} className={`attendance-switch ${day?.present ? "active" : ""}`} disabled={saving} onClick={() => { void markAttendance(row, !day?.present); }}>{day?.present ? (locale === "th" ? "มาทำงาน" : "Present") : (locale === "th" ? "ยังไม่ระบุ" : "Not marked")}</button></td><td><strong>{row.serviceCount}</strong><small>{row.durationMinutes} {locale === "th" ? "นาที" : "min"}</small></td><td>{baht(row.servicePaySatang, locale)}</td><td><strong>{baht(row.shopSourceSatang, locale)}</strong><small>{locale === "th" ? `ประกัน ${baht(row.guaranteeTopUpSatang, locale)}` : `Guarantee ${baht(row.guaranteeTopUpSatang, locale)}`}</small></td><td>{baht(row.tipSatang, locale)}</td><td><strong>{baht(row.totalEarnedSatang, locale)}</strong></td><td><span className={`state-chip ${row.payoutState === "PAID" ? "success" : row.payoutState === "PARTIAL" ? "warning" : ""}`}>{payoutLabel(row.payoutState, locale)}</span><small>{baht(row.paidSatang, locale)} / {baht(row.outstandingSatang, locale)}</small></td><td><div className="compensation-row-actions"><button type="button" onClick={() => setEditor({ kind: "CREATE_ADJUSTMENT", row })}>{locale === "th" ? "+ จากร้าน" : "+ Shop entry"}</button><button type="button" className="primary" disabled={row.outstandingSatang <= 0} onClick={() => setEditor({ kind: "PAYOUT", row })}>{locale === "th" ? "บันทึกจ่าย" : "Record payout"}</button></div></td></tr>; })}</tbody></table></div>
+    {!activeRows.length && <div className="module-state">{locale === "th" ? "ไม่มีหมอนวดที่ยังทำงาน" : "No working therapists."}</div>}
+    {!!formerBalances.length && <section className="former-therapist-balances" aria-labelledby="former-balances-title">
+      <div className="panel-title"><div><h3 id="former-balances-title">{locale === "th" ? "ผู้เลิกทำงานที่ยังมียอดคงเหลือ" : "Former therapists with unsettled balances"}</h3><small>{locale === "th" ? "ยอดจากประวัติทั้งหมด แยกจากยอดรวมวันที่เลือก · ยอดติดลบคือจ่ายเกิน" : "All-history balances, separate from selected-date totals. Negative balances indicate overpayment."}</small></div></div>
+      <div className="table-scroll"><table><thead><tr><th>{locale === "th" ? "หมอนวด" : "Therapist"}</th><th>{locale === "th" ? "ช่วงข้อมูล" : "History period"}</th><th>{locale === "th" ? "ยอดคงเหลือ" : "Balance due"}</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{formerBalances.map((row) => {
+        const canPayWholePeriod = row.outstandingSatang > 0 && row.dateTo <= daysBefore(row.dateFrom, -92);
+        return <tr key={row.therapistId}><td><strong>{row.therapistName}</strong><small>{locale === "th" ? "เลิกทำงานแล้ว" : "No longer working"}</small></td><td>{dateLabel(row.dateFrom, locale)} – {dateLabel(row.dateTo, locale)}</td><td><strong>{baht(row.outstandingSatang, locale)}</strong></td><td><div className="compensation-row-actions"><button type="button" disabled={saving} onClick={() => openFormerHistory(row)}>{locale === "th" ? "ดูรายการย้อนหลัง" : "Review history"}</button>{canPayWholePeriod && <button type="button" className="primary" disabled={saving} onClick={() => setEditor({ kind: "PAYOUT", row, dateFrom: row.dateFrom, dateTo: row.dateTo })}>{locale === "th" ? "บันทึกจ่าย" : "Record payout"}</button>}</div></td></tr>;
+      })}</tbody></table></div>
+      <p className="compensation-scope">{locale === "th" ? "ตรวจรายการและบันทึกจ่ายได้ครั้งละไม่เกิน 93 วัน" : "Review and record payouts for up to 93 days at a time."}</p>
+    </section>}
     {editor && <CompensationEditor editor={editor} locale={locale} saving={saving} onClose={closeEditor} onSubmit={submitEditor} />}
   </section>;
 }

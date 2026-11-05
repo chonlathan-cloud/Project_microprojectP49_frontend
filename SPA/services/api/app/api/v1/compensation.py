@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
@@ -344,6 +345,13 @@ def _build_compensation_payload(
             }
         )
 
+    # Only dates with a financial or attendance source contribute. This also
+    # allows the former-staff balance view to cover old records without walking
+    # every empty day since the first booking.
+    dates_by_therapist: dict[str, set[str]] = defaultdict(set)
+    for therapist_id, local_date in set(daily) | set(attendance_by_key) | set(paid_by_day):
+        if _in_range(local_date, start, end):
+            dates_by_therapist[therapist_id].add(local_date)
     summary_rows: list[dict[str, object]] = []
     for therapist_id, therapist in therapist_by_id.items():
         service_pay = 0
@@ -355,9 +363,7 @@ def _build_compensation_payload(
         attended_days = 0
         paid = 0
         day_rows: list[dict[str, object]] = []
-        cursor = start
-        while cursor <= end:
-            local_date = cursor.isoformat()
+        for local_date in sorted(dates_by_therapist[therapist_id]):
             raw = daily[(therapist_id, local_date)]
             attendance = attendance_by_key.get((therapist_id, local_date), {})
             present = bool(attendance.get("present", False))
@@ -424,7 +430,6 @@ def _build_compensation_payload(
                             "editable": False,
                         }
                     )
-            cursor = date.fromordinal(cursor.toordinal() + 1)
         total_earned = service_pay + tips + top_up + shop_adjustment
         outstanding = total_earned - paid
         payout_state = (
@@ -476,6 +481,7 @@ def _build_compensation_payload(
         "dateFrom": start.isoformat(),
         "dateTo": end.isoformat(),
         "summary": summary_rows,
+        "activeTotals": _compensation_totals([row for row in summary_rows if row["active"]]),
         "entries": entries,
         "payouts": visible_payouts,
         "totals": {
@@ -487,6 +493,72 @@ def _build_compensation_payload(
             "outstandingSatang": sum(int(item["outstandingSatang"]) for item in summary_rows),
         },
     }
+
+
+def _compensation_totals(rows: list[dict[str, object]]) -> dict[str, int]:
+    return {
+        field: sum(int(row[field]) for row in rows)
+        for field in (
+            "servicePaySatang",
+            "shopSourceSatang",
+            "tipSatang",
+            "totalEarnedSatang",
+            "paidSatang",
+            "outstandingSatang",
+        )
+    }
+
+
+def _former_outstanding_payload(client: firestore.Client, branch_id: str) -> dict[str, object]:
+    therapists = [
+        item
+        for item in _snapshot_items(client, "therapists", branch_id=branch_id)
+        if not item.get("active")
+    ]
+    if not therapists:
+        return {"items": []}
+    # Batch collection reads rather than one query per former therapist. Payout
+    # records remain the authority, including legacy payments without day splits.
+    sources = {
+        key: _snapshot_items(client, collection, branch_id=branch_id)
+        for key, collection in (
+            ("guarantee_rates", "therapist_guarantee_rates"),
+            ("attendances", "therapist_attendance"),
+            ("settlements", "service_settlements"),
+            ("adjustments", "therapist_compensation_adjustments"),
+            ("payouts", "therapist_payouts"),
+        )
+    }
+    dates = [
+        str(item[field])
+        for records in sources.values()
+        for item in records
+        for field in ("localDate", "serviceDate", "dateFrom", "dateTo")
+        if item.get(field)
+    ]
+    if not dates:
+        return {"items": []}
+    payload = _build_compensation_payload(
+        therapists=therapists,
+        **sources,
+        start=date.fromisoformat(min(dates)),
+        end=date.fromisoformat(max(dates)),
+        branch_id=branch_id,
+    )
+    items = []
+    for row in payload["summary"]:
+        if int(row["outstandingSatang"]) == 0:
+            continue
+        activity_dates = [day["localDate"] for day in row["days"]]
+        activity_dates.extend(
+            str(payout[field])
+            for payout in sources["payouts"]
+            if payout.get("therapistId") == row["therapistId"]
+            for field in ("dateFrom", "dateTo")
+            if payout.get(field)
+        )
+        items.append({**row, "dateFrom": min(activity_dates), "dateTo": max(activity_dates)})
+    return {"items": items}
 
 
 def _load_payload(
@@ -700,6 +772,16 @@ def get_therapist_compensation(
     return _load_payload(client, branch_id=branch_id, start=start, end=end)
 
 
+@router.get("/therapist-compensation/former-outstanding")
+def get_former_outstanding(
+    actor: Annotated[dict[str, object], Depends(require_admin_user)],
+    client: Annotated[firestore.Client, Depends(get_firestore_client)],
+    branch_id: Annotated[str, Query(alias="branchId")] = "branch_001",
+) -> dict[str, object]:
+    _require_admin(actor)
+    return _former_outstanding_payload(client, branch_id)
+
+
 @router.post("/therapist-compensation:export")
 def export_therapist_compensation(
     request: CompensationExportInput,
@@ -890,6 +972,18 @@ def update_attendance(
         therapist = therapist_snapshot.to_dict() or {}
         if therapist.get("branchId") != branch_id:
             raise ValidationDomainError("Therapist does not belong to branch")
+        changed_at = therapist.get("statusChangedAt")
+        changed_date = (
+            changed_at.astimezone(ZoneInfo("Asia/Bangkok")).date().isoformat()
+            if isinstance(changed_at, datetime)
+            else None
+        )
+        if (
+            request.present
+            and not therapist.get("active")
+            and (changed_date is None or local_date >= changed_date)
+        ):
+            raise ValidationDomainError("Former therapists cannot be marked present after leaving")
         current = attendance_snapshot.to_dict() or {} if attendance_snapshot.exists else {}
         current_version = int(current.get("version", 0))
         if current_version != request.expected_version:

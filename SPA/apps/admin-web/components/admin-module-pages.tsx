@@ -11,7 +11,7 @@ import { AnalyticsDashboard } from "@/components/analytics-dashboard";
 import { InsightWorkspace } from "@/components/insight-workspace";
 import { CampaignOperations } from "@/components/campaign-operations";
 import { TherapistCompensationWorkspace, type CompensationTab } from "@/components/therapist-compensation-workspace";
-import { adminApi } from "@/lib/admin-api";
+import { adminApi, AdminApiError } from "@/lib/admin-api";
 import { countNotificationsRequiringAction, isNotificationState, notificationRequiresAction, type NotificationState } from "@/lib/notification-state";
 
 export type AdminView = "dashboard" | "insight" | "calendar" | "capacity" | "services" | "therapists" | "accounting" | "notifications" | "campaign-operations";
@@ -23,7 +23,7 @@ type ServiceCategory = "SIGNATURE" | "MASSAGE" | "STANDALONE";
 type Service = { serviceId: string; category?: ServiceCategory; nameTh: string; nameEn: string; descriptionTh?: string; descriptionEn?: string; active: boolean; version?: number; imageVersion?: string | null; updatedAt?: string; variants: Variant[] };
 type ServiceVariantDraft = { draftId: number; durationMinutes: string; priceBaht: string };
 type NewServiceDraft = { nameTh: string; nameEn: string; descriptionTh: string; descriptionEn: string; category: ServiceCategory; variants: ServiceVariantDraft[]; packageType: "SINGLE" | "COUPLE" };
-type Therapist = { therapistId: string; displayName: string; active: boolean };
+type Therapist = { therapistId: string; displayName: string; active: boolean; version: number; statusChangedAt?: string; statusReason?: string };
 type NotificationEvent = { eventId: string; publicBookingId?: string; eventType: string; state: string; attemptCount?: number; lastErrorCode?: string; createdAt?: string };
 
 async function api<T>(user: User, path: string, init?: RequestInit): Promise<T> {
@@ -623,8 +623,9 @@ function ServicesPage({ locale, user }: { locale: Locale; user: User }) {
 }
 
 function TherapistsPage({ locale, user, role, bookings, onBookingsChanged }: { locale: Locale; user: User; role: "ADMIN" | "STAFF" | null; bookings: PreviewBooking[]; onBookingsChanged: () => void }) {
-  const { notify } = useAdminFeedback();
+  const { notify, requestConfirmation } = useAdminFeedback();
   const [items, setItems] = useState<Therapist[]>([]);
+  const [statusFilter, setStatusFilter] = useState<"ACTIVE" | "INACTIVE" | "ALL">("ACTIVE");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -702,6 +703,41 @@ function TherapistsPage({ locale, user, role, bookings, onBookingsChanged }: { l
     }
   };
 
+  const changeStatus = async (item: Therapist) => {
+    const result = await requestConfirmation({
+      title: item.active
+        ? (locale === "th" ? `ระบุว่า ${item.displayName} เลิกทำงานแล้ว?` : `Mark ${item.displayName} as no longer working?`)
+        : (locale === "th" ? `ให้ ${item.displayName} กลับมาทำงาน?` : `Reactivate ${item.displayName}?`),
+      message: item.active
+        ? (locale === "th"
+          ? "คนที่เลิกทำงานจะถูกซ่อนจากงานประจำวันและเลือกมอบหมายงานใหม่ไม่ได้ ประวัติและยอดค้างจ่ายยังอยู่ หากมี Booking ค้างอยู่ต้องจัดการก่อน"
+          : "Former therapists are hidden from daily work and new assignments. History and unpaid balances remain. Open bookings must be reassigned or finished first.")
+        : (locale === "th"
+          ? "รายชื่อจะกลับมาแสดงในงานประจำวันและเลือกมอบหมาย Booking ได้ โดยใช้ประวัติและเงื่อนไขค่าประกันมือเดิม"
+          : "The therapist will return to daily work and can receive new assignments, with the same history and guarantee terms."),
+      confirmLabel: locale === "th" ? "ยืนยันเปลี่ยนสถานะ" : "Confirm status change",
+      cancelLabel: locale === "th" ? "ยกเลิก" : "Cancel",
+      tone: item.active ? "danger" : "default",
+      input: { label: locale === "th" ? "เหตุผลการเปลี่ยนสถานะ" : "Reason for status change", required: true, maxLength: 300 },
+    });
+    if (!result.confirmed) return;
+    setSaving(true);
+    try {
+      await api(user, `/therapists/${encodeURIComponent(item.therapistId)}/status`, {
+        method: "PATCH", body: JSON.stringify({ active: !item.active, expectedVersion: item.version, reason: result.inputValue }),
+      });
+      notify({ tone: "success", title: locale === "th" ? "เปลี่ยนสถานะหมอนวดแล้ว" : "Therapist status updated", message: item.displayName });
+      await load();
+      onBookingsChanged();
+    } catch (caught) {
+      const message = caught instanceof AdminApiError && caught.code === "THERAPIST_HAS_OPEN_BOOKINGS" && locale === "th"
+        ? `ยังมี Booking ที่ต้องเปลี่ยนหมอนวดหรือให้บริการให้เสร็จก่อน: ${caught.message.split(": ").slice(1).join(": ")}`
+        : caught instanceof Error ? caught.message : undefined;
+      notify({ tone: "error", title: locale === "th" ? "เปลี่ยนสถานะไม่สำเร็จ" : "Status change failed", message, durationMs: 8000 });
+      await load();
+    } finally { setSaving(false); }
+  };
+
   const updateAssignment = (bookingId: string, participantIndex: number, therapistId: string) => {
     setAssignmentDrafts((current) => {
       const next = [...(current[bookingId] ?? [])];
@@ -732,6 +768,8 @@ function TherapistsPage({ locale, user, role, bookings, onBookingsChanged }: { l
 
   const unassigned = bookings.filter((item) => item.status === "CONFIRMED" && !item.therapistName);
   const activeTherapists = items.filter((item) => item.active);
+  const visibleTherapists = items.filter((item) => statusFilter === "ALL" || item.active === (statusFilter === "ACTIVE"));
+  const statusFilterControl = <div className="module-toolbar therapist-status-filter"><label>{locale === "th" ? "สถานะการทำงาน" : "Employment status"}<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}><option value="ACTIVE">{locale === "th" ? "ยังทำงาน" : "Working"}</option><option value="INACTIVE">{locale === "th" ? "เลิกทำงานแล้ว" : "No longer working"}</option><option value="ALL">{locale === "th" ? "ทั้งหมด" : "All"}</option></select></label></div>;
   const compensationTabs: CompensationTab[] = ["TODAY", "LEDGER", "PROFILES"];
   const moveCompensationTab = (event: ReactKeyboardEvent<HTMLButtonElement>, current: CompensationTab) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -744,9 +782,9 @@ function TherapistsPage({ locale, user, role, bookings, onBookingsChanged }: { l
   };
   const formatBookingDateTime = (value: string) => new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Bangkok" }).format(new Date(value));
   const rosterPanel = <section className="module-panel therapist-roster-panel" aria-labelledby="therapist-roster-title">
-    <div className="panel-title"><div><h2 id="therapist-roster-title">{locale === "th" ? "รายชื่อหมอนวด" : "Roster"}</h2><small>{activeTherapists.length}/{items.length} {locale === "th" ? "คนพร้อมรับงาน" : "available"}</small></div><button ref={addButtonRef} type="button" className="primary-compact-button" onClick={openRegistration}>+ {locale === "th" ? "เพิ่มหมอนวด" : "Add therapist"}</button></div>
-    <div className="therapist-roster-list">{items.map((item) => <article key={item.therapistId}><div className="therapist-avatar" aria-hidden="true">{item.displayName.trim().slice(0, 1)}</div><div><strong>{item.displayName}</strong></div><span className={`state-chip ${item.active ? "success" : ""}`}>{item.active ? (locale === "th" ? "พร้อม" : "Active") : (locale === "th" ? "ปิด" : "Inactive")}</span></article>)}</div>
-    {!items.length && <div className="module-state">{locale === "th" ? "ยังไม่มีหมอนวด กด “เพิ่มหมอนวด” เพื่อเริ่มต้น" : "No therapists yet. Select “Add therapist” to begin."}</div>}
+    <div className="panel-title"><div><h2 id="therapist-roster-title">{locale === "th" ? "รายชื่อหมอนวด" : "Roster"}</h2><small>{activeTherapists.length}/{items.length} {locale === "th" ? "คนยังทำงาน" : "working"}</small></div><button ref={addButtonRef} type="button" className="primary-compact-button" onClick={openRegistration}>+ {locale === "th" ? "เพิ่มหมอนวด" : "Add therapist"}</button></div>
+    <div className="therapist-roster-list">{visibleTherapists.map((item) => <article key={item.therapistId}><div className="therapist-avatar" aria-hidden="true">{item.displayName.trim().slice(0, 1)}</div><div><strong>{item.displayName}</strong>{role === "ADMIN" && item.statusReason && <small>{item.statusChangedAt ? `${new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Bangkok" }).format(new Date(item.statusChangedAt))} · ` : ""}{item.statusReason}</small>}</div><div className="therapist-status-actions"><span className={`state-chip ${item.active ? "success" : ""}`}>{item.active ? (locale === "th" ? "ยังทำงาน" : "Working") : (locale === "th" ? "เลิกทำงานแล้ว" : "No longer working")}</span>{role === "ADMIN" && <button type="button" className="table-action" disabled={saving} aria-label={`${locale === "th" ? "เปลี่ยนสถานะ" : "Change status"} ${item.displayName}`} onClick={() => { void changeStatus(item); }}>{locale === "th" ? "เปลี่ยนสถานะ" : "Change status"}</button>}</div></article>)}</div>
+    {!visibleTherapists.length && <div className="module-state">{locale === "th" ? "ไม่พบหมอนวดตามสถานะที่เลือก" : "No therapists match this status."}</div>}
   </section>;
   const assignmentPanel = <section className="module-panel assignment-panel" aria-labelledby="assignment-title">
     <div className="panel-title"><div><h2 id="assignment-title">{locale === "th" ? "รายการรอมอบหมาย" : "Unassigned bookings"}</h2><small>{locale === "th" ? "เฉพาะ Booking ที่ยืนยันแล้ว" : "Confirmed bookings only"}</small></div><strong>{unassigned.length}</strong></div>
@@ -764,11 +802,11 @@ function TherapistsPage({ locale, user, role, bookings, onBookingsChanged }: { l
     <PageState loading={loading} error={error} empty={false} locale={locale} />
     {role === "ADMIN" && <div className="therapist-tablist" role="tablist" aria-label={locale === "th" ? "มุมมองข้อมูลหมอนวด" : "Therapist views"}>{compensationTabs.map((tab) => <button id={`therapist-tab-${tab.toLowerCase()}`} type="button" role="tab" aria-selected={activeTab === tab} aria-controls={`therapist-panel-${tab.toLowerCase()}`} tabIndex={activeTab === tab ? 0 : -1} key={tab} onKeyDown={(event) => moveCompensationTab(event, tab)} onClick={() => setActiveTab(tab)}>{tab === "TODAY" ? (locale === "th" ? "ภาพรวมวันนี้" : "Today") : tab === "LEDGER" ? (locale === "th" ? "รายการค่ามือ" : "Compensation ledger") : (locale === "th" ? "ข้อมูลหมอนวด" : "Therapist profiles")}</button>)}</div>}
     {!loading && role === "ADMIN" && <div id={`therapist-panel-${activeTab.toLowerCase()}`} role="tabpanel" aria-labelledby={`therapist-tab-${activeTab.toLowerCase()}`}>
-      <TherapistCompensationWorkspace tab={activeTab} locale={locale} user={user} />
+      {activeTab === "PROFILES" && <>{statusFilterControl}{rosterPanel}</>}
+      <TherapistCompensationWorkspace tab={activeTab} locale={locale} user={user} statusFilter={statusFilter} onTabChange={setActiveTab} onProfilesChanged={() => { void load(); }} />
       {activeTab === "TODAY" && assignmentPanel}
-      {activeTab === "PROFILES" && rosterPanel}
     </div>}
-    {!loading && role !== "ADMIN" && <div className="therapist-dispatch-grid">{rosterPanel}{assignmentPanel}</div>}
+    {!loading && role !== "ADMIN" && <>{statusFilterControl}<div className="therapist-dispatch-grid">{rosterPanel}{assignmentPanel}</div></>}
 
     {registrationOpen && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRegistrationOpen(false); }}><div ref={dialogRef} className="registration-dialog" role="dialog" aria-modal="true" aria-labelledby="therapist-dialog-title" aria-describedby="therapist-dialog-description"><div className="drawer-header"><div><p className="eyebrow">NEW THERAPIST</p><h2 id="therapist-dialog-title">{locale === "th" ? "ลงทะเบียนหมอนวดใหม่" : "Register new therapist"}</h2></div><button ref={closeDialogButtonRef} type="button" aria-label={locale === "th" ? "ปิดหน้าต่าง" : "Close dialog"} onClick={() => setRegistrationOpen(false)}>×</button></div><form onSubmit={(event) => { event.preventDefault(); void add(); }}><p id="therapist-dialog-description">{locale === "th" ? "หมอนวดใหม่จะเปิดใช้งานทันทีและเลือกมอบหมายให้ Booking ได้" : "The new therapist becomes active immediately and can be assigned to bookings."}</p><label htmlFor="therapist-display-name">{locale === "th" ? "ชื่อที่ใช้แสดงในระบบ" : "Display name"}</label><input ref={nameInputRef} id="therapist-display-name" required maxLength={100} autoComplete="off" value={name} onChange={(event) => setName(event.target.value)} placeholder={locale === "th" ? "เช่น คุณนิด" : "e.g. Nid"} /><div className="dialog-actions"><button type="button" onClick={() => setRegistrationOpen(false)}>{locale === "th" ? "ยกเลิก" : "Cancel"}</button><button type="submit" className="confirm-button" disabled={saving || !name.trim()}>{saving ? (locale === "th" ? "กำลังลงทะเบียน…" : "Registering…") : (locale === "th" ? "ลงทะเบียนหมอนวด" : "Register therapist")}</button></div></form></div></div>}
   </main>;

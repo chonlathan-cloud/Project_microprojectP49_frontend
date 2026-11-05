@@ -34,6 +34,10 @@ class ConflictDomainError(DomainError):
     code = "RESOURCE_VERSION_CONFLICT"
 
 
+class TherapistHasOpenBookings(DomainError):
+    code = "THERAPIST_HAS_OPEN_BOOKINGS"
+
+
 class IdempotencyConflict(DomainError):
     code = "IDEMPOTENCY_CONFLICT"
 
